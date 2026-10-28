@@ -1,3 +1,3 @@
 # GitHub-first delivery
 
-Run `gfd context` first. Select Ready, unblocked, unleased leaf work only. Claim before branch/edit. Native GitHub parent and blocker links are authority. Submit evidence before completion. Do not create local delivery ledgers or autonomous Epics.
+Run `gfd status` to see the board. Pick Ready, unblocked leaf work and run `gfd start N` before branching or editing. Open a PR whose body says `Refs #N`, then run `gfd done N`; after merge, run `gfd done N` again to record evidence and close. Native parent and blocker links are authority. Never create local task ledger or autonomous Epic.

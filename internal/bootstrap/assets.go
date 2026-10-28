@@ -100,7 +100,7 @@ jobs:
 `,
 	".agent/rules/github-first-delivery.md": `# GitHub-first delivery
 
-Run ` + "`gfd context`" + ` before work. Select only Ready, unblocked, unleased leaf work. Claim before creating branch or editing. Native parent and blocker links are authority. Submit evidence before completion. Never create local task ledger or autonomous Epic.
+Run ` + "`gfd status`" + ` to see the board. Pick Ready, unblocked leaf work and run ` + "`gfd start N`" + ` before branching or editing. Open a PR whose body says ` + "`Refs #N`" + `, then run ` + "`gfd done N`" + `; after merge, run ` + "`gfd done N`" + ` again to record evidence and close. Native parent and blocker links are authority. Never create local task ledger or autonomous Epic.
 `,
 	".github/ISSUE_TEMPLATE/decision.yml": `name: Decision
 description: Decision requiring named approver.
