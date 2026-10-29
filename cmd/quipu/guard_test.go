@@ -150,6 +150,8 @@ func TestGuardShellCommands(t *testing.T) {
 		{f.a, "sed -i '' s/a/b/ .github/quipu/config.yaml", "quipu-config"},
 		{f.a, "gh pr create --body 'Closes #1'", "pr-body"},
 		{f.a, "gh pr create --fill", "pr-body"},
+		{f.a, "gh pr edit --add-label quipu:owner-approved", "github-write"},
+		{f.a, "gh pr create --base main --head 001/a --title t --body 'Refs #1' --label quipu:owner-approved", "github-write"},
 		{f.a, "gh pr create --title t", "pr-body"},
 		{f.a, "gh pr create --base main --head 001/a --body 'Refs #2'", "pr-body"},
 		{f.a, "gh pr create --head 002/b --body 'Refs #1'", "pr-body"},

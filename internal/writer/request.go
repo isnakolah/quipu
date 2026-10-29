@@ -51,12 +51,13 @@ func (e Evidence) Validate() error {
 }
 
 type Receipt struct {
-	RequestID   string    `json:"request_id"`
-	Fingerprint string    `json:"fingerprint"`
-	Result      string    `json:"result"`
-	Detail      string    `json:"detail"`
-	Evidence    *Evidence `json:"evidence,omitempty"`
-	At          time.Time `json:"at"`
+	RequestID   string        `json:"request_id"`
+	Fingerprint string        `json:"fingerprint"`
+	Result      string        `json:"result"`
+	Detail      string        `json:"detail"`
+	Evidence    *Evidence     `json:"evidence,omitempty"`
+	At          time.Time     `json:"at"`
+	State       *ReceiptState `json:"state,omitempty"`
 }
 
 func HashRequest(r Request) (string, error) {

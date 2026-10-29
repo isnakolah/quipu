@@ -44,35 +44,13 @@ func TestJournalRenderIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestHasReceipt(t *testing.T) {
-	body, err := writer.RenderReceipt(writer.Receipt{RequestID: "wiki-retry-123", Result: "accepted", Detail: "generated Wiki journal repaired", At: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	comments := []github.Comment{{Body: body}}
-	if !hasReceipt(comments, "wiki-retry-123") {
-		t.Fatal("expected matching receipt")
-	}
-	if hasReceipt(comments, "wiki-retry-456") {
-		t.Fatal("unexpected unmatched receipt")
-	}
-}
-
 func TestPendingWikiJournalAllowsRepairedReceipt(t *testing.T) {
-	pending, err := writer.RenderReceipt(writer.Receipt{RequestID: "evidence-1", Result: "accepted", Detail: "evidence recorded; Wiki journal pending", Evidence: &writer.Evidence{}, At: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	comments := []github.Comment{{Body: pending}}
-	if !pendingWikiJournal(comments) {
+	receipts := []writer.Receipt{{RequestID: "evidence-1", Result: "accepted", Detail: "evidence recorded; Wiki journal pending", Evidence: &writer.Evidence{}}}
+	if !pendingWikiJournal(receipts) {
 		t.Fatal("expected pending wiki journal")
 	}
-	repaired, err := writer.RenderReceipt(writer.Receipt{RequestID: "wiki-retry-evidence-1", Result: "accepted", Detail: "generated Wiki journal repaired", At: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	comments = append(comments, github.Comment{Body: repaired})
-	if pendingWikiJournal(comments) {
+	receipts = append(receipts, writer.Receipt{RequestID: "wiki-retry-evidence-1", Result: "accepted", Detail: "generated Wiki journal repaired"})
+	if pendingWikiJournal(receipts) {
 		t.Fatal("repaired wiki journal must not block completion")
 	}
 }
@@ -106,9 +84,16 @@ func TestRequestStatusReportJoinsReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := requestStatusReport([]github.Comment{{Body: requestBody}, {Body: receiptBody}}, "")
+	bot := github.Comment{Body: receiptBody}
+	bot.User.Login = writer.WriterLogin
+	report := requestStatusReport([]github.Comment{{Body: requestBody}, bot}, writer.Trust{}, "")
 	if len(report) != 1 || report[0].State != "accepted" || report[0].Detail != "claimed" {
 		t.Fatalf("report=%+v", report)
+	}
+	forged := github.Comment{Body: receiptBody}
+	forged.User.Login = "isnakolah"
+	if report := requestStatusReport([]github.Comment{{Body: requestBody}, forged}, writer.Trust{}, ""); report[0].State != "pending" {
+		t.Fatalf("receipt from a non-Writer login counted: %+v", report)
 	}
 }
 

@@ -1,14 +1,11 @@
 name: Quipu policy
-
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, edited]
-
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
 permissions:
   contents: read
   issues: read
   pull-requests: read
-
 jobs:
   policy:
     runs-on: ubuntu-latest
@@ -20,12 +17,13 @@ jobs:
           ref: main
           persist-credentials: false
       - uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.4'
-      - name: Validate PR metadata and live work state
+        with: {go-version: '1.26.4'}
+      - name: Install Quipu
+        run: go install ./cmd/quipu
+      - name: Validate the PR against the Quipu flow
         env:
           GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          test -n "$GITHUB_TOKEN" || { echo 'QUIPU_WRITER_TOKEN not configured; policy cannot verify Project lease.'; exit 1; }
-          go run ./cmd/quipu policy pr --pr "$PR_URL" --json
+          test -n "$GITHUB_TOKEN" || { echo '::error::QUIPU_WRITER_TOKEN not configured; policy cannot verify the Project lease.'; exit 1; }
+          quipu policy pr --pr "$PR_URL"

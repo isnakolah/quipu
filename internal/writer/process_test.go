@@ -16,13 +16,13 @@ func TestPendingRejectsEditedAndSkipsReceipted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	comments := []gh.Comment{{ID: 1, Body: body, CreatedAt: "x", UpdatedAt: "x", User: login("agent")}, {ID: 2, Body: receipt}}
-	pending, rejected := Pending(comments)
+	comments := []gh.Comment{{ID: 1, Body: body, CreatedAt: "x", UpdatedAt: "x", User: login("agent")}, {ID: 2, Body: receipt, User: login(WriterLogin)}}
+	pending, rejected := Pending(comments, Trust{})
 	if len(pending) != 0 || len(rejected) != 0 {
 		t.Fatalf("pending=%d rejected=%d", len(pending), len(rejected))
 	}
 	comments = []gh.Comment{{ID: 1, Body: body, CreatedAt: "x", UpdatedAt: "y", User: login("agent")}}
-	pending, rejected = Pending(comments)
+	pending, rejected = Pending(comments, Trust{})
 	if len(pending) != 0 || len(rejected) != 1 {
 		t.Fatalf("pending=%d rejected=%d", len(pending), len(rejected))
 	}
@@ -34,7 +34,7 @@ func TestPendingRequiresCommentActorAssociation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, rejected := Pending([]gh.Comment{{ID: 1, Body: body, CreatedAt: "x", UpdatedAt: "x", User: login("agent")}})
+	pending, rejected := Pending([]gh.Comment{{ID: 1, Body: body, CreatedAt: "x", UpdatedAt: "x", User: login("agent")}}, Trust{})
 	if len(pending) != 0 || len(rejected) != 1 {
 		t.Fatalf("pending=%d rejected=%d", len(pending), len(rejected))
 	}

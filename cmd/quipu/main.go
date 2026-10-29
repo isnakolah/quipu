@@ -19,7 +19,6 @@ import (
 	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/journal"
 	"github.com/isnakolah/quipu/internal/model"
-	policycheck "github.com/isnakolah/quipu/internal/policy"
 	"github.com/isnakolah/quipu/internal/writer"
 	"gopkg.in/yaml.v3"
 )
@@ -87,75 +86,6 @@ func run(args []string) error {
 	default:
 		return usage()
 	}
-}
-
-func policyCommand(args []string) error {
-	if len(args) == 0 || args[0] != "pr" {
-		return errors.New("usage: quipu policy pr --pr URL [--json]")
-	}
-	fs := flag.NewFlagSet("policy pr", flag.ContinueOnError)
-	pr := fs.String("pr", "", "pull request URL")
-	asJSON := jsonFlag(fs)
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	if *pr == "" {
-		return errors.New("policy pr requires --pr")
-	}
-	c, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	output, err := ghOutput("pr", "view", *pr, "--repo", c.Owner+"/"+c.Repository, "--json", "url,headRefName,body")
-	if err != nil {
-		return err
-	}
-	var pull struct {
-		URL         string `json:"url"`
-		HeadRefName string `json:"headRefName"`
-		Body        string `json:"body"`
-	}
-	if err := json.Unmarshal(output, &pull); err != nil {
-		return err
-	}
-	issues, err := policycheck.ReferencedIssues(pull.Body)
-	if err != nil {
-		return err
-	}
-	state, err := loadLiveWork(c, issues[0])
-	if err != nil {
-		return err
-	}
-	if err := validatePRWork(pull.HeadRefName, pull.Body, state, time.Now()); err != nil {
-		return err
-	}
-	report := map[string]any{"valid": true, "pr": pull.URL, "issue_number": issues[0], "branch": pull.HeadRefName}
-	return printValue(report, *asJSON)
-}
-
-func validatePRWork(branch, body string, state liveWork, now time.Time) error {
-	issues, err := policycheck.ReferencedIssues(body)
-	if err != nil {
-		return err
-	}
-	if !strings.HasPrefix(branch, fmt.Sprintf("%03d/", issues[0])) {
-		return fmt.Errorf("PR branch %q does not map to referenced Issue #%d", branch, issues[0])
-	}
-	blockersResolved := true
-	for _, blocker := range state.Blockers {
-		if blocker.State != "CLOSED" {
-			blockersResolved = false
-		}
-	}
-	expires, err := time.Parse(time.RFC3339, state.Expiry)
-	hasLease := err == nil && state.Holder != "" && state.Branch == branch && expires.After(now.UTC())
-	if state.ParentID == "" {
-		return errors.New("PR Issue has no native parent")
-	}
-	if err := model.ValidateWorkContract(state.Body); err != nil {
-		return fmt.Errorf("PR Issue contract invalid: %w", err)
-	}
-	return policycheck.ValidatePR(branch, body, hasLease, blockersResolved)
 }
 
 func prCommand(args []string) error {
@@ -1108,7 +1038,7 @@ func requestCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	report := requestStatusReport(comments, *requestID)
+	report := requestStatusReport(comments, receiptTrust(c), *requestID)
 	if len(report) == 0 && *requestID != "" {
 		return fmt.Errorf("request %q not found on Issue #%d", *requestID, *number)
 	}
@@ -1130,7 +1060,7 @@ type requestStatus struct {
 	Receipt string `json:"receipt_fingerprint,omitempty"`
 }
 
-func requestStatusReport(comments []github.Comment, onlyID string) []requestStatus {
+func requestStatusReport(comments []github.Comment, trust writer.Trust, onlyID string) []requestStatus {
 	requests := make(map[string]requestStatus)
 	order := make([]string, 0)
 	for _, comment := range comments {
@@ -1141,11 +1071,7 @@ func requestStatusReport(comments []github.Comment, onlyID string) []requestStat
 		requests[request.ID] = requestStatus{ID: request.ID, Action: request.Action, Actor: request.Actor, State: "pending"}
 		order = append(order, request.ID)
 	}
-	for _, comment := range comments {
-		receipt, err := writer.ParseReceipt(comment.Body)
-		if err != nil {
-			continue
-		}
+	for _, receipt := range trust.Receipts(comments) {
 		item, ok := requests[receipt.RequestID]
 		if !ok {
 			continue
@@ -1468,219 +1394,6 @@ func configureCommand(args []string) error {
 	return nil
 }
 
-func writerCommand(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: quipu writer {run|reconcile}")
-	}
-	if args[0] == "reconcile" {
-		return writerReconcileCommand(args[1:])
-	}
-	if args[0] != "run" {
-		return errors.New("usage: quipu writer {run|reconcile}")
-	}
-	fs := flag.NewFlagSet("writer run", flag.ContinueOnError)
-	number := fs.Int("issue-number", 0, "issue number")
-	apply := applyFlag(fs)
-	asJSON := jsonFlag(fs)
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	if *number < 1 {
-		return errors.New("--issue-number is required")
-	}
-	c, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	client := github.NewClient()
-	comments, err := client.ListComments(context.Background(), c.Owner, c.Repository, *number)
-	if err != nil {
-		return err
-	}
-	pending, rejected := writer.Pending(comments)
-	receiptsApplied := 0
-	if *apply {
-		for _, item := range pending {
-			receipt := applyAuthorizedWriterRequest(c, *number, item, comments)
-			receipt = publishEvidenceJournal(c, *number, item.Request, receipt)
-			rejected = append(rejected, receipt)
-		}
-		for _, receipt := range rejected {
-			body, err := writer.RejectionComment(receipt)
-			if err != nil {
-				return err
-			}
-			if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, *number, body); err != nil {
-				return err
-			}
-			receiptsApplied++
-		}
-	}
-	ids := make([]string, 0, len(pending))
-	for _, item := range pending {
-		ids = append(ids, item.Request.ID)
-	}
-	return printValue(map[string]any{"issue_number": *number, "pending_request_ids": ids, "receipts_applied": receiptsApplied, "apply": *apply, "note": "lifecycle requests require fresh fingerprint and configured Project membership"}, *asJSON)
-}
-
-func writerReconcileCommand(args []string) error {
-	fs := flag.NewFlagSet("writer reconcile", flag.ContinueOnError)
-	apply := applyFlag(fs)
-	asJSON := jsonFlag(fs)
-	since := fs.Duration("since", 0, "only Issues updated within this window, such as 30m; all Issues when 0")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	c, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	output, err := ghOutput("api", "--paginate", "--slurp", reconcileIssuesPath(c, *since, time.Now()))
-	if err != nil {
-		return err
-	}
-	var pages [][]struct {
-		Number      int             `json:"number"`
-		PullRequest json.RawMessage `json:"pull_request"`
-	}
-	if err := json.Unmarshal(output, &pages); err != nil {
-		return err
-	}
-	issues := make([]struct {
-		Number      int             `json:"number"`
-		PullRequest json.RawMessage `json:"pull_request"`
-	}, 0)
-	for _, page := range pages {
-		for _, item := range page {
-			// REST's Issue endpoint also returns pull requests. Writer state is
-			// valid only for canonical Issues, never PR numbers.
-			if len(item.PullRequest) == 0 || string(item.PullRequest) == "null" {
-				issues = append(issues, item)
-			}
-		}
-	}
-	report := map[string]any{"issues_scanned": len(issues), "requests_receipted": 0, "leases_reclaimed": 0, "apply": *apply}
-	for _, issue := range issues {
-		receipted, reclaimed, err := reconcileIssue(c, issue.Number, *apply)
-		if err != nil {
-			return fmt.Errorf("reconcile Issue #%d: %w", issue.Number, err)
-		}
-		report["requests_receipted"] = report["requests_receipted"].(int) + receipted
-		report["leases_reclaimed"] = report["leases_reclaimed"].(int) + reclaimed
-	}
-	return printValue(report, *asJSON)
-}
-
-// reconcileIssuesPath lists the Issues a reconcile pass scans. With since,
-// only recently updated Issues: the comment-triggered Writer run uses this to
-// drain every pending request, because Actions cancels queued runs in its
-// concurrency group when many agents post requests at once.
-func reconcileIssuesPath(c model.Config, since time.Duration, now time.Time) string {
-	path := "repos/" + c.Owner + "/" + c.Repository + "/issues?state=all&per_page=100"
-	if since > 0 {
-		path += "&since=" + now.Add(-since).UTC().Format(time.RFC3339)
-	}
-	return path
-}
-
-func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
-	client := github.NewClient()
-	comments, err := client.ListComments(context.Background(), c.Owner, c.Repository, number)
-	if err != nil {
-		return 0, 0, err
-	}
-	pending, rejected := writer.Pending(comments)
-	receipted := 0
-	if apply {
-		for _, item := range pending {
-			receipt := applyAuthorizedWriterRequest(c, number, item, comments)
-			rejected = append(rejected, publishEvidenceJournal(c, number, item.Request, receipt))
-		}
-		for _, receipt := range rejected {
-			body, err := writer.RejectionComment(receipt)
-			if err != nil {
-				return 0, 0, err
-			}
-			if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
-				return 0, 0, err
-			}
-			receipted++
-		}
-	}
-	if apply {
-		repaired, err := retryPendingWikiJournals(c, number, comments)
-		if err != nil {
-			return receipted, 0, err
-		}
-		receipted += repaired
-	}
-	state, err := loadLiveWork(c, number)
-	if err != nil {
-		return receipted, 0, err
-	}
-	if state.IssueState == "CLOSED" && !terminalIssueStatus(state.Status) && hasWriterReceipt(comments) {
-		if !apply {
-			return receipted, 0, nil
-		}
-		if err := client.SetIssueState(context.Background(), c.Owner, c.Repository, number, "open"); err != nil {
-			return receipted, 0, fmt.Errorf("reopen prematurely closed Issue: %w", err)
-		}
-		requestID := "premature-close-" + state.IssueID + "-" + state.UpdatedAt
-		body, err := writer.RenderReceipt(writer.Receipt{RequestID: requestID, Result: "accepted", Detail: "manual close denied; Issue reopened because completion evidence is incomplete", At: time.Now().UTC()})
-		if err != nil {
-			return receipted, 0, err
-		}
-		if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
-			return receipted, 0, err
-		}
-		return receipted + 1, 0, nil
-	}
-	if state.IssueState == "CLOSED" {
-		return receipted, 0, nil
-	}
-	if apply {
-		if err := initializeProjectFields(c, number, state); err != nil {
-			return receipted, 0, err
-		}
-		state, err = loadLiveWork(c, number)
-		if err != nil {
-			return receipted, 0, err
-		}
-	}
-	expires, _ := time.Parse(time.RFC3339, state.Expiry)
-	next, reclaimed := writer.ReclaimExpired(writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Expires: expires, Branch: state.Branch}}, time.Now())
-	if !reclaimed {
-		return receipted, 0, nil
-	}
-	if !apply {
-		return receipted, 1, nil
-	}
-	if err := updateLiveWork(c, state.ItemID, next); err != nil {
-		return receipted, 0, err
-	}
-	requestID := fmt.Sprintf("lease-expiry-%s-%s", state.IssueID, state.Expiry)
-	for _, comment := range comments {
-		if strings.Contains(comment.Body, "request="+requestID) {
-			return receipted, 1, nil
-		}
-	}
-	body, err := writer.RenderReceipt(writer.Receipt{RequestID: requestID, Result: "accepted", Detail: "expired lease cleared; Issue returned to Ready", At: time.Now().UTC()})
-	if err != nil {
-		return receipted, 0, err
-	}
-	if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
-		return receipted, 0, err
-	}
-	return receipted + 1, 1, nil
-}
-
-func applyAuthorizedWriterRequest(c model.Config, number int, pending writer.PendingRequest, comments []github.Comment) writer.Receipt {
-	if !authorizedActor(c.AuthorizedActors, pending.Author) {
-		return rejectedReceipt(pending.Request, fmt.Errorf("request author %q is not authorized by repository config", pending.Author))
-	}
-	return applyWriterRequest(c, number, pending.Request, comments)
-}
-
 func authorizedActor(allowed []string, actor string) bool {
 	for _, candidate := range allowed {
 		if strings.EqualFold(strings.TrimSpace(candidate), strings.TrimSpace(actor)) {
@@ -1694,118 +1407,35 @@ func terminalIssueStatus(status string) bool {
 	return status == "Done" || status == "Cancelled" || status == "Archived"
 }
 
-func hasWriterReceipt(comments []github.Comment) bool {
-	for _, comment := range comments {
-		if _, err := writer.ParseReceipt(comment.Body); err == nil {
-			return true
-		}
-	}
-	return false
-}
+// errNotInProject comes with the Issue's own fields filled, so the watchdog
+// can still triage it.
+var errNotInProject = errors.New("Issue is not a member of configured Project")
 
 type liveWork struct {
-	IssueID    string
-	IssueState string
-	Body       string
-	UpdatedAt  string
-	ParentID   string
-	Blockers   []liveBlocker
-	ItemID     string
-	Status     string
-	Holder     string
-	Expiry     string
-	Branch     string
-	Kind       string
-	Area       string
-	Priority   string
-	Proof      string
+	IssueID     string
+	IssueState  string
+	StateReason string
+	ClosedBy    string
+	Labels      []string
+	Body        string
+	CreatedAt   string
+	UpdatedAt   string
+	ClosedAt    string
+	ParentID    string
+	Children    int
+	Blockers    []liveBlocker
+	ItemID      string
+	Status      string
+	Holder      string
+	Expiry      string
+	Branch      string
+	Kind        string
+	Area        string
+	Priority    string
+	Proof       string
 }
 
 type liveBlocker struct{ ID, State string }
-
-func applyWriterRequest(c model.Config, number int, request writer.Request, comments []github.Comment) writer.Receipt {
-	state, err := loadLiveWork(c, number)
-	if err != nil {
-		return rejectedReceipt(request, err)
-	}
-	if state.IssueID != request.IssueID {
-		return rejectedReceipt(request, errors.New("request Issue ID does not match target Issue"))
-	}
-	actual, err := writer.RequireFreshFingerprint(request.ExpectedFingerprint, liveWorkFingerprint(state))
-	if err != nil {
-		return writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "rejected", Detail: err.Error(), At: time.Now().UTC()}
-	}
-	if request.Action == "claim" || (request.Action == "status" && request.Status == "Done") {
-		for _, blocker := range state.Blockers {
-			if blocker.State != "CLOSED" {
-				return rejectedReceipt(request, fmt.Errorf("unresolved blocker %s prevents %s", blocker.ID, request.Action))
-			}
-		}
-	}
-	if request.Action == "status" && request.Status == "Done" {
-		if !acceptedEvidence(comments) {
-			return rejectedReceipt(request, errors.New("Done requires a prior accepted evidence receipt"))
-		}
-		if c.WikiMode == "journal" && pendingWikiJournal(comments) {
-			return rejectedReceipt(request, errors.New("Done requires generated Wiki journal to be synchronized"))
-		}
-	}
-	if request.Action == "pr.link" {
-		if err := validateReviewPR(request.PR); err != nil {
-			return rejectedReceipt(request, err)
-		}
-	}
-	if request.Action == "evidence.submit" {
-		if err := validateMergedEvidencePR(request.PR, request.Evidence.FinalSHA); err != nil {
-			return rejectedReceipt(request, err)
-		}
-	}
-	current := writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Branch: state.Branch}}
-	if state.Expiry != "" {
-		current.Lease.Expires, _ = time.Parse(time.RFC3339, state.Expiry)
-	}
-	next, err := writer.ApplyLifecycle(current, request, time.Now())
-	if err != nil {
-		return rejectedReceipt(request, err)
-	}
-	if err := updateLiveWork(c, state.ItemID, next); err != nil {
-		return rejectedReceipt(request, err)
-	}
-	if next.Status == "Done" {
-		if err := github.NewClient().SetIssueState(context.Background(), c.Owner, c.Repository, number, "closed"); err != nil {
-			return rejectedReceipt(request, fmt.Errorf("close completed Issue: %w", err))
-		}
-	}
-	receipt := writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "accepted", Detail: "lifecycle state changed to " + next.Status, At: time.Now().UTC()}
-	if request.Action == "evidence.submit" {
-		receipt.Detail = "evidence recorded; lifecycle state changed to Evidence pending"
-		receipt.Evidence = request.Evidence
-	}
-	if next.Status == "Done" {
-		receipt.Detail = "completion evidence verified; lifecycle state changed to Done and Issue closed"
-	}
-	return receipt
-}
-
-func acceptedEvidence(comments []github.Comment) bool {
-	bodies := make([]string, 0, len(comments))
-	for _, comment := range comments {
-		bodies = append(bodies, comment.Body)
-	}
-	return writer.HasAcceptedEvidence(bodies)
-}
-
-func pendingWikiJournal(comments []github.Comment) bool {
-	for _, comment := range comments {
-		receipt, err := writer.ParseReceipt(comment.Body)
-		if err == nil && receipt.Result == "accepted" && receipt.Evidence != nil && strings.Contains(receipt.Detail, "Wiki journal pending") {
-			if !hasReceipt(comments, "wiki-retry-"+receipt.RequestID) {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 func publishEvidenceJournal(c model.Config, number int, request writer.Request, receipt writer.Receipt) writer.Receipt {
 	if c.WikiMode != "journal" || receipt.Result != "accepted" || receipt.Evidence == nil {
@@ -1821,95 +1451,6 @@ func publishEvidenceJournal(c model.Config, number int, request writer.Request, 
 		receipt.Detail += "; Wiki journal appended"
 	}
 	return receipt
-}
-
-func retryPendingWikiJournals(c model.Config, number int, comments []github.Comment) (int, error) {
-	if c.WikiMode != "journal" {
-		return 0, nil
-	}
-	client := github.NewClient()
-	repaired := 0
-	for _, comment := range comments {
-		receipt, err := writer.ParseReceipt(comment.Body)
-		if err != nil || receipt.Result != "accepted" || receipt.Evidence == nil || !strings.Contains(receipt.Detail, "Wiki journal pending") {
-			continue
-		}
-		repairID := "wiki-retry-" + receipt.RequestID
-		if hasReceipt(comments, repairID) {
-			continue
-		}
-		entry := journal.Entry{RequestID: receipt.RequestID, Date: receipt.At.UTC().Format("2006-01-02"), Issue: fmt.Sprintf("#%d", number), Outcome: "evidence journal repair", Proof: receipt.Evidence.Criteria, Boundary: receipt.Evidence.Boundary, NextBlocker: "None"}
-		if _, err := journal.PublishWiki(context.Background(), c.Owner, c.Repository, client.Token, entry); err != nil {
-			continue
-		}
-		body, err := writer.RenderReceipt(writer.Receipt{RequestID: repairID, Result: "accepted", Detail: "generated Wiki journal repaired for evidence request " + receipt.RequestID, At: time.Now().UTC()})
-		if err != nil {
-			return repaired, err
-		}
-		if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
-			return repaired, err
-		}
-		repaired++
-	}
-	return repaired, nil
-}
-
-func hasReceipt(comments []github.Comment, requestID string) bool {
-	for _, comment := range comments {
-		receipt, err := writer.ParseReceipt(comment.Body)
-		if err == nil && receipt.RequestID == requestID {
-			return true
-		}
-	}
-	return false
-}
-
-func validateReviewPR(pr string) error {
-	if pr == "" {
-		return errors.New("PR link requires pull request URL")
-	}
-	output, err := exec.Command("gh", "pr", "view", pr, "--json", "state,url").Output()
-	if err != nil {
-		return fmt.Errorf("read pull request: %w", err)
-	}
-	var result struct {
-		State string `json:"state"`
-		URL   string `json:"url"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return err
-	}
-	if result.URL != pr || result.State != "OPEN" {
-		return errors.New("PR link requires an open canonical pull request URL")
-	}
-	return nil
-}
-
-func validateMergedEvidencePR(pr, finalSHA string) error {
-	if pr == "" || finalSHA == "" {
-		return errors.New("evidence requires PR URL and final SHA")
-	}
-	output, err := exec.Command("gh", "pr", "view", pr, "--json", "state,url,mergeCommit").Output()
-	if err != nil {
-		return fmt.Errorf("read pull request: %w", err)
-	}
-	var result struct {
-		State       string `json:"state"`
-		URL         string `json:"url"`
-		MergeCommit struct {
-			OID string `json:"oid"`
-		} `json:"mergeCommit"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return err
-	}
-	if result.URL != pr || result.State != "MERGED" {
-		return errors.New("evidence requires merged canonical pull request URL")
-	}
-	if result.MergeCommit.OID != finalSHA {
-		return fmt.Errorf("evidence final SHA %s does not match merged PR head %s", finalSHA, result.MergeCommit.OID)
-	}
-	return nil
 }
 
 func fingerprintLiveWork(state liveWork) (string, error) {
@@ -1934,7 +1475,9 @@ func rejectedReceipt(request writer.Request, err error) writer.Receipt {
 
 func loadLiveWork(c model.Config, number int) (liveWork, error) {
 	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issue(number:%d) {
-id state body updatedAt parent { id } blockedBy(first:100) { nodes { id state } }
+id state stateReason body createdAt updatedAt closedAt labels(first:50) { nodes { name } }
+timelineItems(itemTypes:[CLOSED_EVENT], last:1) { nodes { ... on ClosedEvent { actor { login } } } }
+parent { id } subIssuesSummary { total } blockedBy(first:100) { nodes { id state } }
 projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
@@ -1948,13 +1491,31 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 		Data struct {
 			Repository struct {
 				Issue struct {
-					ID        string `json:"id"`
-					State     string `json:"state"`
-					Body      string `json:"body"`
-					UpdatedAt string `json:"updatedAt"`
-					Parent    *struct {
+					ID          string `json:"id"`
+					State       string `json:"state"`
+					StateReason string `json:"stateReason"`
+					Body        string `json:"body"`
+					CreatedAt   string `json:"createdAt"`
+					UpdatedAt   string `json:"updatedAt"`
+					ClosedAt    string `json:"closedAt"`
+					Labels      struct {
+						Nodes []struct {
+							Name string `json:"name"`
+						} `json:"nodes"`
+					} `json:"labels"`
+					Timeline struct {
+						Nodes []struct {
+							Actor struct {
+								Login string `json:"login"`
+							} `json:"actor"`
+						} `json:"nodes"`
+					} `json:"timelineItems"`
+					Parent *struct {
 						ID string `json:"id"`
 					} `json:"parent"`
+					SubIssues struct {
+						Total int `json:"total"`
+					} `json:"subIssuesSummary"`
 					BlockedBy struct {
 						Nodes []struct {
 							ID    string `json:"id"`
@@ -1989,7 +1550,13 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 	if issue.ID == "" {
 		return liveWork{}, errors.New("Issue not found")
 	}
-	state := liveWork{IssueID: issue.ID, IssueState: issue.State, Body: issue.Body, UpdatedAt: issue.UpdatedAt}
+	state := liveWork{IssueID: issue.ID, IssueState: issue.State, StateReason: issue.StateReason, Body: issue.Body, CreatedAt: issue.CreatedAt, UpdatedAt: issue.UpdatedAt, ClosedAt: issue.ClosedAt, Children: issue.SubIssues.Total}
+	for _, label := range issue.Labels.Nodes {
+		state.Labels = append(state.Labels, label.Name)
+	}
+	if nodes := issue.Timeline.Nodes; len(nodes) > 0 {
+		state.ClosedBy = nodes[len(nodes)-1].Actor.Login
+	}
 	if issue.Parent != nil {
 		state.ParentID = issue.Parent.ID
 	}
@@ -2023,7 +1590,7 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 		}
 	}
 	if state.ItemID == "" {
-		return liveWork{}, errors.New("Issue is not a member of configured Project")
+		return state, errNotInProject
 	}
 	return state, nil
 }

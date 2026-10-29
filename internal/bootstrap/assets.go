@@ -13,12 +13,15 @@ var files = map[string]string{
 on:
   issue_comment:
     types: [created]
+  issues:
+    types: [opened, closed, reopened, edited, labeled, unlabeled]
   pull_request:
     types: [opened, synchronize, reopened, closed]
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 permissions:
+  actions: write
   contents: read
   issues: write
   pull-requests: write
@@ -34,25 +37,42 @@ jobs:
         with: {ref: __QUIPU_DEFAULT_BRANCH__}
       - uses: actions/setup-go@v6
         with: {go-version: '1.26.4'}
-      - name: Install canonical Quipu
+      - name: Install Quipu
         run: go install github.com/isnakolah/quipu/cmd/quipu@main
-      - name: Writer activation boundary
+      - name: Writer and watchdog
+        env:
+          # The Writer token changes Project fields; the workflow token posts
+          # receipts, so only github-actions[bot] can write a trusted receipt.
+          GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
+          QUIPU_RECEIPT_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo '::error::QUIPU_WRITER_TOKEN is not configured, so no work can be claimed, reviewed, or finished. Owner: create a classic PAT with public_repo and project scopes, then run gh secret set QUIPU_WRITER_TOKEN.'
+            # Scheduled runs only annotate, so a missing token does not fail every five minutes.
+            [ "$EVENT" = schedule ] && exit 0
+            exit 1
+          fi
+          case "$EVENT" in
+            issue_comment|issues)
+              # Drain every recent change: Actions cancels queued runs in this
+              # concurrency group, so one surviving run must serve them all.
+              quipu writer reconcile --since 30m --apply --json ;;
+            *)
+              quipu writer reconcile --apply --json ;;
+          esac
+      - name: Validation summary
+        if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
         run: |
-          test -n "$GITHUB_TOKEN" || { echo 'QUIPU_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
-          if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            # Drain every recent request: Actions cancels queued runs in this
-            # concurrency group, so one surviving run must serve them all.
-            quipu writer reconcile --since 30m --apply
-          else
-            quipu writer reconcile --apply
-          fi
+          [ -n "$GITHUB_TOKEN" ] || exit 0
+          { echo '## quipu validate'; echo '` + "`" + `` + "`" + `` + "`" + `'; quipu validate 2>&1 || true; echo '` + "`" + `` + "`" + `` + "`" + `'; } >> "$GITHUB_STEP_SUMMARY"
 `,
 	".github/workflows/quipu-policy.yml": `name: Quipu policy
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
 permissions:
   contents: read
   issues: read
@@ -61,21 +81,23 @@ jobs:
   policy:
     runs-on: ubuntu-latest
     steps:
+      # pull_request_target runs trusted default-branch code. Never check out
+      # an untrusted head ref: the Writer credential is metadata-only here.
       - uses: actions/checkout@v4
         with:
           ref: __QUIPU_DEFAULT_BRANCH__
           persist-credentials: false
       - uses: actions/setup-go@v6
         with: {go-version: '1.26.4'}
-      - name: Install canonical Quipu
+      - name: Install Quipu
         run: go install github.com/isnakolah/quipu/cmd/quipu@main
-      - name: Validate PR metadata and live work state
+      - name: Validate the PR against the Quipu flow
         env:
           GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          test -n "$GITHUB_TOKEN" || { echo 'QUIPU_WRITER_TOKEN not configured; policy cannot verify Project lease.'; exit 1; }
-          quipu policy pr --pr "$PR_URL" --json
+          test -n "$GITHUB_TOKEN" || { echo '::error::QUIPU_WRITER_TOKEN not configured; policy cannot verify the Project lease.'; exit 1; }
+          quipu policy pr --pr "$PR_URL"
 `,
 	".github/workflows/ci.yml": `name: CI
 on:

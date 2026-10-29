@@ -784,6 +784,9 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 			if err := policycheck.NoClosingKeywords(v, "PR title"); err != nil {
 				return deny("pr-body", err.Error())
 			}
+		case "-l", "--label", "--add-label", "--remove-label":
+			// Labels such as quipu:owner-approved are the owner's decision.
+			return deny("github-write", "PR labels are set by the owner")
 		case "-f", "--fill", "--fill-first", "--fill-verbose", "-w", "--web", "-e", "--editor":
 			return deny("pr-body", flag+" leaves the body unchecked")
 		}

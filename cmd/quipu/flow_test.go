@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/model"
 	"github.com/isnakolah/quipu/internal/writer"
 )
@@ -119,15 +118,12 @@ func TestParseIssueArgAcceptsFlagsEitherSide(t *testing.T) {
 }
 
 func TestReceiptFor(t *testing.T) {
-	body, err := writer.RenderReceipt(writer.Receipt{RequestID: "r1", Result: "rejected", Detail: "stale", At: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	receipt, ok := receiptFor([]github.Comment{{Body: "chatter"}, {Body: body}}, "r1")
+	receipts := []writer.Receipt{{RequestID: "r0", Result: "accepted"}, {RequestID: "r1", Result: "rejected", Detail: "stale", At: time.Now().UTC()}}
+	receipt, ok := receiptFor(receipts, "r1")
 	if !ok || receipt.Result != "rejected" {
 		t.Fatalf("got %+v %v", receipt, ok)
 	}
-	if _, ok := receiptFor([]github.Comment{{Body: body}}, "r2"); ok {
+	if _, ok := receiptFor(receipts, "r2"); ok {
 		t.Fatal("matched wrong request")
 	}
 }

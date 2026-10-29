@@ -123,3 +123,13 @@ func (c *Client) SetIssueState(ctx context.Context, owner, repo string, number i
 	}
 	return c.Do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]string{"state": state}, nil)
 }
+
+// AddLabels adds labels to an Issue; GitHub creates labels that do not exist.
+func (c *Client) AddLabels(ctx context.Context, owner, repo string, number int, labels ...string) error {
+	return c.Do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, number), map[string][]string{"labels": labels}, nil)
+}
+
+// RemoveLabel removes one label from an Issue.
+func (c *Client) RemoveLabel(ctx context.Context, owner, repo string, number int, label string) error {
+	return c.Do(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s", owner, repo, number, url.PathEscape(label)), nil, nil)
+}

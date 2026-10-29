@@ -761,13 +761,14 @@ type prCheck struct {
 	DetailsURL string `json:"detailsUrl"`
 }
 
-// passingCIURL returns a successful check run URL only when no check failed.
+// passingCIURL returns a successful check run URL only when no check failed,
+// preferring the test check: the Writer accepts only a run on this PR.
 func passingCIURL(checks []prCheck) string {
 	url := ""
 	for _, check := range checks {
 		switch check.Conclusion {
 		case "SUCCESS", "NEUTRAL", "SKIPPED":
-			if url == "" && check.Conclusion == "SUCCESS" {
+			if check.Conclusion == "SUCCESS" && (url == "" || check.Name == "test") {
 				url = check.DetailsURL
 			}
 		default:
@@ -931,7 +932,7 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 		if err != nil {
 			return err
 		}
-		if receipt, ok := receiptFor(comments, r.ID); ok {
+		if receipt, ok := receiptFor(receiptTrust(c).Receipts(comments), r.ID); ok {
 			if receipt.Result != "accepted" {
 				e := flowErr(rejectionCode(receipt.Detail), "#%d %s rejected by the Writer: %s", number, r.Action, receipt.Detail)
 				e.cause = errRejected
@@ -948,10 +949,10 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 	}
 }
 
-func receiptFor(comments []github.Comment, requestID string) (writer.Receipt, bool) {
-	for _, comment := range comments {
-		receipt, err := writer.ParseReceipt(comment.Body)
-		if err == nil && receipt.RequestID == requestID {
+// receiptFor finds the receipt for requestID among trusted receipts.
+func receiptFor(receipts []writer.Receipt, requestID string) (writer.Receipt, bool) {
+	for _, receipt := range receipts {
+		if receipt.RequestID == requestID {
 			return receipt, true
 		}
 	}
