@@ -35,7 +35,7 @@ var guardRules = []guardRule{
 	{"other-worktree", "agents change only the worktree that holds their own lease", "work inside your own worktree; dispatch other work with `quipu start --next --worktree --json`"},
 	{"lease-inactive", "the live lease is expired, held by someone else, or no longer active", "run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder"},
 	{"git-internals", "files under .git hold git and Quipu state (lease, identity)", "use git and quipu commands; never edit .git directly"},
-	{"quipu-config", ".github/quipu/config.yaml is owner-only", "ask the owner in a comment on your PR"},
+	{"quipu-config", "Quipu's config, workflows, and agent hooks are owner-only", "ask the owner in a comment on your PR"},
 	{"branch-change", "the work branch is chosen by quipu start", "run `quipu start N --json`; restore files with `git restore <file>` or `git checkout -- <file>`"},
 	{"git-refs", "tags, remotes, ref edits, and git config are owner-only", "none needed for the flow; ask the owner if you think it is"},
 	{"worktree-add", "work worktrees are created by Quipu so each gets its own identity and lease", "run `quipu start --next --worktree --json`"},
@@ -287,8 +287,8 @@ func (g *guard) writePath(path string) error {
 	path = realPath(path)
 	dir := existingDir(path)
 	if w, err := openWorktree(dir); err == nil {
-		if rel, err := filepath.Rel(w.Top, path); err == nil && filepath.ToSlash(rel) == configPath {
-			return deny("quipu-config", "")
+		if rel, err := filepath.Rel(w.Top, path); err == nil && protectedFile(filepath.ToSlash(rel)) {
+			return deny("quipu-config", filepath.ToSlash(rel))
 		}
 	}
 	return g.writeIn(dir)

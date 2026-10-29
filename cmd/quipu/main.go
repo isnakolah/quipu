@@ -29,6 +29,11 @@ const configPath = ".github/quipu/config.yaml"
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		printError(err, os.Args[1:], os.Stdout, os.Stderr)
+		// Agent hooks block a tool call only on exit 2, so the guard fails
+		// closed on every error, not just on a denial.
+		if len(os.Args) > 1 && os.Args[1] == "guard" {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }
@@ -83,6 +88,8 @@ func run(args []string) error {
 		return policyCommand(args[1:])
 	case "guard":
 		return guardCommand(args[1:])
+	case "hooks":
+		return hooksCommand(args[1:])
 	default:
 		return usage()
 	}
@@ -397,6 +404,12 @@ func adoptCommand(args []string) error {
 	if err := os.WriteFile(configPath, raw, 0644); err != nil {
 		return err
 	}
+	hooks, err := bootstrap.InstallHooks(".", true)
+	if err != nil {
+		return err
+	}
+	report["hooks_written"] = hooks
+	report["next"] = "commit the config and hooks, set the QUIPU_WRITER_TOKEN secret, run `quipu protect --apply`, then `quipu doctor`"
 	return printValue(report, *asJSON)
 }
 
@@ -452,7 +465,13 @@ Everyday:
   done N     link the PR, then after merge record evidence and close #N
 
 Setup and advanced:
-  init|adopt|doctor|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|version`)
+Owner:
+  ready N    make #N Ready for agents
+  protect    make GitHub enforce the flow (--apply)
+  hooks      install the agent guard hooks in this repository (--apply)
+
+Setup and advanced:
+  init|adopt|doctor|guide|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")
@@ -509,6 +528,9 @@ func initCommand(args []string) error {
 	if err := bootstrap.Install(".", *owner, projectInfo.Number, *branch); err != nil {
 		return err
 	}
+	if _, err := bootstrap.InstallHooks(".", true); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}
@@ -523,6 +545,11 @@ func initCommand(args []string) error {
 		return fmt.Errorf("GitHub repository and Project were provisioned, but local bootstrap push failed: %w", err)
 	}
 	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, projectInfo.Number, configPath)
+	// Protect only after the bootstrap push: protection forbids direct pushes.
+	if err := protectRepository(c); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\nGitHub does not enforce the flow yet; run `quipu protect --apply` (private repositories need a paid plan)\n", err)
+	}
+	fmt.Println("next: set the QUIPU_WRITER_TOKEN secret, then run `quipu doctor`")
 	return nil
 }
 

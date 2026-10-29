@@ -372,6 +372,17 @@ func mentionsQuipuState(arg string) bool {
 	return insideGitDir(arg) || strings.Contains(arg, "quipu-lease") || strings.Contains(arg, "quipu-agent-id")
 }
 
+// mentionsProtectedPath reports whether arg names one of Quipu's own
+// enforcement files.
+func mentionsProtectedPath(arg string) bool {
+	for _, path := range protectedPaths {
+		if strings.Contains(arg, strings.TrimSuffix(path, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
 // genericWrite judges a command that may write anything: it runs where it
 // is, and must not name git internals.
 func (g *guard) genericWrite(args []shellArg, dir string) error {
@@ -379,8 +390,8 @@ func (g *guard) genericWrite(args []shellArg, dir string) error {
 		if arg.ok && mentionsQuipuState(arg.s) {
 			return deny("git-internals", arg.s)
 		}
-		if arg.ok && strings.Contains(arg.s, configPath) {
-			return deny("quipu-config", "")
+		if arg.ok && mentionsProtectedPath(arg.s) {
+			return deny("quipu-config", arg.s)
 		}
 	}
 	return g.writeIn(dir)
@@ -819,7 +830,7 @@ func (g *guard) quipu(rest []shellArg) error {
 	switch sub := rest[0].s; {
 	case sub == "work" && len(rest) > 1 && rest[1].s == "list":
 		return nil
-	case (sub == "writer" || sub == "journal" || sub == "protect") && !hasFlag(rest, "--apply"):
+	case (sub == "writer" || sub == "journal" || sub == "protect" || sub == "hooks") && !hasFlag(rest, "--apply"):
 		return nil
 	default:
 		return deny("quipu-admin", "quipu "+sub)

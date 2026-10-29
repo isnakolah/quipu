@@ -1,4 +1,6 @@
 #!/bin/sh
-set -eu
-command -v quipu >/dev/null 2>&1 || { printf '%s\n' 'quipu missing; operation denied' >&2; exit 2; }
+# Every tool call the agent makes passes through quipu guard. It fails
+# closed: without quipu, or on any guard error, the call is denied.
+set -u
+command -v quipu >/dev/null 2>&1 || { printf '%s\n' 'QUIPU DENIED [quipu-missing]: quipu is not installed. Do instead: ask the owner to install it (docs/source-install.md).' >&2; exit 2; }
 quipu guard || exit 2
