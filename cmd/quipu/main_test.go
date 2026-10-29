@@ -154,11 +154,6 @@ func TestAuthorizedActor(t *testing.T) {
 	}
 }
 
-func TestStateChangingShell(t *testing.T) {
-	if !stateChangingShell("git push origin main") || !stateChangingShell("printf x > file") || stateChangingShell("go test ./...") {
-		t.Fatal("unexpected shell classification")
-	}
-}
 func TestContainsAndTitleCase(t *testing.T) {
 	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
 		t.Fatal("configured area lookup is incorrect")

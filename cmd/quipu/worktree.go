@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -82,9 +81,9 @@ func (w worktree) agentID() (string, error) {
 	return id, nil
 }
 
-// leaseContext is the work this worktree holds. `quipu start` writes it to
-// <git-dir>/quipu-lease; QUIPU_LEASE_* variables can override it. The guard
-// re-verifies it against live GitHub at most every leaseVerifyTTL.
+// leaseContext is the work this worktree holds, mirrored from GitHub. Only
+// `quipu start` writes it, to <git-dir>/quipu-lease, where agents cannot edit
+// it. The guard re-verifies it against live GitHub at most every leaseVerifyTTL.
 type leaseContext struct {
 	Issue      int    `json:"issue"`
 	Holder     string `json:"holder"`
@@ -101,22 +100,6 @@ func (l leaseContext) fresh(now time.Time) bool {
 	}
 	expires, err := time.Parse(time.RFC3339, l.Expires)
 	return err == nil && expires.After(now)
-}
-
-// lease returns the worktree's lease, preferring explicit QUIPU_LEASE_* values.
-func (w worktree) lease() (leaseContext, error) {
-	issue, holder, branch := os.Getenv("QUIPU_LEASE_ISSUE"), os.Getenv("QUIPU_LEASE_HOLDER"), os.Getenv("QUIPU_LEASE_BRANCH")
-	if issue == "" && holder == "" && branch == "" {
-		return w.readLease()
-	}
-	if issue == "" || holder == "" || branch == "" {
-		return leaseContext{}, errors.New("quipu active lease issue, holder, or branch context missing; operation denied")
-	}
-	number, err := strconv.Atoi(issue)
-	if err != nil || number < 1 {
-		return leaseContext{}, errors.New("QUIPU_LEASE_ISSUE must be a positive Issue number")
-	}
-	return leaseContext{Issue: number, Holder: holder, Branch: branch}, nil
 }
 
 func (w worktree) readLease() (leaseContext, error) {
