@@ -53,7 +53,7 @@ printf '%s\n' 'receipts_trusted_before: "2100-01-01T00:00:00Z"' >>.github/quipu/
 
 step "import $stories Ready Stories ($((stories + 1)) Issues)"
 start=$(date +%s)
-"$quipu" import --manifest "$work/backlog.yaml" --apply --json >"$work/import.json"
+"$quipu" import --manifest "$work/backlog.yaml" --apply --json >"$work/import.json" || { cat "$work/import.json" >&2; exit 1; }
 jq -e "(.import_requests | length) == $stories" "$work/import.json" >/dev/null
 echo "imported in $(( $(date +%s) - start ))s with $stories pending requests"
 
