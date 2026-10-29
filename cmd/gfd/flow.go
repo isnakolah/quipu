@@ -290,28 +290,71 @@ func leaseRemaining(expires string, now time.Time) string {
 
 // ---- gfd start ----
 
+// renewWithin is how close to expiry a rerun of `start` renews the lease, so
+// long-running agents keep their work by calling `start N` again.
+const renewWithin = 30 * time.Minute
+
 func startCommand(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
-	actorFlag := fs.String("actor", "", "lease holder; defaults to the active GitHub login")
+	actorFlag := fs.String("actor", "", "lease holder; defaults to GFD_ACTOR, then the GitHub login plus GFD_AGENT")
 	branchFlag := fs.String("branch", "", "NNN/short-description branch; derived from the title when omitted")
+	next := fs.Bool("next", false, "pick the highest-priority Ready, unblocked, unleased leaf")
 	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for each Writer receipt")
-	number, err := parseIssueArg(fs, args)
-	if err != nil {
-		return errors.New("usage: gfd start N [--branch NNN/slug] [--actor LOGIN]")
+	asJSON := jsonFlag(fs)
+	number, err := parseIssueArg(fs, args, true)
+	if err != nil || (number == 0) != *next {
+		return errors.New("usage: gfd start (N | --next) [--branch NNN/slug] [--actor ID] [--json]")
 	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	actor, err := resolveActor(*actorFlag)
+	if !*next {
+		result, err := startIssue(c, number, *actorFlag, *branchFlag, *wait)
+		if err != nil {
+			return err
+		}
+		return printFlowResult(result, *asJSON)
+	}
+	candidates, err := loadWorkCandidates(c)
 	if err != nil {
 		return err
+	}
+	ready := nextWork(candidates, time.Now())
+	// Several agents may race for the same top item; the Writer accepts one
+	// claim and rejects the rest, so a rejected claim moves on to the next.
+	for i, item := range ready {
+		if i == 3 {
+			break
+		}
+		result, err := startIssue(c, item.Number, *actorFlag, "", *wait)
+		if err == nil {
+			return printFlowResult(result, *asJSON)
+		}
+		if !errors.Is(err, errRejected) {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "#%d taken (%v); trying next\n", item.Number, err)
+	}
+	return printFlowResult(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Ask the owner to make work Ready, or run gfd status."}, *asJSON)
+}
+
+// nextWork orders pick-up candidates by priority, then Issue number.
+func nextWork(candidates []workCandidate, now time.Time) []readyWork {
+	ready := selectReadyWork(candidates, now)
+	sort.SliceStable(ready, func(i, j int) bool { return priorityRank(ready[i].Priority) < priorityRank(ready[j].Priority) })
+	return ready
+}
+
+func startIssue(c model.Config, number int, actorFlag, branch string, wait time.Duration) (flowResult, error) {
+	actor, err := resolveActor(actorFlag, number)
+	if err != nil {
+		return flowResult{}, err
 	}
 	state, err := loadLiveWork(c, number)
 	if err != nil {
-		return err
+		return flowResult{}, err
 	}
-	branch := *branchFlag
 	switch {
 	case branch != "":
 	case state.Branch != "":
@@ -319,40 +362,84 @@ func startCommand(args []string) error {
 	default:
 		title, err := issueTitle(c, number)
 		if err != nil {
-			return err
+			return flowResult{}, err
 		}
 		branch = branchName(number, title)
 	}
 	if state.Status == "Ready" {
-		if err := sendAndWait(c, number, actor, writer.Request{Action: "claim", Branch: branch}, *wait); err != nil {
-			return err
+		if err := sendAndWait(c, number, actor, writer.Request{Action: "claim", Branch: branch}, wait); err != nil {
+			return flowResult{}, err
 		}
 		if state, err = loadLiveWork(c, number); err != nil {
-			return err
+			return flowResult{}, err
 		}
 	}
 	if state.Status == "Claimed" {
-		if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, *wait); err != nil {
-			return err
+		if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, wait); err != nil {
+			return flowResult{}, err
 		}
 		if state, err = loadLiveWork(c, number); err != nil {
-			return err
+			return flowResult{}, err
 		}
 	}
 	if state.Status != "In progress" && state.Status != "In review" {
-		return fmt.Errorf("#%d is %q; only Ready work can be started", number, state.Status)
+		return flowResult{}, fmt.Errorf("#%d is %q; only Ready work can be started", number, state.Status)
 	}
 	if state.Holder != actor {
-		return fmt.Errorf("#%d is held by %q, not %q", number, state.Holder, actor)
+		return flowResult{}, fmt.Errorf("#%d is held by %q, not %q", number, state.Holder, actor)
+	}
+	if expiry, err := time.Parse(time.RFC3339, state.Expiry); err == nil && time.Until(expiry) < renewWithin {
+		if err := sendAndWait(c, number, actor, writer.Request{Action: "renew"}, wait); err != nil {
+			return flowResult{}, err
+		}
+		if state, err = loadLiveWork(c, number); err != nil {
+			return flowResult{}, err
+		}
 	}
 	if err := switchBranch(state.Branch, c.DefaultBranch); err != nil {
-		return err
+		return flowResult{}, err
 	}
 	if err := writeLeaseFile(leaseContext{Issue: number, Holder: state.Holder, Branch: state.Branch}); err != nil {
-		return err
+		return flowResult{}, err
 	}
-	fmt.Printf("#%d In progress on %s (held by %s, %s)\n", number, state.Branch, state.Holder, leaseRemaining(state.Expiry, time.Now()))
-	fmt.Printf("Next: open a PR from %s whose body says \"Refs #%d\", then run: gfd done %d\n", state.Branch, number, number)
+	result := flowResult{Issue: number, Status: state.Status, Branch: state.Branch, Holder: state.Holder, LeaseExpires: state.Expiry}
+	result.Next = fmt.Sprintf("Implement #%d on %s. Push and open a PR whose body says \"Refs #%d\", then run: gfd done %d. Rerun gfd start %d to renew the lease on long work.", number, state.Branch, number, number, number)
+	if state.Status == "In review" {
+		result.Next = fmt.Sprintf("Address review on %s, then run: gfd done %d", state.Branch, number)
+	}
+	return result, nil
+}
+
+// flowResult is the outcome of `start` or `done`. Next tells a person or an
+// agent exactly what to do now, so agents can follow it without parsing prose.
+type flowResult struct {
+	Issue        int    `json:"issue,omitempty"`
+	Status       string `json:"status"`
+	Branch       string `json:"branch,omitempty"`
+	Holder       string `json:"holder,omitempty"`
+	LeaseExpires string `json:"lease_expires,omitempty"`
+	PR           string `json:"pr,omitempty"`
+	Next         string `json:"next"`
+}
+
+func printFlowResult(result flowResult, asJSON bool) error {
+	if asJSON {
+		return printValue(result, true)
+	}
+	if result.Issue > 0 {
+		line := fmt.Sprintf("#%d %s", result.Issue, result.Status)
+		if result.Branch != "" {
+			line += " on " + result.Branch
+		}
+		if result.Holder != "" {
+			line += fmt.Sprintf(" (held by %s %s)", result.Holder, leaseRemaining(result.LeaseExpires, time.Now()))
+		}
+		if result.PR != "" {
+			line += " — " + result.PR
+		}
+		fmt.Println(line)
+	}
+	fmt.Println("Next: " + result.Next)
 	return nil
 }
 
@@ -400,7 +487,8 @@ func runGit(args ...string) error {
 
 func doneCommand(args []string) error {
 	fs := flag.NewFlagSet("done", flag.ContinueOnError)
-	actorFlag := fs.String("actor", "", "request actor; defaults to the active GitHub login")
+	actorFlag := fs.String("actor", "", "request actor; defaults to the lease holder in .git/gfd-lease")
+	asJSON := jsonFlag(fs)
 	prFlag := fs.String("pr", "", "pull request URL; found from the work branch when omitted")
 	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for each Writer receipt")
 	e := writer.Evidence{}
@@ -412,15 +500,15 @@ func doneCommand(args []string) error {
 	fs.StringVar(&e.Environments, "environments", "GitHub Actions CI", "verified environments")
 	fs.StringVar(&e.Artifacts, "artifacts", "None: CI run linked", "artifact, screenshot, or log URLs; None: reason")
 	fs.StringVar(&e.CIURL, "ci-url", "", "CI run URL; read from the PR checks when omitted")
-	number, err := parseIssueArg(fs, args)
+	number, err := parseIssueArg(fs, args, false)
 	if err != nil {
-		return errors.New("usage: gfd done N [--pr URL] [--criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT]")
+		return errors.New("usage: gfd done N [--pr URL] [--criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]")
 	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	actor, err := resolveActor(*actorFlag)
+	actor, err := resolveActor(*actorFlag, number)
 	if err != nil {
 		return err
 	}
@@ -429,8 +517,7 @@ func doneCommand(args []string) error {
 		return err
 	}
 	if state.Status == "Done" {
-		fmt.Printf("#%d is already Done\n", number)
-		return nil
+		return printFlowResult(flowResult{Issue: number, Status: "Done", Next: "Pick the next task: gfd start --next"}, *asJSON)
 	}
 	var pull pullRequest
 	if state.Status == "Claimed" || state.Status == "In progress" || state.Status == "In review" {
@@ -459,14 +546,13 @@ func doneCommand(args []string) error {
 	}
 	if state.Status == "In review" {
 		if pull.State != "MERGED" {
-			fmt.Printf("#%d In review: %s\nMerge the PR once approved, then run: gfd done %d\n", number, pull.URL, number)
-			return nil
+			return printFlowResult(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("Wait for review and merge of %s; address review comments on %s. After merge, run: gfd done %d --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number)}, *asJSON)
 		}
 		e.FinalSHA = pull.MergeCommit
 		if e.CIURL == "" {
 			e.CIURL = pull.CIURL
 		}
-		if err := promptMissingEvidence(&e, os.Stdin, os.Stdout); err != nil {
+		if err := promptMissingEvidence(&e, os.Stdin, os.Stderr); err != nil {
 			return err
 		}
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "evidence.submit", PR: pull.URL, Evidence: &e}, *wait); err != nil {
@@ -483,8 +569,7 @@ func doneCommand(args []string) error {
 		return err
 	}
 	removeLeaseFile(number)
-	fmt.Printf("#%d Done and closed\n", number)
-	return nil
+	return printFlowResult(flowResult{Issue: number, Status: "Done", PR: pull.URL, Next: "Closed. Pick the next task: gfd start --next"}, *asJSON)
 }
 
 type pullRequest struct {
@@ -615,7 +700,7 @@ func isTerminal(in io.Reader) bool {
 
 // ---- shared helpers ----
 
-func parseIssueArg(fs *flag.FlagSet, args []string) (int, error) {
+func parseIssueArg(fs *flag.FlagSet, args []string, optional bool) (int, error) {
 	// Accept the Issue number before or after flags: `gfd start 12 --wait 1m`.
 	var positional []string
 	for len(args) > 0 {
@@ -628,6 +713,9 @@ func parseIssueArg(fs *flag.FlagSet, args []string) (int, error) {
 			args = args[1:]
 		}
 	}
+	if optional && len(positional) == 0 {
+		return 0, nil
+	}
 	if len(positional) != 1 {
 		return 0, errors.New("exactly one Issue number required")
 	}
@@ -638,15 +726,39 @@ func parseIssueArg(fs *flag.FlagSet, args []string) (int, error) {
 	return number, nil
 }
 
-func resolveActor(explicit string) (string, error) {
+// resolveActor picks who holds the lease. Several agents can share one GitHub
+// login, so each session gets its own identity: the lease already recorded
+// in this worktree, then GFD_ACTOR, then provider/login/session built from
+// GFD_AGENT (set by the agent's session hook), then the bare login.
+func resolveActor(explicit string, number int) (string, error) {
 	if explicit != "" {
 		return explicit, nil
+	}
+	if lease, err := readLeaseFile(); err == nil && lease.Issue == number {
+		return lease.Holder, nil
+	}
+	if actor := strings.TrimSpace(os.Getenv("GFD_ACTOR")); actor != "" {
+		return actor, nil
 	}
 	output, err := ghOutput("api", "user", "--jq", ".login")
 	if err != nil {
 		return "", fmt.Errorf("resolve GitHub login (pass --actor): %w", err)
 	}
-	return strings.TrimSpace(string(output)), nil
+	return agentActor(strings.TrimSpace(string(output)), os.Getenv("GFD_AGENT")), nil
+}
+
+// agentActor builds an identity the Writer matches to the comment author:
+// "claude/session" becomes "claude/login/session".
+func agentActor(login, agent string) string {
+	agent = strings.Trim(strings.TrimSpace(agent), "/")
+	if agent == "" {
+		return login
+	}
+	provider, session, found := strings.Cut(agent, "/")
+	if !found || session == "" {
+		return provider + "/" + login
+	}
+	return provider + "/" + login + "/" + strings.ReplaceAll(session, "/", "-")
 }
 
 func issueTitle(c model.Config, number int) (string, error) {
@@ -656,6 +768,9 @@ func issueTitle(c model.Config, number int) (string, error) {
 	}
 	return strings.TrimSpace(string(output)), nil
 }
+
+// errRejected marks a request the Writer refused, such as a lost claim race.
+var errRejected = errors.New("rejected by Writer")
 
 // sendAndWait posts one Writer request built from fresh live state and waits
 // for the Writer receipt, so callers can chain lifecycle steps safely.
@@ -677,7 +792,7 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 	if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
 		return err
 	}
-	fmt.Printf("#%d %s requested; waiting for Writer...\n", number, r.Action)
+	fmt.Fprintf(os.Stderr, "#%d %s requested; waiting for Writer...\n", number, r.Action)
 	deadline := time.Now().Add(wait)
 	for {
 		comments, err := client.ListComments(context.Background(), c.Owner, c.Repository, number)
@@ -686,7 +801,7 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 		}
 		if receipt, ok := receiptFor(comments, r.ID); ok {
 			if receipt.Result != "accepted" {
-				return fmt.Errorf("#%d %s rejected: %s", number, r.Action, receipt.Detail)
+				return fmt.Errorf("#%d %s %w: %s", number, r.Action, errRejected, receipt.Detail)
 			}
 			return nil
 		}

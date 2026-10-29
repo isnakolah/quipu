@@ -23,6 +23,13 @@ gfd done 42       # PR open: move #42 to In review
 gfd done 42       # PR merged: record evidence (PR, SHA, CI filled in) and close #42
 ```
 
+Built for AI agents first:
+- Every command takes `--json` and returns a `next` field that says exactly what to do.
+- `gfd start --next` picks the highest-priority Ready work. When two agents race for the same item, the Writer accepts one claim and the other moves on.
+- Each agent session gets its own lease identity (`provider/login/session`) from the plugin session hook.
+
+Run one git worktree per agent.
+
 `start` and `done` post the same durable Writer requests as `gfd work`, `gfd pr link`, and `gfd evidence submit`, and wait for each receipt. Those lower-level commands remain for recovery.
 
 ## Operating contract

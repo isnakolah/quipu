@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -104,12 +106,12 @@ func TestParseIssueArgAcceptsFlagsEitherSide(t *testing.T) {
 	for _, args := range [][]string{{"12", "--branch", "012/x"}, {"--branch", "012/x", "#12"}} {
 		fs := flag.NewFlagSet("t", flag.ContinueOnError)
 		branch := fs.String("branch", "", "")
-		number, err := parseIssueArg(fs, args)
+		number, err := parseIssueArg(fs, args, false)
 		if err != nil || number != 12 || *branch != "012/x" {
 			t.Fatalf("args %v: number=%d branch=%q err=%v", args, number, *branch, err)
 		}
 	}
-	if _, err := parseIssueArg(flag.NewFlagSet("t", flag.ContinueOnError), []string{"1", "2"}); err == nil {
+	if _, err := parseIssueArg(flag.NewFlagSet("t", flag.ContinueOnError), []string{"1", "2"}, false); err == nil {
 		t.Fatal("expected error for two numbers")
 	}
 }
@@ -166,5 +168,72 @@ func TestLeaseContextFromEnvOrFile(t *testing.T) {
 	removeLeaseFile(7)
 	if _, err := readLeaseFile(); err == nil {
 		t.Fatal("lease file should be removed")
+	}
+}
+
+func TestAgentActorGivesEachSessionItsOwnIdentity(t *testing.T) {
+	for agent, want := range map[string]string{
+		"":                "octo",
+		"claude":          "claude/octo",
+		"claude/ab12cd34": "claude/octo/ab12cd34",
+		"codex/a/b":       "codex/octo/a-b",
+	} {
+		got := agentActor("octo", agent)
+		if got != want {
+			t.Fatalf("agentActor(%q) = %q, want %q", agent, got, want)
+		}
+		// The Writer must still match every form to the comment author.
+		if !writer.ActorMatchesLogin(got, "octo") {
+			t.Fatalf("Writer would reject actor %q for login octo", got)
+		}
+	}
+}
+
+func TestResolveActorPrefersWorktreeLeaseThenEnv(t *testing.T) {
+	dir := t.TempDir()
+	if output, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s", output)
+	}
+	t.Chdir(dir)
+	t.Setenv("GFD_ACTOR", "codex/octo/env")
+	if err := writeLeaseFile(leaseContext{Issue: 7, Holder: "claude/octo/lease", Branch: "007/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := resolveActor("", 7); got != "claude/octo/lease" {
+		t.Fatalf("lease holder should win for its Issue, got %q", got)
+	}
+	if got, _ := resolveActor("", 8); got != "codex/octo/env" {
+		t.Fatalf("GFD_ACTOR should apply to other Issues, got %q", got)
+	}
+	if got, _ := resolveActor("explicit", 7); got != "explicit" {
+		t.Fatalf("explicit actor should win, got %q", got)
+	}
+}
+
+func TestNextWorkOrdersByPriorityThenNumber(t *testing.T) {
+	contract := "<!-- work:v1 -->\n## Outcome\n## Scope\nIncludes:\nExcludes:\n## Acceptance criteria\n## Required evidence\nVerification boundary: CI\n## Documentation impact\n## Source and relationships\n"
+	item := func(number int, priority string) workCandidate {
+		return workCandidate{readyWork: readyWork{Number: number, Priority: priority, Kind: "Task"}, Body: contract, ParentID: "P", Status: "Ready"}
+	}
+	got := nextWork([]workCandidate{item(3, "P2"), item(9, "P0"), item(1, "P2"), item(5, "")}, time.Now())
+	order := []int{}
+	for _, work := range got {
+		order = append(order, work.Number)
+	}
+	if fmt.Sprint(order) != "[9 1 3 5]" {
+		t.Fatalf("order = %v", order)
+	}
+}
+
+func TestPrintFlowResultJSONCarriesNextStep(t *testing.T) {
+	output, err := captureStdout(t, func() error {
+		return printFlowResult(flowResult{Issue: 4, Status: "In review", PR: "https://x/pr/1", Next: "wait"}, true)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded flowResult
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil || decoded.Next != "wait" || decoded.Issue != 4 {
+		t.Fatalf("decoded %+v err %v from %s", decoded, err, output)
 	}
 }

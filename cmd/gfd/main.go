@@ -573,6 +573,7 @@ func usage() error {
 Everyday:
   status     what is in progress, in review, ready, and needs attention
   start N    claim Issue #N, create its branch, and record the lease locally
+  start --next  claim the highest-priority Ready work (for agents)
   done N     link the PR, then after merge record evidence and close #N
 
 Setup and advanced:
@@ -1259,6 +1260,23 @@ func workListCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	candidates, err := loadWorkCandidates(c)
+	if err != nil {
+		return err
+	}
+	ready := selectReadyWork(candidates, time.Now())
+	if *asJSON {
+		return printValue(map[string]any{"repository": c.Owner + "/" + c.Repository, "work": ready}, true)
+	}
+	for _, item := range ready {
+		fmt.Printf("#%d [%s/%s/%s] %s\n", item.Number, item.Kind, item.Area, item.Priority, item.Title)
+	}
+	return nil
+}
+
+// loadWorkCandidates reads open Issues with the Project fields that decide
+// whether work can be picked up.
+func loadWorkCandidates(c model.Config) ([]workCandidate, error) {
 	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:OPEN) { nodes {
 id number title body parent { id } subIssues(first:1) { nodes { id } } blockedBy(first:100) { nodes { state } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
@@ -1268,7 +1286,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 } } } }`, c.Owner, c.Repository)
 	output, err := ghOutput("api", "graphql", "-f", "query="+query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var response struct {
 		Data struct {
@@ -1314,7 +1332,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(output, &response); err != nil {
-		return err
+		return nil, err
 	}
 	candidates := make([]workCandidate, 0, len(response.Data.Repository.Issues.Nodes))
 	for _, issue := range response.Data.Repository.Issues.Nodes {
@@ -1348,14 +1366,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 		}
 		candidates = append(candidates, candidate)
 	}
-	ready := selectReadyWork(candidates, time.Now())
-	if *asJSON {
-		return printValue(map[string]any{"repository": c.Owner + "/" + c.Repository, "work": ready}, true)
-	}
-	for _, item := range ready {
-		fmt.Printf("#%d [%s/%s/%s] %s\n", item.Number, item.Kind, item.Area, item.Priority, item.Title)
-	}
-	return nil
+	return candidates, nil
 }
 
 func selectReadyWork(candidates []workCandidate, now time.Time) []readyWork {

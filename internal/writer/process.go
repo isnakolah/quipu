@@ -55,6 +55,10 @@ func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
 	return pending, rejected
 }
 
+// ActorMatchesLogin reports whether a request actor may be posted by login:
+// either the login itself or a provider/login[/session] agent identity.
+func ActorMatchesLogin(actor, login string) bool { return actorMatches(actor, login) }
+
 func actorMatches(actor, login string) bool {
 	if actor == "" || login == "" {
 		return false
