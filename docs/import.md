@@ -12,7 +12,7 @@ gh workflow run quipu-writer.yml                            # or wait for the Wr
 
 1. **Validates the whole manifest** and lists every problem at once. Nothing is created until it is valid.
 2. **Creates each Issue**, parents before children, with its `kind:` and `area:` labels, adds it to the Project with Kind, Area, Priority, Proof, and Status Backlog, and records Epic approval.
-3. **Links native parents and blockers.**
+3. **Links native parents and blockers.** GitHub allows 100 sub-issues per parent, so validation rejects a manifest that puts more under one item.
 4. **Asks the Writer to record every status beyond Backlog** with an `import` request. The Writer applies it once, to an Issue that has not entered the flow yet, and posts a receipt:
 
 | Manifest status | Board after the Writer | Issue |
@@ -31,6 +31,8 @@ Done receipts carry historical evidence: the commits as the final SHA, the sourc
 ## Running it again
 
 Every Issue body ends with `<!-- quipu-import:v1 key=KEY -->`. A second run matches Issues by that key and creates nothing twice. It only repairs what is missing: an Issue not on the Project, a parent or blocker link, or a status request that was never posted or was rejected. Fix a rejected request's cause, then run it again.
+
+A large manifest makes several GitHub calls per item. If GitHub's rate limit stops the import partway (`API rate limit already exceeded`), wait for the limit to reset (`gh api rate_limit`) and run the same command again; it picks up where it stopped.
 
 Changing an item's title, body, or status in the manifest after it was imported does nothing; change the Issue through the normal flow instead.
 
