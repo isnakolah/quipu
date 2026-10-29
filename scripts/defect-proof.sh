@@ -10,6 +10,7 @@ set -euo pipefail
 
 owner=${QUIPU_PROOF_OWNER:-$(gh api user --jq .login)}
 repo="quipu-defect-proof-$(date +%s)"
+visibility=${QUIPU_PROOF_VISIBILITY:-private} # private Actions need billing; public is free
 source_dir=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 project_number=""
@@ -38,8 +39,8 @@ quipu=${QUIPU_BIN:-$work/quipu}
 [ -n "${QUIPU_BIN:-}" ] || (cd "$source_dir" && go build -o "$quipu" ./cmd/quipu)
 pin=${QUIPU_PIN:-$(git -C "$source_dir" rev-parse HEAD)}
 
-step "adopted private repository $owner/$repo"
-gh repo create "$owner/$repo" --private --add-readme >/dev/null
+step "adopted $visibility repository $owner/$repo"
+gh repo create "$owner/$repo" "--$visibility" --add-readme >/dev/null
 gh repo clone "$owner/$repo" "$work/repo" -- -q
 cd "$work/repo"
 project_number=$(gh project create --owner "$owner" --title "$repo" --format json --jq .number)
