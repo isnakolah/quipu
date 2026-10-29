@@ -510,6 +510,7 @@ func runImport(c model.Config, here worktree, items []importItem, numbers map[st
 		}
 		changes = append(changes, fmt.Sprintf("#%d import as %s requested", number, item.Status))
 		requests = append(requests, id)
+		time.Sleep(time.Second)
 	}
 	return changes, requests, nil
 }
