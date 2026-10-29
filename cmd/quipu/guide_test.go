@@ -41,22 +41,26 @@ func TestGuideRendersEveryRuleAndError(t *testing.T) {
 	}
 }
 
-func TestWithGuideBlockKeepsRepositoryText(t *testing.T) {
-	first := withGuideBlock("# Ours\n\nKeep me.\n", "handbook v1\n")
-	if !strings.HasPrefix(first, "# Ours\n\nKeep me.\n\n"+guideBegin) {
-		t.Fatalf("first=%q", first)
+func TestGuideNeverModifiesProjectInstructions(t *testing.T) {
+	own := map[string]string{"AGENTS.md": "# Ours\n\nKeep me.\n", "CLAUDE.md": "# Mine\n"}
+	read := func(path string) (string, bool) { v, ok := own[path]; return v, ok }
+	files := guideFiles(t.TempDir(), read)
+	if files["AGENTS.md"] != own["AGENTS.md"] || files["CLAUDE.md"] != own["CLAUDE.md"] {
+		t.Fatalf("project files changed: %q %q", files["AGENTS.md"], files["CLAUDE.md"])
 	}
-	second := withGuideBlock(first+"\nAfter.\n", "handbook v2\n")
-	if strings.Contains(second, "v1") || !strings.Contains(second, "handbook v2") || !strings.Contains(second, "Keep me.") || !strings.HasSuffix(second, "After.\n") {
-		t.Fatalf("second=%q", second)
+	if files[guideRule] != renderGuide() {
+		t.Fatal("handbook must go to " + guideRule)
 	}
-	files := guideFiles(t.TempDir(), func(path string) (string, bool) {
-		if path == "CLAUDE.md" {
-			return "# Mine\n", true
-		}
-		return "", false
-	})
-	if files["CLAUDE.md"] != "# Mine\n\n@AGENTS.md\n" {
-		t.Fatalf("CLAUDE.md=%q", files["CLAUDE.md"])
+	if hints := guideHints(read); len(hints) != 2 {
+		t.Fatalf("hints=%v", hints)
+	}
+	missing := guideFiles(t.TempDir(), func(string) (string, bool) { return "", false })
+	if missing["AGENTS.md"] != agentsPointer || missing["CLAUDE.md"] != claudePointer {
+		t.Fatal("missing files get the pointers")
+	}
+	if hints := guideHints(func(p string) (string, bool) {
+		return map[string]string{"AGENTS.md": agentsPointer, "CLAUDE.md": claudePointer}[p], true
+	}); len(hints) != 0 {
+		t.Fatalf("pointers need no hints: %v", hints)
 	}
 }

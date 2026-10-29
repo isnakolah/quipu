@@ -28,4 +28,4 @@ Lifecycle: `Backlog → Ready → Claimed → In progress → In review → Evid
 - **On every PR:** the required `policy` check.
 - **On GitHub, for everyone:** branch protection and the branch-name ruleset (`quipu protect`), and the Writer's watchdog.
 
-The agent handbook in `internal/guide/agent.md` is the single source for agent instructions. `quipu guide --sync` generates AGENTS.md, CLAUDE.md, `.agent/rules/quipu.md`, and the plugin skills from it, filling in the guard and error tables from the code, and `TestGuidesInSync` fails on drift.
+The agent handbook in `internal/guide/agent.md` is the single source for agent instructions. `quipu guide --sync` writes it to `.agent/rules/quipu.md` and the plugin skills, filling in the guard and error tables from the code, and `TestGuidesInSync` fails on drift. It creates AGENTS.md and CLAUDE.md as pointers only when a repository has none, and never modifies a project's own; when they lack the pointer, it says so.

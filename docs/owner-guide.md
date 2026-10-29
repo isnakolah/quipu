@@ -1,6 +1,6 @@
 # Owner guide
 
-You are the owner of a Quipu repository. You set goals, decide what is Ready, review and merge PRs, and keep the Writer running. Agents do the work. This page covers everything you do. Agents read [AGENTS.md](../AGENTS.md) (`quipu guide`) instead.
+You are the owner of a Quipu repository. You set goals, decide what is Ready, review and merge PRs, and keep the Writer running. Agents do the work. This page covers everything you do. Agents read [.agent/rules/quipu.md](../.agent/rules/quipu.md) (`quipu guide`) instead.
 
 ## The one rule
 
@@ -29,7 +29,7 @@ Issues closed before the cutover (`receipts_trusted_before` in the config) are l
 ## Setup checklist
 
 1. **Install Quipu** from source: [source-install.md](source-install.md).
-2. **Bootstrap or adopt.** `quipu init` for a new repository, `quipu adopt --apply --project-number N` for an existing one with no Issues. Both write the config, the agent guides (AGENTS.md, CLAUDE.md), and the guard hooks. Commit them.
+2. **Bootstrap or adopt.** `quipu init` for a new repository, `quipu adopt --apply --project-number N` for an existing one with no Issues. Both write the config, the agent handbook (`.agent/rules/quipu.md`), and the guard hooks, and create AGENTS.md and CLAUDE.md pointers only if the repository has none. If you already have your own, add a line pointing agents at `.agent/rules/quipu.md` (and `@.agent/rules/quipu.md` in CLAUDE.md); `quipu guide --sync` reminds you. Commit them.
 3. **Create the Writer token.** A classic personal access token with `public_repo` and `project` (use `repo` instead of `public_repo` for a private repository). Fine-grained tokens cannot change a personal Project. Set it as an Actions secret, never anywhere else:
    ```sh
    gh secret set QUIPU_WRITER_TOKEN   # paste the token when prompted

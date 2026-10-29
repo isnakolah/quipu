@@ -1,6 +1,6 @@
 # Operations
 
-How Quipu runs a repository, for the people who maintain it. Agents read [AGENTS.md](../AGENTS.md); owners start with the [owner guide](owner-guide.md).
+How Quipu runs a repository, for the people who maintain it. Agents read [.agent/rules/quipu.md](../.agent/rules/quipu.md); owners start with the [owner guide](owner-guide.md).
 
 ## Enforcement layers
 
@@ -20,7 +20,7 @@ The guard applies to agents only. Humans are checked by the policy check, branch
 
 The guard reads the hook's JSON from standard input, parses shell commands into their parts (pipelines, subshells, `$(...)`, redirects, `cd`, `sh -c`, `eval`), and judges every part in the directory it runs in. Anything it cannot parse is denied. Reading and testing are always allowed. Every other action needs the worktree's lease: a local mirror of the GitHub lease in `<git-dir>/quipu-lease`, checked against GitHub at most every five minutes.
 
-A denial exits 2 with one line: `QUIPU DENIED [code]: why (detail). Do instead: command. Rules: \`quipu guide\`.` The codes and their fixes are generated into AGENTS.md from the same table the guard uses.
+A denial exits 2 with one line: `QUIPU DENIED [code]: why (detail). Do instead: command. Rules: \`quipu guide\`.` The codes and their fixes are generated into `.agent/rules/quipu.md` from the same table the guard uses.
 
 ## Writer
 

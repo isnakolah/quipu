@@ -238,13 +238,57 @@ func hookChecks(top string) []doctorCheck {
 	return checks
 }
 
+// rulesetProtection checks the rules GitHub enforces on branch from rulesets.
+func rulesetProtection(repo, branch string) doctorCheck {
+	output, err := ghOutput("api", repo+"/rules/branches/"+branch)
+	if err != nil {
+		return doctorCheck{"branch protection", "fail", "cannot read the rules on " + branch + ": " + err.Error(), "owner: quipu protect --apply"}
+	}
+	return judgeBranchRules(branch, output)
+}
+
+// judgeBranchRules passes when branch requires PRs with the test and policy
+// checks and forbids force pushes and deletion.
+func judgeBranchRules(branch string, raw []byte) doctorCheck {
+	var rules []struct {
+		Type       string `json:"type"`
+		Parameters struct {
+			Checks []struct {
+				Context string `json:"context"`
+			} `json:"required_status_checks"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(raw, &rules); err != nil {
+		return doctorCheck{"branch protection", "fail", err.Error(), "owner: quipu protect --apply"}
+	}
+	have := map[string]bool{}
+	for _, rule := range rules {
+		have[rule.Type] = true
+		for _, check := range rule.Parameters.Checks {
+			have["check:"+check.Context] = true
+		}
+	}
+	var missing []string
+	for _, want := range []string{"pull_request", "non_fast_forward", "deletion", "check:test", "check:policy"} {
+		if !have[want] {
+			missing = append(missing, want)
+		}
+	}
+	if len(missing) > 0 {
+		return doctorCheck{"branch protection", "fail", branch + " rules lack " + strings.Join(missing, ", "), "owner: quipu protect --apply"}
+	}
+	return doctorCheck{"branch protection", "ok", branch + " protected by rulesets: PRs, test and policy checks", ""}
+}
+
 func githubChecks(c model.Config) []doctorCheck {
 	var checks []doctorCheck
 	repo := "repos/" + c.Owner + "/" + c.Repository
 	output, err := ghOutput("api", repo+"/branches/"+c.DefaultBranch+"/protection")
 	switch {
-	case err != nil && strings.Contains(err.Error(), "Branch not protected"):
-		checks = append(checks, doctorCheck{"branch protection", "fail", c.DefaultBranch + " is not protected", "owner: quipu protect --apply"})
+	case err != nil && (strings.Contains(err.Error(), "Branch not protected") || strings.Contains(err.Error(), "Branch protection has been disabled")):
+		// No classic protection: the default branch may still be protected
+		// by rulesets, which GitHub reports as the branch's active rules.
+		checks = append(checks, rulesetProtection(repo, c.DefaultBranch))
 	case err != nil:
 		checks = append(checks, doctorCheck{"branch protection", "warn", "cannot read protection (needs admin)", "owner: quipu doctor"})
 	default:
