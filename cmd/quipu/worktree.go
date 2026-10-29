@@ -178,7 +178,7 @@ func (w worktree) requireBranchFree(branch string) error {
 		return err
 	}
 	if other := branchCheckedOutElsewhere(porcelain, branch, w.Top); other != "" {
-		return fmt.Errorf("branch %s is checked out in worktree %s; continue the work there", branch, other)
+		return flowErr("branch-elsewhere", "branch %s is checked out in worktree %s", branch, other)
 	}
 	return nil
 }

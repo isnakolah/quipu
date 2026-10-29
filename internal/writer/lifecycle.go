@@ -24,6 +24,9 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 		if request.PR == "" {
 			return WorkState{}, fmt.Errorf("PR link requires pull request URL")
 		}
+		if err := activeHolder(current, request.Actor, now); err != nil {
+			return WorkState{}, err
+		}
 		if err := RequireTransition(current.Status, "In review"); err != nil {
 			return WorkState{}, err
 		}
@@ -39,6 +42,9 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 		if request.PR == "" {
 			return WorkState{}, fmt.Errorf("evidence request requires pull request URL")
 		}
+		if err := sameHolder(current, request.Actor); err != nil {
+			return WorkState{}, err
+		}
 		if err := RequireTransition(current.Status, "Evidence pending"); err != nil {
 			return WorkState{}, err
 		}
@@ -47,6 +53,13 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 	case "status":
 		if request.Status == "" {
 			return WorkState{}, fmt.Errorf("status request requires status")
+		}
+		// Claiming and starting set the lease, so they have their own actions.
+		if request.Status == "Claimed" || request.Status == "In progress" && current.Status == "Claimed" {
+			return WorkState{}, fmt.Errorf("use the claim and start actions to take work, not status %q", request.Status)
+		}
+		if err := sameHolder(current, request.Actor); err != nil {
+			return WorkState{}, err
 		}
 		if err := RequireTransition(current.Status, request.Status); err != nil {
 			return WorkState{}, err
@@ -78,8 +91,13 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 		current.Status = "In progress"
 		return current, nil
 	case "renew":
-		if err := activeHolder(current, request.Actor, now); err != nil {
+		// The holder may re-take an expired lease until reconcile returns the
+		// work to Ready, and work in review keeps its holder indefinitely.
+		if err := sameHolder(current, request.Actor); err != nil {
 			return WorkState{}, err
+		}
+		if current.Status != "Claimed" && current.Status != "In progress" && current.Status != "In review" && current.Status != "Evidence pending" {
+			return WorkState{}, fmt.Errorf("renew applies to active work, not %q", current.Status)
 		}
 		expires, err := requestExpiry(request.LeaseExpiresAt, now)
 		if err != nil {
@@ -118,6 +136,15 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 func activeHolder(current WorkState, actor string, now time.Time) error {
 	if actor == "" || current.Lease.Holder != actor || !current.Lease.Expires.After(now) {
 		return fmt.Errorf("active lease held by %q required", actor)
+	}
+	return nil
+}
+
+// sameHolder requires the actor to hold the work's lease, expired or not.
+// Work without a holder is open to any authorized actor.
+func sameHolder(current WorkState, actor string) error {
+	if current.Lease.Holder != "" && current.Lease.Holder != actor {
+		return fmt.Errorf("work is held by %q, not %q", current.Lease.Holder, actor)
 	}
 	return nil
 }

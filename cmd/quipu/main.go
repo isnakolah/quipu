@@ -29,7 +29,7 @@ const configPath = ".github/quipu/config.yaml"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "quipu:", err)
+		printError(err, os.Args[1:], os.Stdout, os.Stderr)
 		os.Exit(1)
 	}
 }
@@ -48,6 +48,12 @@ func run(args []string) error {
 		return startCommand(args[1:])
 	case "done":
 		return doneCommand(args[1:])
+	case "propose":
+		return proposeCommand(args[1:])
+	case "ready":
+		return readyCommand(args[1:])
+	case "protect":
+		return protectCommand(args[1:])
 	case "init":
 		return initCommand(args[1:])
 	case "doctor":
@@ -888,23 +894,6 @@ func printValue(v any, asJSON bool) error {
 	fmt.Printf("%+v\n", v)
 	return nil
 }
-func doctor(args []string) error {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	asJSON := jsonFlag(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	c, err := loadConfig()
-	cachePath := ""
-	if cache, cacheErr := github.NewMetadataCache(); cacheErr == nil {
-		cachePath = cache.Root
-	}
-	report := map[string]any{"quipu_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": "", "cache_path": cachePath, "cache_authority": "disposable metadata only; live GitHub wins"}
-	if err == nil {
-		report["repository"] = c.Owner + "/" + c.Repository
-	}
-	return printValue(report, *asJSON)
-}
 func contextCommand(args []string) error {
 	fs := flag.NewFlagSet("context", flag.ContinueOnError)
 	asJSON := jsonFlag(fs)
@@ -1362,7 +1351,7 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	fs := flag.NewFlagSet(action, flag.ContinueOnError)
 	number := fs.Int("issue-number", 0, "issue number")
 	id := fs.String("issue-id", "", "issue node ID")
-	actor := fs.String("actor", os.Getenv("USER"), "actor identity")
+	actor := fs.String("actor", "", "actor identity; defaults to the holder of the Issue's lease, else this worktree's identity")
 	fingerprint := fs.String("fingerprint", "", "observed fingerprint")
 	apply := applyFlag(fs)
 	lease := fs.String("lease-expires", "", "RFC3339 expiry")
@@ -1402,6 +1391,15 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	c, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if *actor == "" {
+		here, err := currentWorktree()
+		if err != nil {
+			return err
+		}
+		if *actor, err = resolveActor(here.holding(*number), "", *number); err != nil {
+			return err
+		}
 	}
 	r := writer.Request{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Action: action, IssueID: *id, Actor: *actor, ExpectedFingerprint: *fingerprint, LeaseExpiresAt: *lease, Branch: *branch, Status: *status, PR: *pr, Evidence: evidence}
 	body, err := writer.RenderRequest(r)
