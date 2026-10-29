@@ -77,16 +77,13 @@ func statusCommand(args []string) error {
 }
 
 func loadStatusItems(c model.Config) ([]statusItem, error) {
-	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:OPEN) { nodes {
-number title parent { number } blockedBy(first:100) { nodes { state } }
+	output, err := issuePages(c, "states:OPEN", `number title parent { number } blockedBy(first:100) { nodes { state } }
 subIssuesSummary { total completed }
 labels(first:20) { nodes { name } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
-} } } }
-} } } }`, c.Owner, c.Repository)
-	output, err := ghOutput("api", "graphql", "-f", "query="+query)
+} } } }`)
 	if err != nil {
 		return nil, err
 	}
