@@ -23,22 +23,44 @@ import (
 // one can satisfy them by posting a commit status by hand.
 const actionsAppID = 15368
 
-const branchRulesetName = "quipu-branch-names"
+const (
+	mainRulesetName   = "quipu-main"
+	branchRulesetName = "quipu-branch-names"
+	// adminRoleID is GitHub's repository admin role, the bypass actor that
+	// --admins-exempt adds.
+	adminRoleID = 5
+)
 
-func protectionPayload() map[string]any {
+// mainRuleset protects the default branch: changes only through PRs with
+// the required checks green, no force pushes, no deletion. It is a ruleset,
+// not classic branch protection, which GitHub can disable per repository.
+func mainRuleset(c model.Config, adminsExempt bool) map[string]any {
+	checks := []map[string]any{}
+	for _, name := range append(append([]string{}, c.Checks()...), "policy") {
+		checks = append(checks, map[string]any{"context": name, "integration_id": actionsAppID})
+	}
+	bypass := []map[string]any{}
+	if adminsExempt {
+		bypass = append(bypass, map[string]any{"actor_id": adminRoleID, "actor_type": "RepositoryRole", "bypass_mode": "always"})
+	}
 	return map[string]any{
-		"required_status_checks": map[string]any{
-			"strict": true,
-			"checks": []map[string]any{{"context": "test", "app_id": actionsAppID}, {"context": "policy", "app_id": actionsAppID}},
+		"name":          mainRulesetName,
+		"target":        "branch",
+		"enforcement":   "active",
+		"bypass_actors": bypass,
+		"conditions":    map[string]any{"ref_name": map[string]any{"include": []string{"~DEFAULT_BRANCH"}, "exclude": []string{}}},
+		"rules": []map[string]any{
+			{"type": "deletion"},
+			{"type": "non_fast_forward"},
+			{"type": "pull_request", "parameters": map[string]any{
+				"required_approving_review_count": 0, "dismiss_stale_reviews_on_push": true,
+				"require_code_owner_review": false, "require_last_push_approval": false,
+				"required_review_thread_resolution": true, "allowed_merge_methods": []string{"merge", "squash", "rebase"},
+			}},
+			{"type": "required_status_checks", "parameters": map[string]any{
+				"strict_required_status_checks_policy": true, "do_not_enforce_on_create": false, "required_status_checks": checks,
+			}},
 		},
-		"enforce_admins": true,
-		"required_pull_request_reviews": map[string]any{
-			"dismiss_stale_reviews": true, "required_approving_review_count": 0,
-		},
-		"restrictions":                     nil,
-		"required_conversation_resolution": true,
-		"allow_force_pushes":               false,
-		"allow_deletions":                  false,
 	}
 }
 
@@ -58,6 +80,7 @@ func branchRuleset(defaultBranch string) map[string]any {
 
 func protectCommand(args []string) error {
 	fs := flag.NewFlagSet("protect", flag.ContinueOnError)
+	adminsExempt := fs.Bool("admins-exempt", false, "let repository admins bypass the main ruleset (their merges skip the checks)")
 	apply := applyFlag(fs)
 	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
@@ -67,48 +90,51 @@ func protectCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	plan := map[string]any{"repository": c.Owner + "/" + c.Repository, "branch_protection": protectionPayload(), "ruleset": branchRuleset(c.DefaultBranch), "apply": *apply}
+	plan := map[string]any{"repository": c.Owner + "/" + c.Repository, "main_ruleset": mainRuleset(c, *adminsExempt), "branch_ruleset": branchRuleset(c.DefaultBranch), "apply": *apply}
 	if !*apply {
 		return printValue(plan, *asJSON)
 	}
-	if err := protectRepository(c); err != nil {
+	if err := protectRepository(c, *adminsExempt); err != nil {
 		return err
 	}
 	return printValue(plan, *asJSON)
 }
 
-// protectRepository applies main protection and the branch-name ruleset.
-// It needs an admin token, so the owner runs it.
-func protectRepository(c model.Config) error {
+// protectRepository creates or updates both rulesets. It needs an admin
+// token, so the owner runs it.
+func protectRepository(c model.Config, adminsExempt bool) error {
 	repo := "repos/" + c.Owner + "/" + c.Repository
-	if err := ghJSON("PUT", repo+"/branches/"+c.DefaultBranch+"/protection", protectionPayload()); err != nil {
-		return fmt.Errorf("protect %s: %w", c.DefaultBranch, err)
+	for name, payload := range map[string]map[string]any{mainRulesetName: mainRuleset(c, adminsExempt), branchRulesetName: branchRuleset(c.DefaultBranch)} {
+		id, err := rulesetID(repo, name)
+		if err != nil {
+			return err
+		}
+		if id == 0 {
+			err = ghJSON("POST", repo+"/rulesets", payload)
+		} else {
+			err = ghJSON("PUT", fmt.Sprintf("%s/rulesets/%d", repo, id), payload)
+		}
+		if err != nil {
+			return fmt.Errorf("ruleset %s: %w", name, err)
+		}
 	}
-	id, err := rulesetID(repo)
-	if err != nil {
-		return err
-	}
-	if id == 0 {
-		return ghJSON("POST", repo+"/rulesets", branchRuleset(c.DefaultBranch))
-	}
-	return ghJSON("PUT", fmt.Sprintf("%s/rulesets/%d", repo, id), branchRuleset(c.DefaultBranch))
+	return nil
 }
 
-func rulesetID(repo string) (int, error) {
+func rulesetID(repo, name string) (int, error) {
 	output, err := ghOutput("api", repo+"/rulesets")
 	if err != nil {
 		return 0, err
 	}
 	var rulesets []struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		Enforcement string `json:"enforcement"`
+		ID   int    `json:"id"`
+		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(output, &rulesets); err != nil {
 		return 0, err
 	}
 	for _, ruleset := range rulesets {
-		if ruleset.Name == branchRulesetName {
+		if ruleset.Name == name {
 			return ruleset.ID, nil
 		}
 	}
@@ -238,18 +264,10 @@ func hookChecks(top string) []doctorCheck {
 	return checks
 }
 
-// rulesetProtection checks the rules GitHub enforces on branch from rulesets.
-func rulesetProtection(repo, branch string) doctorCheck {
-	output, err := ghOutput("api", repo+"/rules/branches/"+branch)
-	if err != nil {
-		return doctorCheck{"branch protection", "fail", "cannot read the rules on " + branch + ": " + err.Error(), "owner: quipu protect --apply"}
-	}
-	return judgeBranchRules(branch, output)
-}
-
-// judgeBranchRules passes when branch requires PRs with the test and policy
-// checks and forbids force pushes and deletion.
-func judgeBranchRules(branch string, raw []byte) doctorCheck {
+// judgeBranchRules passes when branch requires PRs with every required
+// check and forbids force pushes and deletion. raw is GitHub's list of the
+// rules active on the branch, from rulesets.
+func judgeBranchRules(branch string, raw []byte, checks []string) doctorCheck {
 	var rules []struct {
 		Type       string `json:"type"`
 		Parameters struct {
@@ -269,61 +287,42 @@ func judgeBranchRules(branch string, raw []byte) doctorCheck {
 		}
 	}
 	var missing []string
-	for _, want := range []string{"pull_request", "non_fast_forward", "deletion", "check:test", "check:policy"} {
-		if !have[want] {
-			missing = append(missing, want)
+	want := []string{"pull_request", "non_fast_forward", "deletion"}
+	for _, check := range append(append([]string{}, checks...), "policy") {
+		want = append(want, "check:"+check)
+	}
+	for _, rule := range want {
+		if !have[rule] {
+			missing = append(missing, rule)
 		}
 	}
 	if len(missing) > 0 {
 		return doctorCheck{"branch protection", "fail", branch + " rules lack " + strings.Join(missing, ", "), "owner: quipu protect --apply"}
 	}
-	return doctorCheck{"branch protection", "ok", branch + " protected by rulesets: PRs, test and policy checks", ""}
+	return doctorCheck{"branch protection", "ok", branch + " protected by rulesets: PRs, checks " + strings.Join(append(append([]string{}, checks...), "policy"), ", "), ""}
 }
 
 func githubChecks(c model.Config) []doctorCheck {
 	var checks []doctorCheck
 	repo := "repos/" + c.Owner + "/" + c.Repository
-	output, err := ghOutput("api", repo+"/branches/"+c.DefaultBranch+"/protection")
-	switch {
-	case err != nil && (strings.Contains(err.Error(), "Branch not protected") || strings.Contains(err.Error(), "Branch protection has been disabled")):
-		// No classic protection: the default branch may still be protected
-		// by rulesets, which GitHub reports as the branch's active rules.
-		checks = append(checks, rulesetProtection(repo, c.DefaultBranch))
-	case err != nil:
-		checks = append(checks, doctorCheck{"branch protection", "warn", "cannot read protection (needs admin)", "owner: quipu doctor"})
-	default:
-		var p struct {
-			Checks struct {
-				Contexts []string `json:"contexts"`
-			} `json:"required_status_checks"`
-			Admins struct {
-				Enabled bool `json:"enabled"`
-			} `json:"enforce_admins"`
-			Force struct {
-				Enabled bool `json:"enabled"`
-			} `json:"allow_force_pushes"`
-		}
-		_ = json.Unmarshal(output, &p)
-		contexts := strings.Join(p.Checks.Contexts, ",")
-		if !strings.Contains(contexts, "test") || !strings.Contains(contexts, "policy") || !p.Admins.Enabled || p.Force.Enabled {
-			checks = append(checks, doctorCheck{"branch protection", "fail", "required checks " + contexts + ", enforce admins " + fmt.Sprint(p.Admins.Enabled), "owner: quipu protect --apply"})
-		} else {
-			checks = append(checks, doctorCheck{"branch protection", "ok", "checks " + contexts + ", admins enforced", ""})
-		}
+	if output, err := ghOutput("api", repo+"/rules/branches/"+c.DefaultBranch); err != nil {
+		checks = append(checks, doctorCheck{"branch protection", "warn", "cannot read the rules on " + c.DefaultBranch, "owner: quipu doctor"})
+	} else {
+		checks = append(checks, judgeBranchRules(c.DefaultBranch, output, c.Checks()))
 	}
-	if id, err := rulesetID(repo); err != nil {
+	if id, err := rulesetID(repo, branchRulesetName); err != nil {
 		checks = append(checks, doctorCheck{"branch names", "warn", "cannot read rulesets", "owner: quipu doctor"})
 	} else if id == 0 {
 		checks = append(checks, doctorCheck{"branch names", "fail", "no " + branchRulesetName + " ruleset", "owner: quipu protect --apply"})
 	} else {
 		checks = append(checks, doctorCheck{"branch names", "ok", branchRulesetName, ""})
 	}
-	output, err = ghOutput("api", repo+"/actions/secrets", "--jq", "[.secrets[].name]")
+	output, err := ghOutput("api", repo+"/actions/secrets", "--jq", "[.secrets[].name]")
 	switch {
 	case err != nil:
 		checks = append(checks, doctorCheck{"Writer token", "warn", "cannot list secrets (needs admin)", "owner: quipu doctor"})
 	case !strings.Contains(string(output), "QUIPU_WRITER_TOKEN"):
-		checks = append(checks, doctorCheck{"Writer token", "fail", "QUIPU_WRITER_TOKEN secret missing; no work can be claimed", "owner: create a classic PAT with public_repo and project, then gh secret set QUIPU_WRITER_TOKEN"})
+		checks = append(checks, doctorCheck{"Writer token", "fail", "QUIPU_WRITER_TOKEN secret missing; no work can be claimed", "owner: create a classic PAT with project plus public_repo (public) or repo (private), then gh secret set QUIPU_WRITER_TOKEN"})
 	default:
 		checks = append(checks, doctorCheck{"Writer token", "ok", "", ""})
 	}

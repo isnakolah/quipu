@@ -29,19 +29,54 @@ Issues closed before the cutover (`receipts_trusted_before` in the config) are l
 ## Setup checklist
 
 1. **Install Quipu** from source: [source-install.md](source-install.md).
-2. **Bootstrap or adopt.** `quipu init` for a new repository, `quipu adopt --apply --project-number N` for an existing one with no Issues. Both write the config, the agent handbook (`.agent/rules/quipu.md`), and the guard hooks, and create AGENTS.md and CLAUDE.md pointers only if the repository has none. If you already have your own, add a line pointing agents at `.agent/rules/quipu.md` (and `@.agent/rules/quipu.md` in CLAUDE.md); `quipu guide --sync` reminds you. Commit them.
-3. **Create the Writer token.** A classic personal access token with `public_repo` and `project` (use `repo` instead of `public_repo` for a private repository). Fine-grained tokens cannot change a personal Project. Set it as an Actions secret, never anywhere else:
+2. **Bootstrap or adopt.** `quipu init` for a new repository; `quipu adopt` for an existing one (see [Adopting an existing repository](#adopting-an-existing-repository)). Both write the config, the workflows, the Issue forms, the agent handbook (`.agent/rules/quipu.md`), and the guard hooks, and create AGENTS.md and CLAUDE.md pointers only if the repository has none. If you already have your own, add a line pointing agents at `.agent/rules/quipu.md` (and `@.agent/rules/quipu.md` in CLAUDE.md); `quipu guide --sync` reminds you. Commit them.
+3. **Create the Writer token.** A classic personal access token with the `project` scope plus `public_repo` for a public repository, or `repo` for a private one. Fine-grained tokens cannot change a personal Project. Set it as an Actions secret, never anywhere else:
    ```sh
-   gh secret set QUIPU_WRITER_TOKEN   # paste the token when prompted
+   gh secret set QUIPU_WRITER_TOKEN --repo OWNER/REPO   # paste the token when prompted
    ```
    Without it the Writer cannot claim, review, or finish anything, and the `policy` check fails every PR.
-4. **Protect the repository.** `quipu protect` shows the plan; `quipu protect --apply` applies it:
-   - `main` takes changes only through PRs that pass the `test` and `policy` checks, from GitHub Actions, with conversations resolved, admins included;
-   - no force pushes or deletions of `main`;
-   - new branches must be `NNN/short-description` (or Dependabot's).
-   Private repositories need a paid plan for protection.
-5. **Install the hooks** if `init` or `adopt` did not: `quipu hooks --apply`, then commit `.claude/settings.json` and `.codex/hooks.json`. Each person running agents approves the hooks once (Claude Code: `/hooks`; Codex: trust the project). Install the Claude or Codex plugin from `plugins/` for the session hints too.
+4. **Protect the repository.** `quipu protect` shows the plan; `quipu protect --apply` applies it as two repository rulesets:
+   - `quipu-main`: the default branch takes changes only through PRs that pass `policy` and the `required_checks` (default `test`), reported by GitHub Actions, with conversations resolved; no force pushes or deletion;
+   - `quipu-branch-names`: new branches must be `NNN/short-description` (or Dependabot's).
+
+   Rulesets apply to admins too. `quipu protect --apply --admins-exempt` lets repository admins bypass `quipu-main`, so your own merges can skip failing checks; agents using your login can then bypass it too if they get past the guard. Private repositories need a paid plan for rulesets.
+5. **Install the hooks** if `init` or `adopt` did not: `quipu hooks --apply`, then commit `.claude/settings.json` and `.codex/hooks.json`. Each person running agents approves the hooks once (Claude Code: `/hooks`; Codex: trust the project). Install the plugin for the session hints too ([commands](source-install.md#agent-hooks-and-plugins)).
 6. **Check everything.** `quipu doctor` must print no `FAIL`.
+
+## Adopting an existing repository
+
+`quipu adopt` works in a clone of a repository that has code and PRs but no Issues yet. Create an empty Project first (`gh project create --owner OWNER --title TITLE`), then:
+
+```sh
+quipu adopt --owner OWNER --repo REPO                         # audit: counts Issues, ignoring PRs
+quipu adopt --owner OWNER --repo REPO --project-number N --apply \
+  --runs-on self-hosted,macOS --quipu-version v0.2.0
+```
+
+It provisions what `init` does, changing only what is missing: labels, the Project fields, Status options, and views, the workflows and Issue forms, the config, the handbook, and the hooks. Run it again at any time; a second run reports `"changed": false`. It refuses a repository that already has Issues; bring existing work in with `quipu import`.
+
+Files that already exist and differ from Quipu's (your own `ci.yml`, say) are kept and listed under `kept`. Rerun with `--replace` to overwrite them. When you keep your own CI, set `required_checks` to its job names so protection requires them.
+
+Adopt never rewrites the options of a Project field on a Project that has items, because GitHub clears every item's value when options change. It tells you which options to add by hand instead.
+
+## Runners and workflows
+
+The generated workflows follow the `workflows` section of the config. Change it through a reviewed PR, then regenerate the files with `quipu adopt --apply --replace` and commit them.
+
+```yaml
+workflows:
+  runs_on:
+    default: [self-hosted, macOS]   # every job; ubuntu-latest when unset
+    test: [ubuntu-latest]           # or per job: writer, policy, test
+  quipu_version: v0.2.0             # tag or commit the workflows install
+  schedule: "*/15 * * * *"          # Writer cron; "off" to rely on events only
+  writer_on_pull_request: false     # skip Writer runs on PR events
+required_checks: [test]             # CI checks main requires besides policy
+```
+
+- A runner that already has `quipu` on its `PATH` uses it and skips installing Go and Quipu. Keep it at `quipu_version`.
+- Without the schedule, expired leases are reclaimed and PR policy rechecked only when an Issue event or a manual run (`gh workflow run quipu-writer.yml`) wakes the Writer.
+- Self-hosted runners: register one under the repository's **Settings → Actions → Runners** with the labels you list, and keep it online. `policy` runs on `pull_request_target`, which checks out only the default branch, so a PR's code never runs on your runner through Quipu's workflows.
 
 ## Day to day
 
@@ -63,6 +98,8 @@ Set these in `.github/quipu/config.yaml` through a reviewed PR (the file is owne
 |---|---|---|
 | `ready_by: agents` | `owner` | Agents may run `quipu ready N` to make work Ready. |
 | `policy_exempt_authors: [dependabot[bot]]` | none | PRs opened by these bot accounts skip the work checks in `policy`. Changes to Quipu's own files still need your label. Only `...[bot]` accounts are accepted, because your login is shared with your agents. |
+| `required_checks: [build, unit]` | `[test]` | The CI checks `quipu protect` requires on the default branch, besides `policy`. |
+| `workflows` | hosted runners, every five minutes | Runners, pinned Quipu version, schedule, and PR trigger; see [Runners and workflows](#runners-and-workflows). |
 
 `quipu start --next` never picks Epics, Decisions, or Gates: you decide those.
 
@@ -82,4 +119,4 @@ Set these in `.github/quipu/config.yaml` through a reviewed PR (the file is owne
 
 - **Agents share your GitHub login.** On GitHub, your agents' API calls look like yours. The local guard is what stops an agent from merging, approving, or editing the board; the Writer and the `policy` check stop anything that reaches GitHub off-flow. For the strongest setup, give agents their own GitHub account (a bot user added to `authorized_actors`) so GitHub's own permissions separate you.
 - **Hooks need trust.** Claude Code and Codex run project hooks only after a person approves them. An agent session where the hooks were never approved is not guarded locally; GitHub still reverts what it does.
-- **Protection needs the right plan.** Without branch protection, GitHub cannot stop direct pushes to `main`.
+- **Protection needs the right plan.** Without rulesets, GitHub cannot stop direct pushes to `main`.

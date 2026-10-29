@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -28,6 +29,100 @@ type Config struct {
 	// PRs skip the work checks. Changes to Quipu's own files still need the
 	// owner's approval label.
 	PolicyExemptAuthors []string `yaml:"policy_exempt_authors,omitempty" json:"policy_exempt_authors,omitempty"`
+	// RequiredChecks are the CI check names main requires besides policy.
+	// Empty means ["test"], the job in Quipu's generated CI workflow.
+	RequiredChecks []string  `yaml:"required_checks,omitempty" json:"required_checks,omitempty"`
+	Workflows      Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
+}
+
+// Workflows shapes the generated GitHub Actions workflows.
+type Workflows struct {
+	// RunsOn maps a job (writer, policy, test) or "default" to runner labels,
+	// such as [self-hosted, macOS]. Unset jobs use default, then ubuntu-latest.
+	RunsOn map[string][]string `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	// QuipuVersion is the tag or commit the workflows install. A runner that
+	// already has quipu on its PATH uses that binary instead.
+	QuipuVersion string `yaml:"quipu_version,omitempty" json:"quipu_version,omitempty"`
+	// Schedule is the Writer's cron schedule, or "off". Empty means every
+	// five minutes.
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// WriterOnPullRequest runs the Writer on PR events (default true). Turn
+	// it off to save runner time; the schedule still rechecks PR policy.
+	WriterOnPullRequest *bool `yaml:"writer_on_pull_request,omitempty" json:"writer_on_pull_request,omitempty"`
+}
+
+// WorkflowJobs are the jobs whose runner the config may choose.
+var WorkflowJobs = []string{"writer", "policy", "test"}
+
+const DefaultSchedule = "*/5 * * * *"
+
+// Runner returns the runner labels for job.
+func (w Workflows) Runner(job string) []string {
+	if labels := w.RunsOn[job]; len(labels) > 0 {
+		return labels
+	}
+	if labels := w.RunsOn["default"]; len(labels) > 0 {
+		return labels
+	}
+	return []string{"ubuntu-latest"}
+}
+
+// Cron returns the Writer schedule, or "" when it is off.
+func (w Workflows) Cron() string {
+	switch w.Schedule {
+	case "":
+		return DefaultSchedule
+	case "off":
+		return ""
+	}
+	return w.Schedule
+}
+
+// PullRequestTrigger reports whether the Writer runs on PR events.
+func (w Workflows) PullRequestTrigger() bool {
+	return w.WriterOnPullRequest == nil || *w.WriterOnPullRequest
+}
+
+// Checks returns the required CI checks, without policy.
+func (c Config) Checks() []string {
+	if len(c.RequiredChecks) == 0 {
+		return []string{"test"}
+	}
+	return c.RequiredChecks
+}
+
+var (
+	runnerLabel  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	cronSchedule = regexp.MustCompile(`^[0-9*/,-]+( [0-9*/,A-Za-z-]+){4}$`)
+	quipuVersion = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*|[0-9a-f]{7,40}|main)$`)
+	checkName    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/()-]*$`)
+)
+
+func (w Workflows) validate() error {
+	for job, labels := range w.RunsOn {
+		known := job == "default"
+		for _, name := range WorkflowJobs {
+			known = known || job == name
+		}
+		if !known {
+			return fmt.Errorf("workflows.runs_on: unknown job %q (use default, %s)", job, strings.Join(WorkflowJobs, ", "))
+		}
+		if len(labels) == 0 {
+			return fmt.Errorf("workflows.runs_on.%s needs at least one runner label", job)
+		}
+		for _, label := range labels {
+			if !runnerLabel.MatchString(label) {
+				return fmt.Errorf("workflows.runs_on.%s: invalid runner label %q", job, label)
+			}
+		}
+	}
+	if w.QuipuVersion != "" && !quipuVersion.MatchString(w.QuipuVersion) {
+		return fmt.Errorf("workflows.quipu_version must be a tag like v0.2.0 or a commit SHA, not %q", w.QuipuVersion)
+	}
+	if w.Schedule != "" && w.Schedule != "off" && !cronSchedule.MatchString(w.Schedule) {
+		return fmt.Errorf("workflows.schedule must be a five-field cron expression or off, not %q", w.Schedule)
+	}
+	return nil
 }
 
 // AgentsMakeReady reports whether agents may run `quipu ready`.
@@ -80,6 +175,16 @@ func (c Config) Validate() error {
 		if !strings.HasSuffix(author, "[bot]") {
 			return fmt.Errorf("policy_exempt_authors accepts only bot accounts like dependabot[bot], not %q", author)
 		}
+	}
+	if err := c.Workflows.validate(); err != nil {
+		return err
+	}
+	seenCheck := map[string]bool{}
+	for _, check := range c.RequiredChecks {
+		if !checkName.MatchString(check) || check == "policy" || seenCheck[check] {
+			return fmt.Errorf("required_checks must be unique CI check names other than policy, not %q", check)
+		}
+		seenCheck[check] = true
 	}
 	if c.ReceiptsTrustedBefore != "" {
 		if _, err := time.Parse(time.RFC3339, c.ReceiptsTrustedBefore); err != nil {

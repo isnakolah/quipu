@@ -7,7 +7,7 @@ Quipu installs from source. No release binary or marketplace package is supporte
 - macOS or Linux
 - Go 1.26.4
 - GitHub CLI, logged in with `gh auth login` (local commands use that credential in memory and never store it)
-- For the repository owner: the `QUIPU_WRITER_TOKEN` Actions secret ([owner guide](owner-guide.md#setup-checklist))
+- For the repository owner: the `QUIPU_WRITER_TOKEN` Actions secret, a classic PAT with `project` plus `public_repo` (public repository) or `repo` (private repository) ([owner guide](owner-guide.md#setup-checklist))
 
 ## Install
 
@@ -18,6 +18,8 @@ GOBIN="$HOME/.local/bin" go install ./cmd/quipu
 export PATH="$HOME/.local/bin:$PATH"   # add to your shell profile
 quipu doctor
 ```
+
+Or install a tagged version directly: `GOBIN="$HOME/.local/bin" go install github.com/isnakolah/quipu/cmd/quipu@v0.2.0`. `quipu version` prints the tag, or the commit for a source build; `init` and `adopt` pin the generated workflows to it.
 
 `quipu` must be on the `PATH` that your agent tools see, because their hooks call it. If it is missing, the hooks deny every guarded tool call rather than let it through.
 
@@ -30,7 +32,19 @@ Every Quipu repository commits two hook files that run `quipu guard` before each
 
 `quipu hooks --apply` writes or repairs them, keeping any other settings in those files. Claude Code and Codex run project hooks only after a person approves them, once per machine. Review the hook command before you approve it; never bypass the approval.
 
-The plugins in `plugins/claude` and `plugins/codex` add the same guard plus a session hook that tells the agent what its worktree holds and what to run next. Install them from this checkout, then approve their hooks the same way.
+The plugins add the same guard plus a session hook that tells the agent what its worktree holds and what to run next. Install them from this repository's marketplace:
+
+```sh
+# Claude Code
+claude plugin marketplace add isnakolah/quipu
+claude plugin install quipu@quipu
+
+# Codex (append @v0.2.0 to the source to pin a tag)
+codex plugin marketplace add isnakolah/quipu
+codex plugin add quipu@quipu
+```
+
+Then approve their hooks the same way. After an upgrade, refresh them with `claude plugin marketplace update quipu && claude plugin update quipu@quipu`, and `codex plugin marketplace upgrade quipu && codex plugin add quipu@quipu`.
 
 There is nothing to export. The lease lives in each worktree's git directory, written by `quipu start`; the agent identity is created once per worktree. Unset any old `QUIPU_LEASE_*` or `QUIPU_BOOTSTRAP_ADMIN` variables: `quipu doctor` fails while they are set.
 
@@ -42,7 +56,11 @@ GOBIN="$HOME/.local/bin" go install ./cmd/quipu
 quipu doctor
 ```
 
-Reinstall or update the plugins after an upgrade that changes `plugins/`, and approve the changed hooks.
+Update the plugins after an upgrade that changes `plugins/` (commands above), and approve the changed hooks.
+
+## Self-hosted runners
+
+A repository whose workflows run on self-hosted runners (`workflows.runs_on` in the config) needs, on each runner: `git`, and either Go 1.26.4 or `quipu` on the `PATH` at the pinned `workflows.quipu_version`. With `quipu` present, the workflows skip installing Go and Quipu. Register the runner under the repository's **Settings → Actions → Runners** with the labels the config lists. See the [owner guide](owner-guide.md#runners-and-workflows).
 
 ## Recovery
 

@@ -2,23 +2,62 @@
 package bootstrap
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"text/template"
 )
 
-var files = map[string]string{
+// Options shape the generated files. Templates use [[ ]] delimiters so the
+// GitHub Actions ${{ }} expressions pass through untouched.
+type Options struct {
+	Owner         string
+	ProjectNumber int
+	DefaultBranch string
+	// RunsOn maps writer, policy, and test to runner labels.
+	RunsOn map[string][]string
+	// QuipuVersion is the tag or commit the workflows install.
+	QuipuVersion string
+	// Schedule is the Writer's cron schedule; empty turns it off.
+	Schedule            string
+	WriterOnPullRequest bool
+}
+
+// installQuipu uses a quipu already on the runner's PATH (a self-hosted
+// runner the owner keeps current) and otherwise installs the pinned version.
+const installQuipu = `      - name: Find Quipu on the runner
+        id: quipu
+        run: |
+          if command -v quipu >/dev/null 2>&1; then
+            echo "Using $(command -v quipu): $(quipu version)"
+            echo found=true >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v6
+        if: steps.quipu.outputs.found != 'true'
+        with: {go-version: '1.26.4'}
+      - name: Install Quipu [[.QuipuVersion]]
+        if: steps.quipu.outputs.found != 'true'
+        run: go install github.com/isnakolah/quipu/cmd/quipu@[[.QuipuVersion]]
+`
+
+var workflows = map[string]string{
 	".github/workflows/quipu-writer.yml": `name: Quipu Writer
 on:
   issue_comment:
     types: [created]
   issues:
     types: [opened, closed, reopened, edited, labeled, unlabeled]
+[[- if .WriterOnPullRequest]]
   pull_request:
     types: [opened, synchronize, reopened, closed]
+[[- end]]
+[[- if .Schedule]]
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '[[.Schedule]]'
+[[- end]]
   workflow_dispatch:
 permissions:
   actions: write
@@ -30,16 +69,12 @@ concurrency:
   cancel-in-progress: false
 jobs:
   writer:
-    runs-on: ubuntu-latest
+    runs-on: [[runner "writer"]]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     steps:
       - uses: actions/checkout@v4
-        with: {ref: __QUIPU_DEFAULT_BRANCH__}
-      - uses: actions/setup-go@v6
-        with: {go-version: '1.26.4'}
-      - name: Install Quipu
-        run: go install github.com/isnakolah/quipu/cmd/quipu@main
-      - name: Writer and watchdog
+        with: {ref: [[.DefaultBranch]]}
+` + installQuipu + `      - name: Writer and watchdog
         env:
           # The Writer token changes Project fields; the workflow token posts
           # receipts, so only github-actions[bot] can write a trusted receipt.
@@ -48,7 +83,7 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           if [ -z "$GITHUB_TOKEN" ]; then
-            echo '::error::QUIPU_WRITER_TOKEN is not configured, so no work can be claimed, reviewed, or finished. Owner: create a classic PAT with public_repo and project scopes, then run gh secret set QUIPU_WRITER_TOKEN.'
+            echo '::error::QUIPU_WRITER_TOKEN is not configured, so no work can be claimed, reviewed, or finished. Owner: create a classic PAT with the project scope plus public_repo (public repository) or repo (private repository), then run gh secret set QUIPU_WRITER_TOKEN.'
             # Scheduled runs only annotate, so a missing token does not fail every five minutes.
             [ "$EVENT" = schedule ] && exit 0
             exit 1
@@ -67,7 +102,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
         run: |
           [ -n "$GITHUB_TOKEN" ] || exit 0
-          { echo '## quipu validate'; echo '` + "`" + `` + "`" + `` + "`" + `'; quipu validate 2>&1 || true; echo '` + "`" + `` + "`" + `` + "`" + `'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '## quipu validate'; echo '` + "```" + `'; quipu validate 2>&1 || true; echo '` + "```" + `'; } >> "$GITHUB_STEP_SUMMARY"
 `,
 	".github/workflows/quipu-policy.yml": `name: Quipu policy
 on:
@@ -79,19 +114,15 @@ permissions:
   pull-requests: read
 jobs:
   policy:
-    runs-on: ubuntu-latest
+    runs-on: [[runner "policy"]]
     steps:
       # pull_request_target runs trusted default-branch code. Never check out
       # an untrusted head ref: the Writer credential is metadata-only here.
       - uses: actions/checkout@v4
         with:
-          ref: __QUIPU_DEFAULT_BRANCH__
+          ref: [[.DefaultBranch]]
           persist-credentials: false
-      - uses: actions/setup-go@v6
-        with: {go-version: '1.26.4'}
-      - name: Install Quipu
-        run: go install github.com/isnakolah/quipu/cmd/quipu@main
-      - name: Validate the PR against the Quipu flow
+` + installQuipu + `      - name: Validate the PR against the Quipu flow
         env:
           GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -103,12 +134,12 @@ jobs:
 on:
   pull_request:
   push:
-    branches: [__QUIPU_DEFAULT_BRANCH__]
+    branches: [ [[.DefaultBranch]] ]
 permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [[runner "test"]]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
@@ -122,6 +153,9 @@ jobs:
             echo 'No Go module yet; bootstrap policy files only.'
           fi
 `,
+}
+
+var forms = map[string]string{
 	".github/ISSUE_TEMPLATE/decision.yml": `name: Decision
 description: Decision requiring named approver.
 title: "DECISION — "
@@ -207,33 +241,89 @@ body:
 `,
 }
 
-func Install(root, owner string, projectNumber int, defaultBranch string) error {
-	if defaultBranch == "" {
-		return fmt.Errorf("default branch is required")
+// Render returns every generated file, keyed by repository path.
+func Render(o Options) (map[string]string, error) {
+	if o.DefaultBranch == "" {
+		return nil, fmt.Errorf("default branch is required")
 	}
-	all := make(map[string]string, len(files)+1)
-	for path, body := range files {
-		all[path] = strings.ReplaceAll(body, "__QUIPU_DEFAULT_BRANCH__", defaultBranch)
+	if o.QuipuVersion == "" {
+		return nil, fmt.Errorf("a pinned Quipu version is required")
+	}
+	funcs := template.FuncMap{"runner": func(job string) string {
+		labels := o.RunsOn[job]
+		switch len(labels) {
+		case 0:
+			return "ubuntu-latest"
+		case 1:
+			return labels[0]
+		}
+		return "[" + strings.Join(labels, ", ") + "]"
+	}}
+	all := make(map[string]string, len(workflows)+len(forms)+1)
+	for path, body := range workflows {
+		tmpl, err := template.New(path).Delims("[[", "]]").Funcs(funcs).Parse(body)
+		if err != nil {
+			return nil, err
+		}
+		var out bytes.Buffer
+		if err := tmpl.Execute(&out, o); err != nil {
+			return nil, err
+		}
+		all[path] = out.String()
+	}
+	for path, body := range forms {
+		all[path] = body
 	}
 	all[".github/ISSUE_TEMPLATE/config.yml"] = fmt.Sprintf(`blank_issues_enabled: false
 contact_links:
   - name: Delivery Project
     url: https://github.com/users/%s/projects/%d
     about: Select existing Ready work. Do not use free-form task intake.
-`, owner, projectNumber)
-	for path, body := range all {
+`, o.Owner, o.ProjectNumber)
+	return all, nil
+}
+
+// Result says what Install did to each file.
+type Result struct {
+	Written   []string `json:"written"`
+	Unchanged []string `json:"unchanged"`
+	// Kept are existing files that differ from Quipu's and were left alone.
+	Kept []string `json:"kept"`
+}
+
+// Install writes the generated files under root. Identical files are left
+// as they are, and a different existing file is kept unless replace is set.
+func Install(root string, o Options, replace bool) (Result, error) {
+	var result Result
+	all, err := Render(o)
+	if err != nil {
+		return result, err
+	}
+	paths := make([]string, 0, len(all))
+	for path := range all {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
 		target := filepath.Join(root, path)
-		if _, err := os.Stat(target); err == nil {
-			return fmt.Errorf("refuse to overwrite bootstrap file %s", path)
-		} else if !os.IsNotExist(err) {
-			return err
+		current, err := os.ReadFile(target)
+		switch {
+		case err == nil && string(current) == all[path]:
+			result.Unchanged = append(result.Unchanged, path)
+			continue
+		case err == nil && !replace:
+			result.Kept = append(result.Kept, path)
+			continue
+		case err != nil && !os.IsNotExist(err):
+			return result, err
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return err
+			return result, err
 		}
-		if err := os.WriteFile(target, []byte(body), 0644); err != nil {
-			return err
+		if err := os.WriteFile(target, []byte(all[path]), 0644); err != nil {
+			return result, err
 		}
+		result.Written = append(result.Written, path)
 	}
-	return nil
+	return result, nil
 }
