@@ -12,9 +12,9 @@ Quipu blocks the off-flow path in three places, so no single gap lets work skip 
 | Policy check | `quipu policy pr`, a required check on every PR | PRs that do not reference exactly one leased, In progress or In review leaf Issue with `Refs #N`; closing keywords; wrong base or branch; changes to Quipu's own files without the owner's label |
 | Writer and watchdog | `quipu writer reconcile`, in the Quipu Writer workflow | requests from unauthorized or mismatched actors; stale requests; forged receipts; hand-closed Issues, hand-edited board fields, `status:` labels, and Issues created outside the flow |
 
-Branch protection (`quipu protect`) makes the policy and test checks required and closes direct pushes to `main`.
+Two repository rulesets (`quipu protect`) make the policy and test checks required, close direct pushes to `main`, and allow only `NNN/slug` branch names.
 
-The guard applies to agents only. Humans are checked by the policy check, branch protection, and the watchdog.
+The guard applies to agents only. Humans are checked by the policy check, the rulesets, and the watchdog.
 
 ## The guard
 
@@ -33,7 +33,7 @@ Every lifecycle change is a request comment that the Writer applies once:
 
 Receipts are posted with the workflow's `GITHUB_TOKEN`, so they are authored by `github-actions[bot]`. Only those receipts count, plus receipts posted before `receipts_trusted_before` in the config. A receipt-shaped comment from anyone else is ignored. For the same reason, `writer run --apply` and `writer reconcile --apply` refuse to run outside the workflow.
 
-The `QUIPU_WRITER_TOKEN` secret (a classic PAT with `public_repo` and `project`) is used only for Project field changes and reads that the workflow token cannot do. Store it only as an Actions secret; `quipu configure writer-token --apply` reads it from standard input without printing or storing it. Without it, the Writer fails loudly on every event and the policy check fails every PR.
+The `QUIPU_WRITER_TOKEN` secret (a classic PAT with `project` plus `public_repo`, or `repo` for a private repository) is used only for Project field changes and reads that the workflow token cannot do. Store it only as an Actions secret; `quipu configure writer-token --apply` reads it from standard input without printing or storing it. Without it, the Writer fails loudly on every event and the policy check fails every PR.
 
 ### Rules the Writer applies
 
@@ -68,9 +68,15 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 
 ## Bootstrap and adoption
 
-`quipu init` needs an empty directory. It creates the repository features, Project fields and views, labels, workflows, Issue forms, config, agent guides, and hooks; pushes the first commit; then applies branch protection. `quipu adopt --apply --project-number N` refuses a repository with existing Issues, then writes the config, guides, and hooks. Neither overwrites an existing operating file.
+`quipu init` needs an empty directory. It creates the repository, the Project, and everything below, pushes the first commit, then applies the rulesets.
 
-Workflows install `quipu` from source branch `main` until v0 is tagged; release packaging must pin a verified tag.
+`quipu adopt --apply` works in a clone of an existing repository. Its audit counts Issues, not PRs, and the first adoption refuses a repository that already has Issues. Each step reads what GitHub has and changes only what is missing, so it can run any number of times:
+
+- labels (`kind:`, `area:`, `quipu:needs-triage`, `quipu:owner-approved`), Issues and (for `wiki_mode: journal`) the Wiki;
+- the Project fields, Status options, and standard views; options are never rewritten on a Project with items;
+- the config, workflows, Issue forms, agent handbook, and hooks; existing files that differ are kept unless `--replace`.
+
+The workflows are rendered from the config's `workflows` section: runner labels per job, the pinned `quipu_version`, the Writer schedule, and whether PR events run the Writer. They install that version with `go install`, unless the runner already has `quipu` on its `PATH`.
 
 ## Evidence and the journal
 

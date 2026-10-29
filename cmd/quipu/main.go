@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/isnakolah/quipu/internal/bootstrap"
 	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/journal"
 	"github.com/isnakolah/quipu/internal/model"
@@ -23,7 +22,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const version = "0.0.0-dev"
 const configPath = ".github/quipu/config.yaml"
 
 func main() {
@@ -349,98 +347,6 @@ func addIssueToProject(c model.Config, issueURL, kind, area, priority string) er
 	return nil
 }
 
-func adoptCommand(args []string) error {
-	fs := flag.NewFlagSet("adopt", flag.ContinueOnError)
-	owner := fs.String("owner", "", "GitHub owner")
-	repo := fs.String("repo", "", "repository")
-	projectNumber := fs.Int("project-number", 0, "existing GitHub Project number")
-	wiki := fs.String("wiki", "off", "off|journal")
-	branch := fs.String("default-branch", "main", "default branch")
-	areas := fs.String("areas", "stable", "comma-separated areas")
-	apply := applyFlag(fs)
-	asJSON := jsonFlag(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if *owner == "" || *repo == "" {
-		return errors.New("--owner and --repo are required")
-	}
-	output, err := exec.Command("gh", "api", "repos/"+*owner+"/"+*repo+"/issues?state=all&per_page=100").Output()
-	if err != nil {
-		return fmt.Errorf("audit repository: %w", err)
-	}
-	var issues []json.RawMessage
-	if err := json.Unmarshal(output, &issues); err != nil {
-		return err
-	}
-	report := map[string]any{"owner": *owner, "repository": *repo, "issues_found": len(issues), "safe_to_adopt": len(issues) == 0, "note": "adopt never reclassifies existing Issues"}
-	if !*apply {
-		return printValue(report, *asJSON)
-	}
-	if len(issues) != 0 {
-		return errors.New("adopt refuses repository with existing Issues; audit and migrate explicitly")
-	}
-	if *projectNumber < 1 {
-		return errors.New("adopt --apply requires --project-number for an existing Project")
-	}
-	if _, err := os.Stat(configPath); err == nil {
-		return fmt.Errorf("%s already exists", configPath)
-	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return err
-	}
-	projectInfo, err := readProject(*owner, *projectNumber)
-	if err != nil {
-		return err
-	}
-	fieldIDs, err := configuredFieldIDs(*owner, *projectNumber)
-	if err != nil {
-		return err
-	}
-	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, AuthorizedActors: []string{*owner}, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{ID: projectInfo.ID, Number: *projectNumber, Title: projectInfo.Title, Fields: fieldIDs}}
-	if err := c.Validate(); err != nil {
-		return err
-	}
-	raw, err := yaml.Marshal(c)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(configPath, raw, 0644); err != nil {
-		return err
-	}
-	hooks, err := bootstrap.InstallHooks(".", true)
-	if err != nil {
-		return err
-	}
-	guides, err := syncGuides(".", true)
-	if err != nil {
-		return err
-	}
-	report["guides_written"] = guides
-	report["hooks_written"] = hooks
-	report["next"] = "commit the config, hooks, and agent guides, set the QUIPU_WRITER_TOKEN secret, run `quipu protect --apply`, then `quipu doctor`"
-	return printValue(report, *asJSON)
-}
-
-func readProject(owner string, number int) (createdProject, error) {
-	output, err := ghOutput("project", "view", fmt.Sprint(number), "--owner", owner, "--format", "json")
-	if err != nil {
-		return createdProject{}, fmt.Errorf("read Project #%d: %w", number, err)
-	}
-	var project struct {
-		ID     string `json:"id"`
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-	}
-	if err := json.Unmarshal(output, &project); err != nil {
-		return createdProject{}, err
-	}
-	if project.ID == "" || project.Number != number || project.Title == "" {
-		return createdProject{}, fmt.Errorf("Project #%d returned incomplete identity", number)
-	}
-	return createdProject{ID: project.ID, Number: project.Number, Title: project.Title}, nil
-}
-
 func configuredFieldIDs(owner string, projectNumber int) (map[string]string, error) {
 	fields, err := readProjectFields(owner, projectNumber)
 	if err != nil {
@@ -493,10 +399,8 @@ func initCommand(args []string) error {
 	owner := fs.String("owner", "", "GitHub owner")
 	repo := fs.String("repo", "", "repository")
 	project := fs.String("project-name", "", "Project title")
-	wiki := fs.String("wiki", "off", "off|journal")
-	branch := fs.String("default-branch", "main", "default branch")
-	areas := fs.String("areas", "stable", "comma-separated areas")
 	visibility := fs.String("visibility", "public", "public|private")
+	setup := addSetupFlags(fs)
 	apply := applyFlag(fs)
 	yes := fs.Bool("yes", false, "confirm bootstrap")
 	if err := fs.Parse(args); err != nil {
@@ -514,52 +418,24 @@ func initCommand(args []string) error {
 	if err := requireEmptyBootstrapRoot("."); err != nil {
 		return err
 	}
-	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, AuthorizedActors: []string{*owner}, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Title: *project, Fields: map[string]string{}}}
-	if err := c.Validate(); err != nil {
+	c := newConfig(*owner, *repo, projectInfo{Title: *project})
+	if err := setup.apply(fs, &c); err != nil {
 		return err
 	}
-	if _, err := os.Stat(configPath); err == nil {
-		return fmt.Errorf("%s already exists; use adopt for existing repositories", configPath)
-	}
-	projectInfo, err := provisionGitHub(*owner, *repo, *visibility, *project)
+	created, err := provisionGitHub(*owner, *repo, *visibility, *project)
 	if err != nil {
 		return err
 	}
-	fieldIDs, err := provisionProjectContract(*owner, *repo, projectInfo.Number, c.Areas)
-	if err != nil {
+	c.Project.Number = created.Number
+	if _, _, err := provision(".", c, false); err != nil {
 		return err
 	}
-	if err := provisionProjectViews(*owner, projectInfo.Number); err != nil {
-		return err
-	}
-	c.Project.ID = projectInfo.ID
-	c.Project.Number = projectInfo.Number
-	c.Project.Fields = fieldIDs
-	if err := bootstrap.Install(".", *owner, projectInfo.Number, *branch); err != nil {
-		return err
-	}
-	if _, err := bootstrap.InstallHooks(".", true); err != nil {
-		return err
-	}
-	if _, err := syncGuides(".", true); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return err
-	}
-	raw, err := yaml.Marshal(c)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(configPath, raw, 0644); err != nil {
-		return err
-	}
-	if err := initializeBootstrapRepository(*owner, *repo, *branch); err != nil {
+	if err := initializeBootstrapRepository(*owner, *repo, c.DefaultBranch); err != nil {
 		return fmt.Errorf("GitHub repository and Project were provisioned, but local bootstrap push failed: %w", err)
 	}
-	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, projectInfo.Number, configPath)
+	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, created.Number, configPath)
 	// Protect only after the bootstrap push: protection forbids direct pushes.
-	if err := protectRepository(c); err != nil {
+	if err := protectRepository(c, false); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\nGitHub does not enforce the flow yet; run `quipu protect --apply` (private repositories need a paid plan)\n", err)
 	}
 	fmt.Println("next: set the QUIPU_WRITER_TOKEN secret, then run `quipu doctor`")
@@ -633,58 +509,6 @@ func provisionGitHub(owner, repo, visibility, projectName string) (createdProjec
 	return project, nil
 }
 
-func provisionProjectContract(owner, repo string, projectNumber int, areas []string) (map[string]string, error) {
-	labels := []string{"kind:epic", "kind:contract", "kind:story", "kind:task", "kind:defect", "kind:gate", "kind:decision"}
-	for _, area := range areas {
-		labels = append(labels, "area:"+area)
-	}
-	for _, label := range labels {
-		if output, err := exec.Command("gh", "label", "create", label, "--color", "1D76DB", "--force", "--repo", owner+"/"+repo).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("create label %s: %s", label, strings.TrimSpace(string(output)))
-		}
-	}
-	areaOptions := make([]string, 0, len(areas))
-	for _, area := range areas {
-		areaOptions = append(areaOptions, strings.ToUpper(area[:1])+area[1:])
-	}
-	fields := []struct{ name, kind, options string }{
-		{"Kind", "SINGLE_SELECT", "Epic,Contract,Story,Task,Defect,Gate,Decision"},
-		{"Area", "SINGLE_SELECT", strings.Join(areaOptions, ",")},
-		{"Priority", "SINGLE_SELECT", "P0,P1,P2,P3"},
-		{"Proof", "SINGLE_SELECT", "Not started,Local verified,CI verified,Target environment pending,External/provider pending,Complete"},
-		{"Lease holder", "TEXT", ""}, {"Lease expires", "TEXT", ""}, {"Branch", "TEXT", ""}, {"State fingerprint", "TEXT", ""},
-	}
-	for _, field := range fields {
-		args := []string{"project", "field-create", fmt.Sprint(projectNumber), "--owner", owner, "--name", field.name, "--data-type", field.kind}
-		if field.options != "" {
-			args = append(args, "--single-select-options", field.options)
-		}
-		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("create Project field %s: %s", field.name, strings.TrimSpace(string(output)))
-		}
-	}
-	projectFields, err := readProjectFields(owner, projectNumber)
-	if err != nil {
-		return nil, err
-	}
-	status, ok := projectFields["Status"]
-	if !ok {
-		return nil, errors.New("Project default Status field not found")
-	}
-	if err := setStatusOptions(status.ID); err != nil {
-		return nil, err
-	}
-	ids := map[string]string{}
-	for key, name := range map[string]string{"status": "Status", "kind": "Kind", "area": "Area", "priority": "Priority", "proof": "Proof", "lease_holder": "Lease holder", "lease_expires": "Lease expires", "branch": "Branch", "state_fingerprint": "State fingerprint"} {
-		field, ok := projectFields[name]
-		if !ok {
-			return nil, fmt.Errorf("Project field %q missing after provisioning", name)
-		}
-		ids[key] = field.ID
-	}
-	return ids, nil
-}
-
 type restProjectField struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
@@ -696,41 +520,6 @@ type projectView struct {
 	Filter        string `json:"filter"`
 	VisibleFields []int  `json:"visible_fields,omitempty"`
 	GroupBy       []int  `json:"group_by,omitempty"`
-}
-
-func provisionProjectViews(owner string, projectNumber int) error {
-	endpoint, err := projectRESTEndpoint(owner, projectNumber)
-	if err != nil {
-		return err
-	}
-	output, err := ghOutput("api", endpoint+"/fields?per_page=100", "-H", "X-GitHub-Api-Version: 2026-03-10")
-	if err != nil {
-		return fmt.Errorf("list Project fields for views: %w", err)
-	}
-	var fields []restProjectField
-	if err := json.Unmarshal(output, &fields); err != nil {
-		return err
-	}
-	byName := make(map[string]int, len(fields))
-	for _, field := range fields {
-		byName[field.Name] = field.ID
-	}
-	views, err := standardProjectViews(byName)
-	if err != nil {
-		return err
-	}
-	for _, view := range views {
-		raw, err := json.Marshal(view)
-		if err != nil {
-			return err
-		}
-		cmd := exec.Command("gh", "api", "--method", "POST", endpoint+"/views", "-H", "X-GitHub-Api-Version: 2026-03-10", "--input", "-")
-		cmd.Stdin = strings.NewReader(string(raw))
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("create Project view %q: %s", view.Name, strings.TrimSpace(string(output)))
-		}
-	}
-	return nil
 }
 
 func projectRESTEndpoint(owner string, projectNumber int) (string, error) {
@@ -777,21 +566,6 @@ func standardProjectViews(fields map[string]int) ([]projectView, error) {
 	}, nil
 }
 
-func setStatusOptions(fieldID string) error {
-	options := []struct{ name, color string }{
-		{"Backlog", "GRAY"}, {"Ready", "BLUE"}, {"Claimed", "YELLOW"}, {"In progress", "ORANGE"}, {"In review", "PURPLE"}, {"Evidence pending", "PINK"}, {"Blocked", "RED"}, {"Done", "GREEN"}, {"Cancelled", "GRAY"}, {"Archived", "GRAY"},
-	}
-	parts := make([]string, 0, len(options))
-	for _, option := range options {
-		parts = append(parts, fmt.Sprintf(`{name:%q,color:%s,description:""}`, option.name, option.color))
-	}
-	mutation := fmt.Sprintf("mutation { updateProjectV2Field(input:{fieldId:%q,singleSelectOptions:[%s]}) { projectV2Field { ... on ProjectV2SingleSelectField { id } } } }", fieldID, strings.Join(parts, ","))
-	if output, err := exec.Command("gh", "api", "graphql", "-f", "query="+mutation).CombinedOutput(); err != nil {
-		return fmt.Errorf("configure Project Status options: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
 func readProjectFields(owner string, projectNumber int) (map[string]projectField, error) {
 	output, err := exec.Command("gh", "project", "field-list", fmt.Sprint(projectNumber), "--owner", owner, "--format", "json").Output()
 	if err != nil {
@@ -801,6 +575,7 @@ func readProjectFields(owner string, projectNumber int) (map[string]projectField
 		Fields []struct {
 			ID      string `json:"id"`
 			Name    string `json:"name"`
+			Type    string `json:"type"`
 			Options []struct {
 				ID   string `json:"id"`
 				Name string `json:"name"`
@@ -812,7 +587,7 @@ func readProjectFields(owner string, projectNumber int) (map[string]projectField
 	}
 	fields := make(map[string]projectField, len(response.Fields))
 	for _, raw := range response.Fields {
-		field := projectField{ID: raw.ID, Options: map[string]string{}}
+		field := projectField{ID: raw.ID, Type: raw.Type, Options: map[string]string{}}
 		for _, option := range raw.Options {
 			field.Options[option.Name] = option.ID
 		}
@@ -1634,6 +1409,7 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 
 type projectField struct {
 	ID      string
+	Type    string
 	Options map[string]string
 }
 
