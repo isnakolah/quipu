@@ -55,6 +55,17 @@ type Workflows struct {
 	// WriterOnPullRequest runs the Writer on PR events (default true). Turn
 	// it off to save runner time; the schedule still rechecks PR policy.
 	WriterOnPullRequest *bool `yaml:"writer_on_pull_request,omitempty" json:"writer_on_pull_request,omitempty"`
+	// DefectsFrom names the workflows whose failed runs on the default
+	// branch become Ready P0 Defects. Unset means [CI]; [] turns it off.
+	DefectsFrom *[]string `yaml:"defects_from,omitempty" json:"defects_from,omitempty"`
+}
+
+// DefectWorkflows returns the workflows the Writer files Defects for.
+func (w Workflows) DefectWorkflows() []string {
+	if w.DefectsFrom == nil {
+		return []string{"CI"}
+	}
+	return *w.DefectsFrom
 }
 
 // WorkflowJobs are the jobs whose runner the config may choose.
@@ -102,6 +113,7 @@ var (
 	cronSchedule = regexp.MustCompile(`^[0-9*/,-]+( [0-9*/,A-Za-z-]+){4}$`)
 	quipuVersion = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*|[0-9a-f]{7,40}|main)$`)
 	checkName    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/()-]*$`)
+	workflowName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/()-]*$`)
 )
 
 func (w Workflows) validate() error {
@@ -124,6 +136,11 @@ func (w Workflows) validate() error {
 	}
 	if w.QuipuVersion != "" && !quipuVersion.MatchString(w.QuipuVersion) {
 		return fmt.Errorf("workflows.quipu_version must be a tag like v0.2.0 or a commit SHA, not %q", w.QuipuVersion)
+	}
+	for _, name := range w.DefectWorkflows() {
+		if !workflowName.MatchString(name) {
+			return fmt.Errorf("workflows.defects_from: invalid workflow name %q", name)
+		}
 	}
 	if w.Schedule != "" && w.Schedule != "off" && !cronSchedule.MatchString(w.Schedule) {
 		return fmt.Errorf("workflows.schedule must be a five-field cron expression or off, not %q", w.Schedule)

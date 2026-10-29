@@ -231,9 +231,15 @@ func importBody(item importItem) string {
 	return body + fmt.Sprintf("\n\n<!-- quipu-import:v1 key=%s -->\n", item.Key)
 }
 
-// importedKeys maps manifest keys to Issue numbers from paginated REST
-// Issue pages, skipping pull requests.
+// importedKeys maps manifest keys to Issue numbers.
 func importedKeys(raw []byte) (map[string]int, error) {
+	return markedIssues(raw, importMarker)
+}
+
+// markedIssues maps the first capture of marker in each Issue body to the
+// oldest Issue carrying it. raw is paginated REST Issue pages; pull
+// requests are skipped.
+func markedIssues(raw []byte, marker *regexp.Regexp) (map[string]int, error) {
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	keys := map[string]int{}
 	for decoder.More() {
@@ -249,7 +255,7 @@ func importedKeys(raw []byte) (map[string]int, error) {
 			if len(issue.PullRequest) > 0 && string(issue.PullRequest) != "null" {
 				continue
 			}
-			if match := importMarker.FindStringSubmatch(issue.Body); match != nil {
+			if match := marker.FindStringSubmatch(issue.Body); match != nil {
 				if earlier, ok := keys[match[1]]; !ok || issue.Number < earlier {
 					keys[match[1]] = issue.Number
 				}

@@ -57,6 +57,18 @@ Each reconcile pass, after applying requests:
 - re-runs the `policy` check of open PRs whose verdict changed with the work under them;
 - carries on past an Issue that fails and reports every failure at the end.
 
+### Defects from failed runs
+
+When a workflow listed in `workflows.defects_from` (default `[CI]`) fails on the default branch, its `workflow_run` event wakes the Writer, which runs `quipu writer defect --run-id ID`:
+
+- it skips successful, cancelled, pull request, and non-default-branch runs;
+- it files one Defect per run, whatever the number of attempts: the body ends with `<!-- quipu-defect:v1 run=ID -->`, and a run that already has one is skipped;
+- the Defect is P0, a valid work contract linking the run, the commit, and the merged PR, under the Epic above the Issue that PR referenced, with that Issue's area;
+- the Writer records it Ready with a receipt, so `quipu start --next` gives it to the next agent;
+- a failing commit with no PR, or a PR whose Issue has no Epic above it, gets a Defect in Backlog without a parent; the watchdog flags it for triage and the owner places it.
+
+Set `defects_from: []` to turn this off.
+
 It runs on every Issue comment and Issue event, on PR events, every five minutes, and on demand with `gh workflow run quipu-writer.yml`. Event-triggered runs scan every Issue updated since the last successful Writer run began (`--since-last-run`), so nothing is lost when Actions drops queued runs (it keeps one per concurrency group) or a self-hosted runner sleeps for hours; scheduled runs scan every Issue. All reads page past 100 Issues.
 
 ## Configuration
