@@ -290,7 +290,7 @@ func (g *guard) call(args []shellArg, dir *string) error {
 	case "gh":
 		return g.gh(rest, *dir)
 	case "quipu":
-		return g.quipu(rest)
+		return g.quipu(rest, *dir)
 	case "go":
 		return g.goCommand(rest, *dir)
 	case "gofmt":
@@ -823,7 +823,7 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 var quipuAgentCommands = setOf("status", "start", "done", "doctor", "context", "validate", "guide", "version",
 	"help", "-h", "--help", "propose", "guard", "policy")
 
-func (g *guard) quipu(rest []shellArg) error {
+func (g *guard) quipu(rest []shellArg, dir string) error {
 	if len(rest) > 0 && rest[0].s == "guide" && hasFlag(rest, "--sync") {
 		return deny("quipu-admin", "quipu guide --sync")
 	}
@@ -833,11 +833,23 @@ func (g *guard) quipu(rest []shellArg) error {
 	switch sub := rest[0].s; {
 	case sub == "work" && len(rest) > 1 && rest[1].s == "list":
 		return nil
+	case sub == "ready" && agentsMakeReady(dir):
+		return nil
 	case (sub == "writer" || sub == "journal" || sub == "protect" || sub == "hooks") && !hasFlag(rest, "--apply"):
 		return nil
 	default:
 		return deny("quipu-admin", "quipu "+sub)
 	}
+}
+
+// agentsMakeReady reports whether dir's repository lets agents make work Ready.
+func agentsMakeReady(dir string) bool {
+	w, err := openWorktree(existingDir(dir))
+	if err != nil {
+		return false
+	}
+	c, err := loadConfigAt(w.Top)
+	return err == nil && c.AgentsMakeReady()
 }
 
 var goReadOnly = setOf("test", "vet", "build", "list", "version", "doc", "help", "bug")

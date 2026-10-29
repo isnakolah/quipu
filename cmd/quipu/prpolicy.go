@@ -36,6 +36,7 @@ type pullFacts struct {
 	Title   string
 	Body    string
 	Author  string
+	IsBot   bool
 	Base    string
 	Head    string
 	HeadSHA string
@@ -62,6 +63,7 @@ func loadPullFacts(c model.Config, pr string) (pullFacts, error) {
 		State       string `json:"state"`
 		Author      struct {
 			Login string `json:"login"`
+			IsBot bool   `json:"is_bot"`
 		} `json:"author"`
 		Commits []struct {
 			Headline string `json:"messageHeadline"`
@@ -77,7 +79,7 @@ func loadPullFacts(c model.Config, pr string) (pullFacts, error) {
 	if err := json.Unmarshal(output, &raw); err != nil {
 		return pullFacts{}, err
 	}
-	pull := pullFacts{Number: raw.Number, URL: raw.URL, Title: raw.Title, Body: raw.Body, Author: raw.Author.Login,
+	pull := pullFacts{Number: raw.Number, URL: raw.URL, Title: raw.Title, Body: raw.Body, Author: raw.Author.Login, IsBot: raw.Author.IsBot,
 		Base: raw.BaseRefName, Head: raw.HeadRefName, HeadSHA: raw.HeadRefOid, State: raw.State}
 	for _, commit := range raw.Commits {
 		pull.Commits = append(pull.Commits, commit.Headline+"\n"+commit.Body)
@@ -96,6 +98,12 @@ func loadPullFacts(c model.Config, pr string) (pullFacts, error) {
 func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, error), now time.Time) []string {
 	var violations []string
 	add := func(format string, args ...any) { violations = append(violations, fmt.Sprintf(format, args...)) }
+	if exemptBot(c, pull) {
+		if file := unapprovedProtectedChange(pull); file != "" {
+			add("PR changes %s, which governs how agents work. Fix: the owner reviews it and adds the %s label", file, ownerApprovedLabel)
+		}
+		return violations
+	}
 	issues, err := policycheck.ReferencedIssues(pull.Body)
 	if err != nil {
 		add("%v. Fix: edit the PR body to say exactly `Refs #N` for the Issue this branch implements", err)
@@ -116,13 +124,8 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 	if !ok {
 		add("branch %q is not NNN/short-description. Fix: work comes from `quipu start N`, which names the branch", pull.Head)
 	}
-	if !hasLabel(pull.Labels, ownerApprovedLabel) {
-		for _, file := range pull.Files {
-			if protectedFile(file) {
-				add("PR changes %s, which governs how agents work. Fix: the owner reviews it and adds the %s label", file, ownerApprovedLabel)
-				break
-			}
-		}
+	if file := unapprovedProtectedChange(pull); file != "" {
+		add("PR changes %s, which governs how agents work. Fix: the owner reviews it and adds the %s label", file, ownerApprovedLabel)
 	}
 	if len(issues) != 1 {
 		return violations
@@ -172,6 +175,35 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 		}
 	}
 	return violations
+}
+
+// exemptBot reports whether a bot listed in policy_exempt_authors opened
+// the PR. gh names app bots "app/dependabot"; config uses "dependabot[bot]".
+func exemptBot(c model.Config, pull pullFacts) bool {
+	if !pull.IsBot {
+		return false
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(pull.Author, "app/"), "[bot]")
+	for _, author := range c.PolicyExemptAuthors {
+		if strings.EqualFold(strings.TrimSuffix(author, "[bot]"), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// unapprovedProtectedChange is the first of Quipu's own files the PR changes
+// without the owner's approval label, or "".
+func unapprovedProtectedChange(pull pullFacts) string {
+	if hasLabel(pull.Labels, ownerApprovedLabel) {
+		return ""
+	}
+	for _, file := range pull.Files {
+		if protectedFile(file) {
+			return file
+		}
+	}
+	return ""
 }
 
 func protectedFile(path string) bool {

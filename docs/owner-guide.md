@@ -55,6 +55,17 @@ Issues closed before the cutover (`receipts_trusted_before` in the config) are l
 
 **Watching.** `quipu status` shows the board and anything needing attention. `quipu validate` lists every rule violation in the live data; the Writer also writes it to each run's summary.
 
+## Options
+
+Set these in `.github/quipu/config.yaml` through a reviewed PR (the file is owner-only, and the PR needs `quipu:owner-approved`). Every option that relaxes enforcement is off by default.
+
+| Option | Default | Effect |
+|---|---|---|
+| `ready_by: agents` | `owner` | Agents may run `quipu ready N` to make work Ready. |
+| `policy_exempt_authors: [dependabot[bot]]` | none | PRs opened by these bot accounts skip the work checks in `policy`. Changes to Quipu's own files still need your label. Only `...[bot]` accounts are accepted, because your login is shared with your agents. |
+
+`quipu start --next` never picks Epics, Decisions, or Gates: you decide those.
+
 ## Recovery
 
 | Problem | Fix |
