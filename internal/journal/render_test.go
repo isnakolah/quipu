@@ -19,7 +19,7 @@ func TestGitAuthEnvDoesNotUseTokenURL(t *testing.T) {
 			t.Fatalf("raw token placed in git environment: %q", value)
 		}
 	}
-	if _, err := os.Stat(".gfd-wiki-token"); !os.IsNotExist(err) {
+	if _, err := os.Stat(".quipu-wiki-token"); !os.IsNotExist(err) {
 		t.Fatalf("wiki token cache was created: %v", err)
 	}
 }
@@ -29,5 +29,15 @@ func TestAppendDoesNotDuplicateReceipt(t *testing.T) {
 	log := Append("", entry)
 	if got := Append(log, entry); got != log {
 		t.Fatal("duplicate journal entry")
+	}
+}
+
+func TestHasRequestRecognizesLegacyGfdEntries(t *testing.T) {
+	log := "<!-- gfd-journal:v1 request=old -->\n## entry\n"
+	if !HasRequest(log, "old") {
+		t.Fatal("legacy journal entry not recognized")
+	}
+	if got := Append(log, Entry{RequestID: "old"}); got != log {
+		t.Fatal("legacy entry duplicated")
 	}
 }

@@ -1,10 +1,10 @@
 {
-  "name": "github-first-delivery",
-  "interface": {"displayName": "GitHub-first Delivery"},
+  "name": "quipu",
+  "interface": {"displayName": "Quipu"},
   "plugins": [
     {
-      "name": "github-first-delivery",
-      "source": {"source": "local", "path": "./plugins/codex/github-first-delivery"},
+      "name": "quipu",
+      "source": {"source": "local", "path": "./plugins/codex/quipu"},
       "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
       "category": "Developer Tools"
     }

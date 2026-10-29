@@ -1,13 +1,13 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "github-first-delivery",
-  "description": "GitHub-first delivery control plane skill and guard hooks",
+  "name": "quipu",
+  "description": "Quipu: GitHub-native project management skill and guard hooks",
   "owner": {"name": "isnakolah", "url": "https://github.com/isnakolah"},
   "plugins": [
     {
-      "name": "github-first-delivery",
-      "description": "Issue and Project-first delivery guardrails",
-      "source": "./plugins/claude/github-first-delivery",
+      "name": "quipu",
+      "description": "Plan, start, and finish GitHub work as one team of people and agents",
+      "source": "./plugins/claude/quipu",
       "category": "productivity",
       "tags": ["github", "delivery", "agents"]
     }

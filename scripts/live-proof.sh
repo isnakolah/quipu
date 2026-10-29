@@ -2,20 +2,20 @@
 set -eu
 
 # Creates only an exact generated private target. It never deletes a
-# user-supplied repository. GFD_LIVE_PROOF=1 is required because this script
+# user-supplied repository. QUIPU_LIVE_PROOF=1 is required because this script
 # creates a repository, Project, Issues, branch, PR, and Writer receipts.
-if [ "${GFD_LIVE_PROOF:-}" != "1" ]; then
-  printf '%s\n' 'set GFD_LIVE_PROOF=1 to create disposable GitHub proof resources' >&2
+if [ "${QUIPU_LIVE_PROOF:-}" != "1" ]; then
+  printf '%s\n' 'set QUIPU_LIVE_PROOF=1 to create disposable GitHub proof resources' >&2
   exit 2
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-owner=${GFD_LIVE_OWNER:-$(gh api user --jq .login)}
-repo="gfd-proof-$(date -u +%Y%m%d%H%M%S)"
-project_title="GFD proof $repo"
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/gfd-live-proof.XXXXXX")
+owner=${QUIPU_LIVE_OWNER:-$(gh api user --jq .login)}
+repo="quipu-proof-$(date -u +%Y%m%d%H%M%S)"
+project_title="Quipu proof $repo"
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/quipu-live-proof.XXXXXX")
 target="$scratch/target"
-binary="$scratch/gfd"
+binary="$scratch/quipu"
 project_number=""
 
 cleanup() {
@@ -35,7 +35,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$root"
-go build -o "$binary" ./cmd/gfd
+go build -o "$binary" ./cmd/quipu
 mkdir "$target"
 (
   cd "$target"
@@ -52,7 +52,7 @@ printf '%s\n' 'Disposable Epic. Owner approval recorded by CLI.' >"$epic_body"
 printf '%s\n' '<!-- work:v1 -->' '' '## Outcome' '' 'Exercise Writer lifecycle in disposable repository.' '' '## Scope' 'Includes:' '- One disposable Story.' '' 'Excludes:' '- Production work.' '' '## Acceptance criteria' '- [ ] Lease and completion receipt exist.' '' '## Required evidence' '- Disposable Writer receipts.' '- Verification boundary: provider' '' '## Documentation impact' 'None: disposable integration only.' '' '## Source and relationships' '- US-016 disposable live proof.' '- Native parent and blocker links are authoritative.' >"$work_body"
 
 cd "$target"
-epic=$("$binary" issue create --title 'EPIC — Disposable GFD proof' --kind epic --area stable --approved-by "@$owner" --body-file "$epic_body" --apply)
+epic=$("$binary" issue create --title 'EPIC — Disposable Quipu proof' --kind epic --area stable --approved-by "@$owner" --body-file "$epic_body" --apply)
 epic_number=${epic##*/}
 story=$("$binary" issue create --title 'US-PROOF — Exercise Writer lifecycle' --kind story --area core --parent "$epic_number" --body-file "$work_body" --apply)
 story_number=${story##*/}

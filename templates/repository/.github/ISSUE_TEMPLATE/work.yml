@@ -1,5 +1,5 @@
 name: Work
-description: Story, Contract, Task, Gate, or Defect with GitHub-first contract.
+description: Story, Contract, Task, Gate, or Defect with Quipu work contract.
 title: "US- — "
 body:
   - type: markdown

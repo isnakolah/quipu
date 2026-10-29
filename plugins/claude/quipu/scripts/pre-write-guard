@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+command -v quipu >/dev/null 2>&1 || { printf '%s\n' 'quipu missing; operation denied' >&2; exit 2; }
+quipu guard || exit 2

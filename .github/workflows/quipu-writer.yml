@@ -1,4 +1,4 @@
-name: GFD Writer
+name: Quipu Writer
 on:
   issue_comment:
     types: [created]
@@ -12,7 +12,7 @@ permissions:
   issues: write
   pull-requests: write
 concurrency:
-  group: gfd-writer-${{ github.repository_id }}
+  group: quipu-writer-${{ github.repository_id }}
   cancel-in-progress: false
 jobs:
   writer:
@@ -25,11 +25,11 @@ jobs:
         with: {go-version: '1.26.4'}
       - name: Writer activation boundary
         env:
-          GITHUB_TOKEN: ${{ secrets.GFD_WRITER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
         run: |
-          test -n "$GITHUB_TOKEN" || { echo 'GFD_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
+          test -n "$GITHUB_TOKEN" || { echo 'QUIPU_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            go run ./cmd/gfd writer run --issue-number "${{ github.event.issue.number }}" --apply
+            go run ./cmd/quipu writer run --issue-number "${{ github.event.issue.number }}" --apply
           else
-            go run ./cmd/gfd writer reconcile --apply
+            go run ./cmd/quipu writer reconcile --apply
           fi

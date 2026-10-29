@@ -9,8 +9,25 @@ import (
 	"time"
 )
 
-const RequestPrefix = "<!-- gfd-request:v1"
-const ReceiptPrefix = "<!-- gfd-receipt:v1"
+const RequestPrefix = "<!-- quipu-request:v1"
+const ReceiptPrefix = "<!-- quipu-receipt:v1"
+
+// Legacy prefixes were written before the project was renamed from gfd to
+// Quipu. Parsers accept both so existing Issue history stays valid; new
+// comments always use the Quipu prefixes.
+const legacyRequestPrefix = "<!-- gfd-request:v1"
+const legacyReceiptPrefix = "<!-- gfd-receipt:v1"
+
+// IsRequest reports whether a comment starts with a current or legacy request marker.
+func IsRequest(comment string) bool {
+	comment = strings.TrimSpace(comment)
+	return strings.HasPrefix(comment, RequestPrefix) || strings.HasPrefix(comment, legacyRequestPrefix)
+}
+
+// HasReceiptMarker reports whether a comment contains a current or legacy receipt marker.
+func HasReceiptMarker(comment string) bool {
+	return strings.Contains(comment, ReceiptPrefix) || strings.Contains(comment, legacyReceiptPrefix)
+}
 
 type Request struct {
 	ID                  string    `json:"id"`
@@ -59,20 +76,20 @@ func RenderRequest(r Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("<!-- gfd-request:v1 id=%s sha256=%s -->\n```json\n%s\n```", r.ID, hash, payload), nil
+	return fmt.Sprintf("<!-- quipu-request:v1 id=%s sha256=%s -->\n```json\n%s\n```", r.ID, hash, payload), nil
 }
 func RenderReceipt(r Receipt) (string, error) {
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("<!-- gfd-receipt:v1 request=%s fingerprint=%s -->\n```json\n%s\n```", r.RequestID, r.Fingerprint, raw), nil
+	return fmt.Sprintf("<!-- quipu-receipt:v1 request=%s fingerprint=%s -->\n```json\n%s\n```", r.RequestID, r.Fingerprint, raw), nil
 }
 
 func ParseRequest(comment string) (Request, error) {
 	var r Request
-	if !strings.HasPrefix(strings.TrimSpace(comment), RequestPrefix) {
-		return r, fmt.Errorf("not a gfd request")
+	if !IsRequest(comment) {
+		return r, fmt.Errorf("not a quipu request")
 	}
 	start, end := strings.Index(comment, "```json"), strings.LastIndex(comment, "```")
 	if start < 0 || end <= start {
@@ -100,8 +117,8 @@ func ParseRequest(comment string) (Request, error) {
 // evidence. Completion may rely only on a prior accepted evidence receipt.
 func ParseReceipt(comment string) (Receipt, error) {
 	var receipt Receipt
-	if !strings.HasPrefix(strings.TrimSpace(comment), ReceiptPrefix) {
-		return receipt, fmt.Errorf("not a gfd receipt")
+	if !strings.HasPrefix(strings.TrimSpace(comment), ReceiptPrefix) && !strings.HasPrefix(strings.TrimSpace(comment), legacyReceiptPrefix) {
+		return receipt, fmt.Errorf("not a quipu receipt")
 	}
 	start, end := strings.Index(comment, "```json"), strings.LastIndex(comment, "```")
 	if start < 0 || end <= start {

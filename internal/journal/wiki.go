@@ -20,7 +20,7 @@ func PublishWiki(ctx context.Context, owner, repository, token string, entry Ent
 	if owner == "" || repository == "" || token == "" {
 		return false, fmt.Errorf("wiki publish requires owner, repository, and token")
 	}
-	dir, err := os.MkdirTemp("", "gfd-wiki-")
+	dir, err := os.MkdirTemp("", "quipu-wiki-")
 	if err != nil {
 		return false, err
 	}
@@ -41,16 +41,16 @@ func PublishWiki(ctx context.Context, owner, repository, token string, entry Ent
 	if err := os.WriteFile(path, []byte(next), 0o644); err != nil {
 		return false, err
 	}
-	if err := runGit(ctx, dir, token, "config", "user.name", "GFD Writer"); err != nil {
+	if err := runGit(ctx, dir, token, "config", "user.name", "Quipu Writer"); err != nil {
 		return false, err
 	}
-	if err := runGit(ctx, dir, token, "config", "user.email", "gfd-writer@users.noreply.github.com"); err != nil {
+	if err := runGit(ctx, dir, token, "config", "user.email", "quipu-writer@users.noreply.github.com"); err != nil {
 		return false, err
 	}
 	if err := runGit(ctx, dir, token, "add", "Implementation-Log.md"); err != nil {
 		return false, err
 	}
-	if err := runGit(ctx, dir, token, "commit", "-m", "gfd journal "+entry.RequestID); err != nil {
+	if err := runGit(ctx, dir, token, "commit", "-m", "quipu journal "+entry.RequestID); err != nil {
 		return false, err
 	}
 	if err := runGit(ctx, dir, token, "push", "origin", "HEAD:master"); err != nil {

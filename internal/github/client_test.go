@@ -39,7 +39,7 @@ func TestNewClientDoesNotPersistToken(t *testing.T) {
 	if client.Token != "test-token" {
 		t.Fatalf("client token = %q", client.Token)
 	}
-	if _, err := os.Stat(".gfd-token"); !os.IsNotExist(err) {
+	if _, err := os.Stat(".quipu-token"); !os.IsNotExist(err) {
 		t.Fatalf("token cache was created: %v", err)
 	}
 }

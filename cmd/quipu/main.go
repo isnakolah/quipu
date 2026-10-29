@@ -15,21 +15,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/isnakolah/github-first-delivery/internal/bootstrap"
-	"github.com/isnakolah/github-first-delivery/internal/github"
-	"github.com/isnakolah/github-first-delivery/internal/journal"
-	"github.com/isnakolah/github-first-delivery/internal/model"
-	policycheck "github.com/isnakolah/github-first-delivery/internal/policy"
-	"github.com/isnakolah/github-first-delivery/internal/writer"
+	"github.com/isnakolah/quipu/internal/bootstrap"
+	"github.com/isnakolah/quipu/internal/github"
+	"github.com/isnakolah/quipu/internal/journal"
+	"github.com/isnakolah/quipu/internal/model"
+	policycheck "github.com/isnakolah/quipu/internal/policy"
+	"github.com/isnakolah/quipu/internal/writer"
 	"gopkg.in/yaml.v3"
 )
 
 const version = "0.0.0-dev"
-const configPath = ".github/gfd/config.yaml"
+const configPath = ".github/quipu/config.yaml"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "gfd:", err)
+		fmt.Fprintln(os.Stderr, "quipu:", err)
 		os.Exit(1)
 	}
 }
@@ -92,7 +92,7 @@ type hookInput struct {
 
 func guardCommand(args []string) error {
 	if len(args) != 0 {
-		return errors.New("usage: gfd guard")
+		return errors.New("usage: quipu guard")
 	}
 	var input hookInput
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
@@ -101,7 +101,7 @@ func guardCommand(args []string) error {
 	if input.ToolName == "Bash" && !stateChangingShell(input.ToolInput.Command) {
 		return nil
 	}
-	if os.Getenv("GFD_BOOTSTRAP_ADMIN") == "1" {
+	if os.Getenv("QUIPU_BOOTSTRAP_ADMIN") == "1" {
 		return nil
 	}
 	lease, err := currentLeaseContext()
@@ -110,24 +110,24 @@ func guardCommand(args []string) error {
 	}
 	c, err := loadConfig()
 	if err != nil {
-		return fmt.Errorf("gfd configuration unavailable; operation denied: %w", err)
+		return fmt.Errorf("quipu configuration unavailable; operation denied: %w", err)
 	}
 	state, err := loadLiveWork(c, lease.Issue)
 	if err != nil {
-		return fmt.Errorf("gfd could not verify active lease; operation denied: %w", err)
+		return fmt.Errorf("quipu could not verify active lease; operation denied: %w", err)
 	}
 	if state.Holder != lease.Holder || state.Branch != lease.Branch {
-		return errors.New("gfd live lease does not match session lease context; operation denied")
+		return errors.New("quipu live lease does not match session lease context; operation denied")
 	}
 	expires, err := time.Parse(time.RFC3339, state.Expiry)
 	if err != nil || !expires.After(time.Now().UTC()) {
-		return errors.New("gfd live lease is expired or malformed; operation denied")
+		return errors.New("quipu live lease is expired or malformed; operation denied")
 	}
 	switch state.Status {
 	case "Claimed", "In progress", "In review", "Evidence pending":
 		return nil
 	default:
-		return errors.New("gfd lease not in active state; operation denied")
+		return errors.New("quipu lease not in active state; operation denied")
 	}
 }
 
@@ -147,7 +147,7 @@ func stateChangingShell(command string) bool {
 
 func policyCommand(args []string) error {
 	if len(args) == 0 || args[0] != "pr" {
-		return errors.New("usage: gfd policy pr --pr URL [--json]")
+		return errors.New("usage: quipu policy pr --pr URL [--json]")
 	}
 	fs := flag.NewFlagSet("policy pr", flag.ContinueOnError)
 	pr := fs.String("pr", "", "pull request URL")
@@ -216,7 +216,7 @@ func validatePRWork(branch, body string, state liveWork, now time.Time) error {
 
 func prCommand(args []string) error {
 	if len(args) == 0 || args[0] != "link" {
-		return errors.New("usage: gfd pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply")
+		return errors.New("usage: quipu pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply")
 	}
 	return submitRequest("pr.link", args[1:], nil)
 }
@@ -229,7 +229,7 @@ func issueCommand(args []string) error {
 		return addBlockerCommand(args[1:])
 	}
 	if len(args) == 0 || args[0] != "create" {
-		return errors.New("usage: gfd issue {create|link-parent}")
+		return errors.New("usage: quipu issue {create|link-parent}")
 	}
 	fs := flag.NewFlagSet("issue create", flag.ContinueOnError)
 	title := fs.String("title", "", "Issue title")
@@ -568,7 +568,7 @@ func configuredFieldIDsFromMap(projectNumber int, fields map[string]projectField
 	return ids, nil
 }
 func usage() error {
-	return errors.New(`usage: gfd <command>
+	return errors.New(`usage: quipu <command>
 
 Everyday:
   status     what is in progress, in review, ready, and needs attention
@@ -657,7 +657,7 @@ func requireEmptyBootstrapRoot(root string) error {
 		return err
 	}
 	if len(entries) != 0 {
-		return errors.New("init requires an empty directory; use gfd adopt --apply after its audit for an existing repository")
+		return errors.New("init requires an empty directory; use quipu adopt --apply after its audit for an existing repository")
 	}
 	return nil
 }
@@ -669,7 +669,7 @@ func initializeBootstrapRepository(owner, repo, branch string) error {
 	if output, err := exec.Command("git", "add", ".").CombinedOutput(); err != nil {
 		return fmt.Errorf("git add: %s", strings.TrimSpace(string(output)))
 	}
-	if output, err := exec.Command("git", "commit", "-m", "chore(gfd): bootstrap GitHub-first delivery").CombinedOutput(); err != nil {
+	if output, err := exec.Command("git", "commit", "-m", "chore(quipu): bootstrap Quipu").CombinedOutput(); err != nil {
 		return fmt.Errorf("git commit: %s", strings.TrimSpace(string(output)))
 	}
 	remote := "https://github.com/" + owner + "/" + repo + ".git"
@@ -691,7 +691,7 @@ type createdProject struct {
 func provisionGitHub(owner, repo, visibility, projectName string) (createdProject, error) {
 	remote := owner + "/" + repo
 	if err := exec.Command("gh", "repo", "view", remote).Run(); err == nil {
-		return createdProject{}, fmt.Errorf("repository %s already exists; use gfd adopt after its audit", remote)
+		return createdProject{}, fmt.Errorf("repository %s already exists; use quipu adopt after its audit", remote)
 	}
 	flag := "--public"
 	if visibility == "private" {
@@ -949,7 +949,7 @@ func doctor(args []string) error {
 	if cache, cacheErr := github.NewMetadataCache(); cacheErr == nil {
 		cachePath = cache.Root
 	}
-	report := map[string]any{"gfd_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": "", "cache_path": cachePath, "cache_authority": "disposable metadata only; live GitHub wins"}
+	report := map[string]any{"quipu_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": "", "cache_path": cachePath, "cache_authority": "disposable metadata only; live GitHub wins"}
 	if err == nil {
 		report["repository"] = c.Owner + "/" + c.Repository
 	}
@@ -1146,7 +1146,7 @@ func epicApprovalEvidence(owner string, comments []struct {
 
 func requestCommand(args []string) error {
 	if len(args) == 0 || args[0] != "status" {
-		return errors.New("usage: gfd request status --issue-number N [--request-id ID] [--json] | --issue-id ID --fingerprint SHA --status STATUS --apply")
+		return errors.New("usage: quipu request status --issue-number N [--request-id ID] [--json] | --issue-id ID --fingerprint SHA --status STATUS --apply")
 	}
 	if contains(args[1:], "--apply") {
 		return submitRequest("status", args[1:], nil)
@@ -1222,7 +1222,7 @@ func requestStatusReport(comments []github.Comment, onlyID string) []requestStat
 }
 func workCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gfd work {list|claim|start|renew|release|block|resume}")
+		return errors.New("usage: quipu work {list|claim|start|renew|release|block|resume}")
 	}
 	if args[0] == "list" {
 		return workListCommand(args[1:])
@@ -1403,7 +1403,7 @@ func hasActiveLease(holder, expires string, now time.Time) bool {
 }
 func evidenceCommand(args []string) error {
 	if len(args) == 0 || args[0] != "submit" {
-		return errors.New("usage: gfd evidence submit")
+		return errors.New("usage: quipu evidence submit")
 	}
 	e := &writer.Evidence{}
 	return submitRequest("evidence.submit", args[1:], e)
@@ -1467,7 +1467,7 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 }
 func journalCommand(args []string) error {
 	if len(args) == 0 || args[0] != "render" {
-		return errors.New("usage: gfd journal render --request-id ID --date YYYY-MM-DD --issue '#N' --pr URL --outcome TEXT --proof TEXT --boundary TEXT --next-blocker TEXT")
+		return errors.New("usage: quipu journal render --request-id ID --date YYYY-MM-DD --issue '#N' --pr URL --outcome TEXT --proof TEXT --boundary TEXT --next-blocker TEXT")
 	}
 	fs := flag.NewFlagSet("journal render", flag.ContinueOnError)
 	requestID := fs.String("request-id", "", "Writer request ID")
@@ -1495,7 +1495,7 @@ func journalCommand(args []string) error {
 
 func configureCommand(args []string) error {
 	if len(args) == 0 || args[0] != "writer-token" {
-		return errors.New("usage: gfd configure writer-token --apply < token")
+		return errors.New("usage: quipu configure writer-token --apply < token")
 	}
 	fs := flag.NewFlagSet("configure writer-token", flag.ContinueOnError)
 	apply := applyFlag(fs)
@@ -1509,26 +1509,26 @@ func configureCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("gh", "secret", "set", "GFD_WRITER_TOKEN", "--repo", c.Owner+"/"+c.Repository)
+	cmd := exec.Command("gh", "secret", "set", "QUIPU_WRITER_TOKEN", "--repo", c.Owner+"/"+c.Repository)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("set GFD_WRITER_TOKEN: %w", err)
+		return fmt.Errorf("set QUIPU_WRITER_TOKEN: %w", err)
 	}
-	fmt.Println("GFD_WRITER_TOKEN configured; token was not read, printed, or persisted locally")
+	fmt.Println("QUIPU_WRITER_TOKEN configured; token was not read, printed, or persisted locally")
 	return nil
 }
 
 func writerCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gfd writer {run|reconcile}")
+		return errors.New("usage: quipu writer {run|reconcile}")
 	}
 	if args[0] == "reconcile" {
 		return writerReconcileCommand(args[1:])
 	}
 	if args[0] != "run" {
-		return errors.New("usage: gfd writer {run|reconcile}")
+		return errors.New("usage: quipu writer {run|reconcile}")
 	}
 	fs := flag.NewFlagSet("writer run", flag.ContinueOnError)
 	number := fs.Int("issue-number", 0, "issue number")
@@ -1956,7 +1956,7 @@ func fingerprintLiveWork(state liveWork) (string, error) {
 }
 
 func liveWorkFingerprint(state liveWork) writer.Fingerprint {
-	// GitHub updates Issue.updatedAt when gfd posts its durable request comment.
+	// GitHub updates Issue.updatedAt when quipu posts its durable request comment.
 	// Including that value makes every request stale before the Writer can read
 	// it. The fingerprint therefore covers authoritative graph and Project state,
 	// while request parsing separately rejects edited request comments.
