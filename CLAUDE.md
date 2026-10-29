@@ -1,5 +1,5 @@
 # Claude Code
 
-This repository's agent instructions live in AGENTS.md.
+This repository runs on Quipu; its agent rules are imported below.
 
-@AGENTS.md
+@.agent/rules/quipu.md

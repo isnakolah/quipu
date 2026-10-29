@@ -17,7 +17,7 @@ quipu done N --json --criteria "..." --commands "..." --documentation "..." --ri
                                  # PR merged: record evidence (PR, SHA, CI filled in) and close
 ```
 
-Every result carries a `next` field that says exactly what to do. Agents follow it; people can too, without `--json`. The full agent handbook is [AGENTS.md](AGENTS.md) (`quipu guide`); owners read the [owner guide](docs/owner-guide.md).
+Every result carries a `next` field that says exactly what to do. Agents follow it; people can too, without `--json`. The full agent handbook is [.agent/rules/quipu.md](.agent/rules/quipu.md) (`quipu guide`); owners read the [owner guide](docs/owner-guide.md).
 
 ## Quipu is the only way in
 
@@ -81,7 +81,7 @@ Every Quipu repository commits its guard hooks (`.claude/settings.json`, `.codex
 
 GitHub is authority. No local `plan/`, `tasks/`, roadmap, or TODO ledger. Every live non-Epic Issue has native parent. Every implementation branch and PR maps to one leaf Issue. Project `Status` is only mutable workflow state; status labels forbidden. Writer serializes mutations. Evidence receipt, not merged PR, closes work.
 
-Read the [agent handbook](AGENTS.md), [owner guide](docs/owner-guide.md), [operations guide](docs/operations.md), [source install](docs/source-install.md), and [architecture](docs/architecture.md).
+Read the [agent handbook](.agent/rules/quipu.md), [owner guide](docs/owner-guide.md), [operations guide](docs/operations.md), [source install](docs/source-install.md), and [architecture](docs/architecture.md).
 
 ## Development
 
@@ -93,7 +93,7 @@ scripts/check-plugins.sh
 go run ./cmd/quipu guide --sync   # after changing internal/guide/agent.md or the guard/error tables
 ```
 
-Plugins live under `plugins/codex` and `plugins/claude`. AGENTS.md, CLAUDE.md, `.agent/rules/quipu.md`, and both plugin skills are generated from `internal/guide/agent.md`; `TestGuidesInSync` fails when they drift.
+Plugins live under `plugins/codex` and `plugins/claude`. `.agent/rules/quipu.md` and both plugin skills are generated from `internal/guide/agent.md`; `TestGuidesInSync` fails when they drift. AGENTS.md and CLAUDE.md are short pointers to it, created only when a repository has none.
 
 Projects started before the rename from `gfd` keep working: Quipu still reads the old `gfd-request`/`gfd-receipt`/`gfd-journal` comment markers, and new records use `quipu-*`.
 

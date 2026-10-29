@@ -1,6 +1,24 @@
 #!/bin/sh
-# Every tool call the agent makes passes through quipu guard. It fails
-# closed: without quipu, or on any guard error, the call is denied.
+# Every tool call the agent makes passes through quipu guard, which allows
+# anything outside Quipu repositories. Inside one it fails closed: on any
+# guard error, or when quipu is missing, the call is denied.
 set -u
-command -v quipu >/dev/null 2>&1 || { printf '%s\n' 'QUIPU DENIED [quipu-missing]: quipu is not installed. Do instead: ask the owner to install it (docs/source-install.md).' >&2; exit 2; }
-quipu guard || exit 2
+input=$(cat)
+if command -v quipu >/dev/null 2>&1; then
+  printf '%s' "$input" | quipu guard || exit 2
+  exit 0
+fi
+# Without quipu, deny only where Quipu governs: a repository with a Quipu
+# config, judged from the hook's cwd and any file path the tool names.
+field() { printf '%s' "$input" | sed -n "s/.*\"$1\" *: *\"\\([^\"]*\\)\".*/\\1/p" | head -n 1; }
+for path in "$(field cwd)" "$(field file_path)" "$(field notebook_path)"; do
+  [ -n "$path" ] || continue
+  [ -d "$path" ] || path=$(dirname -- "$path")
+  while [ -n "$path" ] && [ ! -d "$path" ]; do path=$(dirname -- "$path"); done
+  top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || continue
+  if [ -f "$top/.github/quipu/config.yaml" ]; then
+    printf '%s\n' 'QUIPU DENIED [quipu-missing]: quipu is not installed, so no call in this Quipu repository can be checked. Do instead: ask the owner to install quipu (docs/source-install.md).' >&2
+    exit 2
+  fi
+done
+exit 0
