@@ -19,6 +19,10 @@ stories=${QUIPU_PROOF_STORIES:-104}
 
 cleanup() {
   status=$?
+  if [ "$status" -ne 0 ] && [ -n "${QUIPU_PROOF_KEEP:-}" ]; then
+    printf '%s\n' "kept $owner/$repo, Project $project_number, and $work for inspection" >&2
+    exit "$status"
+  fi
   if [ -n "$project_number" ]; then
     gh project delete "$project_number" --owner "$owner" >/dev/null 2>&1 || true
   fi
@@ -65,12 +69,19 @@ echo "drained in $(( $(date +%s) - start ))s"
 jq -e ".requests_receipted == $stories and .issues_scanned == $((stories + 2)) and (.errors | length) == 0" "$work/writer.json" >/dev/null
 
 step "status and validate see every Issue"
-"$quipu" status --json >"$work/status.json"
-jq -e "(.ready | length) == $stories" "$work/status.json" >/dev/null && echo "status: $stories Ready"
+for attempt in 1 2 3 4 5 6; do
+  "$quipu" status --json >"$work/status.json"
+  jq -c '{ready: (.ready | length), blocked: (.blocked | length), backlog, attention}' "$work/status.json"
+  if jq -e "(.ready | length) == $stories" "$work/status.json" >/dev/null; then break; fi
+  [ "$attempt" -lt 6 ] || { echo "status does not show $stories Ready" >&2; exit 1; }
+  sleep 10
+done
+echo "status: $stories Ready"
 "$quipu" validate --json | tee "$work/validate.json"
 jq -e ".valid == true and .open_issues == $((stories + 2))" "$work/validate.json" >/dev/null
 
 step "a second pass has nothing left"
-"$quipu" writer reconcile --since-last-run --apply --json | jq -e '.requests_receipted == 0' >/dev/null && echo "nothing pending"
+"$quipu" writer reconcile --since-last-run --apply --json | jq -e '.requests_receipted == 0' >/dev/null
+echo "nothing pending"
 
 printf '\n%s\n' "drain proof passed for $owner/$repo; cleanup follows"
