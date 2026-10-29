@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/isnakolah/github-first-delivery/internal/github"
-	"github.com/isnakolah/github-first-delivery/internal/writer"
+	"github.com/isnakolah/quipu/internal/github"
+	"github.com/isnakolah/quipu/internal/writer"
 )
 
 func TestBuildStatusReportGroupsColumnsAndAttention(t *testing.T) {
@@ -136,10 +136,10 @@ func TestLeaseContextFromEnvOrFile(t *testing.T) {
 		t.Fatalf("git init: %s", output)
 	}
 	t.Chdir(dir)
-	t.Setenv("GFD_LEASE_ISSUE", "")
-	t.Setenv("GFD_LEASE_HOLDER", "")
-	t.Setenv("GFD_LEASE_BRANCH", "")
-	if _, err := currentLeaseContext(); err == nil || !strings.Contains(err.Error(), "gfd start") {
+	t.Setenv("QUIPU_LEASE_ISSUE", "")
+	t.Setenv("QUIPU_LEASE_HOLDER", "")
+	t.Setenv("QUIPU_LEASE_BRANCH", "")
+	if _, err := currentLeaseContext(); err == nil || !strings.Contains(err.Error(), "quipu start") {
 		t.Fatalf("expected missing-lease error, got %v", err)
 	}
 	want := leaseContext{Issue: 7, Holder: "alice", Branch: "007/x"}
@@ -149,18 +149,18 @@ func TestLeaseContextFromEnvOrFile(t *testing.T) {
 	if got, err := currentLeaseContext(); err != nil || got != want {
 		t.Fatalf("file lease: %+v %v", got, err)
 	}
-	t.Setenv("GFD_LEASE_ISSUE", "9")
-	t.Setenv("GFD_LEASE_HOLDER", "bob")
-	t.Setenv("GFD_LEASE_BRANCH", "009/y")
+	t.Setenv("QUIPU_LEASE_ISSUE", "9")
+	t.Setenv("QUIPU_LEASE_HOLDER", "bob")
+	t.Setenv("QUIPU_LEASE_BRANCH", "009/y")
 	if got, err := currentLeaseContext(); err != nil || got.Issue != 9 || got.Holder != "bob" {
 		t.Fatalf("env lease should win: %+v %v", got, err)
 	}
-	t.Setenv("GFD_LEASE_BRANCH", "")
+	t.Setenv("QUIPU_LEASE_BRANCH", "")
 	if _, err := currentLeaseContext(); err == nil {
 		t.Fatal("partial env lease must be denied")
 	}
-	t.Setenv("GFD_LEASE_ISSUE", "")
-	t.Setenv("GFD_LEASE_HOLDER", "")
+	t.Setenv("QUIPU_LEASE_ISSUE", "")
+	t.Setenv("QUIPU_LEASE_HOLDER", "")
 	removeLeaseFile(8)
 	if _, err := readLeaseFile(); err != nil {
 		t.Fatal("removing a different Issue's lease must keep the file")
@@ -195,7 +195,7 @@ func TestResolveActorPrefersWorktreeLeaseThenEnv(t *testing.T) {
 		t.Fatalf("git init: %s", output)
 	}
 	t.Chdir(dir)
-	t.Setenv("GFD_ACTOR", "codex/octo/env")
+	t.Setenv("QUIPU_ACTOR", "codex/octo/env")
 	if err := writeLeaseFile(leaseContext{Issue: 7, Holder: "claude/octo/lease", Branch: "007/x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestResolveActorPrefersWorktreeLeaseThenEnv(t *testing.T) {
 		t.Fatalf("lease holder should win for its Issue, got %q", got)
 	}
 	if got, _ := resolveActor("", 8); got != "codex/octo/env" {
-		t.Fatalf("GFD_ACTOR should apply to other Issues, got %q", got)
+		t.Fatalf("QUIPU_ACTOR should apply to other Issues, got %q", got)
 	}
 	if got, _ := resolveActor("explicit", 7); got != "explicit" {
 		t.Fatalf("explicit actor should win, got %q", got)

@@ -25,18 +25,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          install_root="$RUNNER_TEMP/gfd-bin"
+          install_root="$RUNNER_TEMP/quipu-bin"
           mkdir -p "$install_root"
-          GOBIN="$install_root" go install ./cmd/gfd
-          "$install_root/gfd" version
-          "$install_root/gfd" doctor --json
+          GOBIN="$install_root" go install ./cmd/quipu
+          "$install_root/quipu" version
+          "$install_root/quipu" doctor --json
       - name: Validate bundled plugins
         shell: bash
         run: |
           set -euo pipefail
-          bash -n plugins/codex/github-first-delivery/scripts/session-context
-          bash -n plugins/codex/github-first-delivery/scripts/pre-write-guard
-          bash -n plugins/claude/github-first-delivery/scripts/session-context
-          bash -n plugins/claude/github-first-delivery/scripts/pre-write-guard
-          python3 -m json.tool plugins/codex/github-first-delivery/.codex-plugin/plugin.json >/dev/null
-          python3 -m json.tool plugins/claude/github-first-delivery/.claude-plugin/plugin.json >/dev/null
+          bash -n plugins/codex/quipu/scripts/session-context
+          bash -n plugins/codex/quipu/scripts/pre-write-guard
+          bash -n plugins/claude/quipu/scripts/session-context
+          bash -n plugins/claude/quipu/scripts/pre-write-guard
+          python3 -m json.tool plugins/codex/quipu/.codex-plugin/plugin.json >/dev/null
+          python3 -m json.tool plugins/claude/quipu/.claude-plugin/plugin.json >/dev/null

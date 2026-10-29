@@ -22,14 +22,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/isnakolah/github-first-delivery/internal/github"
-	"github.com/isnakolah/github-first-delivery/internal/model"
-	"github.com/isnakolah/github-first-delivery/internal/writer"
+	"github.com/isnakolah/quipu/internal/github"
+	"github.com/isnakolah/quipu/internal/model"
+	"github.com/isnakolah/quipu/internal/writer"
 )
 
-const leaseFileName = "gfd-lease"
+const leaseFileName = "quipu-lease"
 
-// ---- gfd status ----
+// ---- quipu status ----
 
 type statusItem struct {
 	Number         int    `json:"number"`
@@ -256,7 +256,7 @@ func renderStatus(report statusReport, now time.Time) string {
 		return strings.TrimSpace(item.LeaseHolder + " " + leaseRemaining(item.LeaseExpires, now))
 	})
 	section("In review", report.InReview, func(item statusItem) string { return item.Branch })
-	section("Verifying", report.Verifying, func(statusItem) string { return "run gfd done to finish" })
+	section("Verifying", report.Verifying, func(statusItem) string { return "run quipu done to finish" })
 	section("Blocked", report.Blocked, func(statusItem) string { return "" })
 	section("Ready to pick up", report.Ready, func(item statusItem) string {
 		if item.OpenBlockers > 0 {
@@ -288,7 +288,7 @@ func leaseRemaining(expires string, now time.Time) string {
 	return "(" + left.String() + " left)"
 }
 
-// ---- gfd start ----
+// ---- quipu start ----
 
 // renewWithin is how close to expiry a rerun of `start` renews the lease, so
 // long-running agents keep their work by calling `start N` again.
@@ -296,14 +296,14 @@ const renewWithin = 30 * time.Minute
 
 func startCommand(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
-	actorFlag := fs.String("actor", "", "lease holder; defaults to GFD_ACTOR, then the GitHub login plus GFD_AGENT")
+	actorFlag := fs.String("actor", "", "lease holder; defaults to QUIPU_ACTOR, then the GitHub login plus QUIPU_AGENT")
 	branchFlag := fs.String("branch", "", "NNN/short-description branch; derived from the title when omitted")
 	next := fs.Bool("next", false, "pick the highest-priority Ready, unblocked, unleased leaf")
 	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for each Writer receipt")
 	asJSON := jsonFlag(fs)
 	number, err := parseIssueArg(fs, args, true)
 	if err != nil || (number == 0) != *next {
-		return errors.New("usage: gfd start (N | --next) [--branch NNN/slug] [--actor ID] [--json]")
+		return errors.New("usage: quipu start (N | --next) [--branch NNN/slug] [--actor ID] [--json]")
 	}
 	c, err := loadConfig()
 	if err != nil {
@@ -336,7 +336,7 @@ func startCommand(args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "#%d taken (%v); trying next\n", item.Number, err)
 	}
-	return printFlowResult(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Ask the owner to make work Ready, or run gfd status."}, *asJSON)
+	return printFlowResult(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Ask the owner to make work Ready, or run quipu status."}, *asJSON)
 }
 
 // nextWork orders pick-up candidates by priority, then Issue number.
@@ -403,9 +403,9 @@ func startIssue(c model.Config, number int, actorFlag, branch string, wait time.
 		return flowResult{}, err
 	}
 	result := flowResult{Issue: number, Status: state.Status, Branch: state.Branch, Holder: state.Holder, LeaseExpires: state.Expiry}
-	result.Next = fmt.Sprintf("Implement #%d on %s. Push and open a PR whose body says \"Refs #%d\", then run: gfd done %d. Rerun gfd start %d to renew the lease on long work.", number, state.Branch, number, number, number)
+	result.Next = fmt.Sprintf("Implement #%d on %s. Push and open a PR whose body says \"Refs #%d\", then run: quipu done %d. Rerun quipu start %d to renew the lease on long work.", number, state.Branch, number, number, number)
 	if state.Status == "In review" {
-		result.Next = fmt.Sprintf("Address review on %s, then run: gfd done %d", state.Branch, number)
+		result.Next = fmt.Sprintf("Address review on %s, then run: quipu done %d", state.Branch, number)
 	}
 	return result, nil
 }
@@ -483,11 +483,11 @@ func runGit(args ...string) error {
 	return nil
 }
 
-// ---- gfd done ----
+// ---- quipu done ----
 
 func doneCommand(args []string) error {
 	fs := flag.NewFlagSet("done", flag.ContinueOnError)
-	actorFlag := fs.String("actor", "", "request actor; defaults to the lease holder in .git/gfd-lease")
+	actorFlag := fs.String("actor", "", "request actor; defaults to the lease holder in .git/quipu-lease")
 	asJSON := jsonFlag(fs)
 	prFlag := fs.String("pr", "", "pull request URL; found from the work branch when omitted")
 	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for each Writer receipt")
@@ -502,7 +502,7 @@ func doneCommand(args []string) error {
 	fs.StringVar(&e.CIURL, "ci-url", "", "CI run URL; read from the PR checks when omitted")
 	number, err := parseIssueArg(fs, args, false)
 	if err != nil {
-		return errors.New("usage: gfd done N [--pr URL] [--criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]")
+		return errors.New("usage: quipu done N [--pr URL] [--criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]")
 	}
 	c, err := loadConfig()
 	if err != nil {
@@ -517,7 +517,7 @@ func doneCommand(args []string) error {
 		return err
 	}
 	if state.Status == "Done" {
-		return printFlowResult(flowResult{Issue: number, Status: "Done", Next: "Pick the next task: gfd start --next"}, *asJSON)
+		return printFlowResult(flowResult{Issue: number, Status: "Done", Next: "Pick the next task: quipu start --next"}, *asJSON)
 	}
 	var pull pullRequest
 	if state.Status == "Claimed" || state.Status == "In progress" || state.Status == "In review" {
@@ -546,7 +546,7 @@ func doneCommand(args []string) error {
 	}
 	if state.Status == "In review" {
 		if pull.State != "MERGED" {
-			return printFlowResult(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("Wait for review and merge of %s; address review comments on %s. After merge, run: gfd done %d --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number)}, *asJSON)
+			return printFlowResult(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("Wait for review and merge of %s; address review comments on %s. After merge, run: quipu done %d --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number)}, *asJSON)
 		}
 		e.FinalSHA = pull.MergeCommit
 		if e.CIURL == "" {
@@ -569,7 +569,7 @@ func doneCommand(args []string) error {
 		return err
 	}
 	removeLeaseFile(number)
-	return printFlowResult(flowResult{Issue: number, Status: "Done", PR: pull.URL, Next: "Closed. Pick the next task: gfd start --next"}, *asJSON)
+	return printFlowResult(flowResult{Issue: number, Status: "Done", PR: pull.URL, Next: "Closed. Pick the next task: quipu start --next"}, *asJSON)
 }
 
 type pullRequest struct {
@@ -701,7 +701,7 @@ func isTerminal(in io.Reader) bool {
 // ---- shared helpers ----
 
 func parseIssueArg(fs *flag.FlagSet, args []string, optional bool) (int, error) {
-	// Accept the Issue number before or after flags: `gfd start 12 --wait 1m`.
+	// Accept the Issue number before or after flags: `quipu start 12 --wait 1m`.
 	var positional []string
 	for len(args) > 0 {
 		if err := fs.Parse(args); err != nil {
@@ -728,8 +728,8 @@ func parseIssueArg(fs *flag.FlagSet, args []string, optional bool) (int, error) 
 
 // resolveActor picks who holds the lease. Several agents can share one GitHub
 // login, so each session gets its own identity: the lease already recorded
-// in this worktree, then GFD_ACTOR, then provider/login/session built from
-// GFD_AGENT (set by the agent's session hook), then the bare login.
+// in this worktree, then QUIPU_ACTOR, then provider/login/session built from
+// QUIPU_AGENT (set by the agent's session hook), then the bare login.
 func resolveActor(explicit string, number int) (string, error) {
 	if explicit != "" {
 		return explicit, nil
@@ -737,14 +737,14 @@ func resolveActor(explicit string, number int) (string, error) {
 	if lease, err := readLeaseFile(); err == nil && lease.Issue == number {
 		return lease.Holder, nil
 	}
-	if actor := strings.TrimSpace(os.Getenv("GFD_ACTOR")); actor != "" {
+	if actor := strings.TrimSpace(os.Getenv("QUIPU_ACTOR")); actor != "" {
 		return actor, nil
 	}
 	output, err := ghOutput("api", "user", "--jq", ".login")
 	if err != nil {
 		return "", fmt.Errorf("resolve GitHub login (pass --actor): %w", err)
 	}
-	return agentActor(strings.TrimSpace(string(output)), os.Getenv("GFD_AGENT")), nil
+	return agentActor(strings.TrimSpace(string(output)), os.Getenv("QUIPU_AGENT")), nil
 }
 
 // agentActor builds an identity the Writer matches to the comment author:
@@ -806,7 +806,7 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("#%d %s request %s has no Writer receipt after %s; check the GFD Writer workflow, then rerun", number, r.Action, r.ID, wait)
+			return fmt.Errorf("#%d %s request %s has no Writer receipt after %s; check the Quipu Writer workflow, then rerun", number, r.Action, r.ID, wait)
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -825,8 +825,8 @@ func receiptFor(comments []github.Comment, requestID string) (writer.Receipt, bo
 // ---- local lease context ----
 
 // leaseContext is the session's claimed work. Hooks read it from
-// GFD_LEASE_* variables or, when those are unset, from .git/gfd-lease written
-// by `gfd start`. Either way the guard re-verifies it against live GitHub.
+// QUIPU_LEASE_* variables or, when those are unset, from .git/quipu-lease written
+// by `quipu start`. Either way the guard re-verifies it against live GitHub.
 type leaseContext struct {
 	Issue  int    `json:"issue"`
 	Holder string `json:"holder"`
@@ -834,16 +834,16 @@ type leaseContext struct {
 }
 
 func currentLeaseContext() (leaseContext, error) {
-	issue, holder, branch := os.Getenv("GFD_LEASE_ISSUE"), os.Getenv("GFD_LEASE_HOLDER"), os.Getenv("GFD_LEASE_BRANCH")
+	issue, holder, branch := os.Getenv("QUIPU_LEASE_ISSUE"), os.Getenv("QUIPU_LEASE_HOLDER"), os.Getenv("QUIPU_LEASE_BRANCH")
 	if issue == "" && holder == "" && branch == "" {
 		return readLeaseFile()
 	}
 	if issue == "" || holder == "" || branch == "" {
-		return leaseContext{}, errors.New("gfd active lease issue, holder, or branch context missing; operation denied")
+		return leaseContext{}, errors.New("quipu active lease issue, holder, or branch context missing; operation denied")
 	}
 	number, err := strconv.Atoi(issue)
 	if err != nil || number < 1 {
-		return leaseContext{}, errors.New("GFD_LEASE_ISSUE must be a positive Issue number")
+		return leaseContext{}, errors.New("QUIPU_LEASE_ISSUE must be a positive Issue number")
 	}
 	return leaseContext{Issue: number, Holder: holder, Branch: branch}, nil
 }
@@ -857,7 +857,7 @@ func leaseFilePath() (string, error) {
 }
 
 func readLeaseFile() (leaseContext, error) {
-	missing := errors.New("gfd no active lease; run `gfd start N` first; operation denied")
+	missing := errors.New("quipu no active lease; run `quipu start N` first; operation denied")
 	path, err := leaseFilePath()
 	if err != nil {
 		return leaseContext{}, missing
@@ -868,7 +868,7 @@ func readLeaseFile() (leaseContext, error) {
 	}
 	var lease leaseContext
 	if err := json.Unmarshal(raw, &lease); err != nil || lease.Issue < 1 || lease.Holder == "" || lease.Branch == "" {
-		return leaseContext{}, errors.New("gfd lease file is malformed; rerun `gfd start N`; operation denied")
+		return leaseContext{}, errors.New("quipu lease file is malformed; rerun `quipu start N`; operation denied")
 	}
 	return lease, nil
 }

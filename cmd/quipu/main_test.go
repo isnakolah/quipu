@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/isnakolah/github-first-delivery/internal/github"
-	"github.com/isnakolah/github-first-delivery/internal/model"
-	"github.com/isnakolah/github-first-delivery/internal/writer"
+	"github.com/isnakolah/quipu/internal/github"
+	"github.com/isnakolah/quipu/internal/model"
+	"github.com/isnakolah/quipu/internal/writer"
 )
 
 func TestLiveWorkFingerprintIgnoresRequestCommentTimestamp(t *testing.T) {
@@ -39,7 +39,7 @@ func TestJournalRenderIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "<!-- gfd-journal:v1 request=r1 -->") || !strings.Contains(output, "- Issue: #13") {
+	if !strings.Contains(output, "<!-- quipu-journal:v1 request=r1 -->") || !strings.Contains(output, "- Issue: #13") {
 		t.Fatalf("unexpected journal output: %s", output)
 	}
 }

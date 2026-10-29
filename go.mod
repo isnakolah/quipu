@@ -1,4 +1,4 @@
-module github.com/isnakolah/github-first-delivery
+module github.com/isnakolah/quipu
 
 go 1.26.4
 

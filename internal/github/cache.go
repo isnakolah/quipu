@@ -17,7 +17,7 @@ func NewMetadataCache() (MetadataCache, error) {
 	if err != nil {
 		return MetadataCache{}, err
 	}
-	return MetadataCache{Root: filepath.Join(root, "github-first-delivery")}, nil
+	return MetadataCache{Root: filepath.Join(root, "quipu")}, nil
 }
 
 func (c MetadataCache) StoreJSON(key string, value any) error {
@@ -29,7 +29,7 @@ func (c MetadataCache) StoreJSON(key string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(target), ".gfd-cache-*")
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".quipu-cache-*")
 	if err != nil {
 		return err
 	}

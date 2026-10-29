@@ -3,7 +3,7 @@ package writer
 import (
 	"testing"
 
-	gh "github.com/isnakolah/github-first-delivery/internal/github"
+	gh "github.com/isnakolah/quipu/internal/github"
 )
 
 func TestPendingRejectsEditedAndSkipsReceipted(t *testing.T) {

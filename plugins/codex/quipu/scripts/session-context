@@ -1,0 +1,36 @@
+#!/bin/sh
+# Session start: give this agent session its own identity and show the board.
+# Stop: remind the agent of work it still holds.
+set -eu
+input=""
+[ -t 0 ] || input=$(cat)
+if ! command -v quipu >/dev/null 2>&1; then
+  printf '%s\n' 'quipu missing: source install required'
+  exit 0
+fi
+git_dir=$(git rev-parse --git-dir 2>/dev/null || true)
+lease=""
+if [ -n "$git_dir" ] && [ -f "$git_dir/quipu-lease" ]; then
+  lease=$(cat "$git_dir/quipu-lease")
+fi
+if [ "${1:-}" = "--stop" ]; then
+  if [ -n "$lease" ]; then
+    printf '%s\n' "quipu lease still held: $lease. Finish with 'quipu done N', or rerun 'quipu start N' to renew."
+  fi
+  exit 0
+fi
+session=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9-]*\)".*/\1/p' | cut -c1-8)
+if [ -z "${QUIPU_AGENT:-}" ] && [ -n "$session" ]; then
+  QUIPU_AGENT="codex/$session"
+  export QUIPU_AGENT
+  # Claude Code persists variables written here for later Bash commands.
+  if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    printf 'export QUIPU_AGENT=%s\n' "$QUIPU_AGENT" >> "$CLAUDE_ENV_FILE"
+  fi
+fi
+quipu status 2>/dev/null || true
+if [ -n "$lease" ]; then
+  printf '%s\n' "Resuming lease: $lease"
+elif [ -z "${QUIPU_LEASE_ISSUE:-}" ]; then
+  printf '%s\n' "No active lease: run 'quipu start --next' (or 'quipu start N') before editing."
+fi

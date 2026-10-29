@@ -1,10 +1,10 @@
 schema_version: 1
 owner: isnakolah
-repository: github-first-delivery
+repository: quipu
 project:
   id: PVT_kwHOAtDPcM4BfyqH
   number: 9
-  title: GitHub-first Delivery
+  title: Quipu
   fields:
     status: PVTSSF_lAHOAtDPcM4BfyqHzhaDAnE
     kind: PVTSSF_lAHOAtDPcM4BfyqHzhaDAt4

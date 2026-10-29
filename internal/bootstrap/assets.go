@@ -9,7 +9,7 @@ import (
 )
 
 var files = map[string]string{
-	".github/workflows/gfd-writer.yml": `name: GFD Writer
+	".github/workflows/quipu-writer.yml": `name: Quipu Writer
 on:
   issue_comment:
     types: [created]
@@ -23,7 +23,7 @@ permissions:
   issues: write
   pull-requests: write
 concurrency:
-  group: gfd-writer-${{ github.repository_id }}
+  group: quipu-writer-${{ github.repository_id }}
   cancel-in-progress: false
 jobs:
   writer:
@@ -31,23 +31,23 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     steps:
       - uses: actions/checkout@v4
-        with: {ref: __GFD_DEFAULT_BRANCH__}
+        with: {ref: __QUIPU_DEFAULT_BRANCH__}
       - uses: actions/setup-go@v6
         with: {go-version: '1.26.4'}
-      - name: Install canonical GFD
-        run: go install github.com/isnakolah/github-first-delivery/cmd/gfd@main
+      - name: Install canonical Quipu
+        run: go install github.com/isnakolah/quipu/cmd/quipu@main
       - name: Writer activation boundary
         env:
-          GITHUB_TOKEN: ${{ secrets.GFD_WRITER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
         run: |
-          test -n "$GITHUB_TOKEN" || { echo 'GFD_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
+          test -n "$GITHUB_TOKEN" || { echo 'QUIPU_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            gfd writer run --issue-number "${{ github.event.issue.number }}" --apply
+            quipu writer run --issue-number "${{ github.event.issue.number }}" --apply
           else
-            gfd writer reconcile --apply
+            quipu writer reconcile --apply
           fi
 `,
-	".github/workflows/gfd-policy.yml": `name: GFD policy
+	".github/workflows/quipu-policy.yml": `name: Quipu policy
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
@@ -61,25 +61,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: __GFD_DEFAULT_BRANCH__
+          ref: __QUIPU_DEFAULT_BRANCH__
           persist-credentials: false
       - uses: actions/setup-go@v6
         with: {go-version: '1.26.4'}
-      - name: Install canonical GFD
-        run: go install github.com/isnakolah/github-first-delivery/cmd/gfd@main
+      - name: Install canonical Quipu
+        run: go install github.com/isnakolah/quipu/cmd/quipu@main
       - name: Validate PR metadata and live work state
         env:
-          GITHUB_TOKEN: ${{ secrets.GFD_WRITER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          test -n "$GITHUB_TOKEN" || { echo 'GFD_WRITER_TOKEN not configured; policy cannot verify Project lease.'; exit 1; }
-          gfd policy pr --pr "$PR_URL" --json
+          test -n "$GITHUB_TOKEN" || { echo 'QUIPU_WRITER_TOKEN not configured; policy cannot verify Project lease.'; exit 1; }
+          quipu policy pr --pr "$PR_URL" --json
 `,
 	".github/workflows/ci.yml": `name: CI
 on:
   pull_request:
   push:
-    branches: [__GFD_DEFAULT_BRANCH__]
+    branches: [__QUIPU_DEFAULT_BRANCH__]
 permissions:
   contents: read
 jobs:
@@ -98,9 +98,9 @@ jobs:
             echo 'No Go module yet; bootstrap policy files only.'
           fi
 `,
-	".agent/rules/github-first-delivery.md": `# GitHub-first delivery
+	".agent/rules/quipu.md": `# Quipu
 
-Agents run this project. Loop: ` + "`gfd status --json`" + `, then ` + "`gfd start --next --json`" + ` (stop if ` + "`Idle`" + `), implement on the created branch, open a PR whose body says ` + "`Refs #N`" + `, run ` + "`gfd done N --json`" + `; after merge run ` + "`gfd done N --json`" + ` with ` + "`--criteria --commands --documentation --risks --boundary`" + `. Always follow the result's ` + "`next`" + `. One worktree per agent; rerun ` + "`gfd start N`" + ` to renew long leases. Native parent and blocker links are authority. Never create local task ledger, autonomous Epic, or approve your own work.
+Agents run this project. Loop: ` + "`quipu status --json`" + `, then ` + "`quipu start --next --json`" + ` (stop if ` + "`Idle`" + `), implement on the created branch, open a PR whose body says ` + "`Refs #N`" + `, run ` + "`quipu done N --json`" + `; after merge run ` + "`quipu done N --json`" + ` with ` + "`--criteria --commands --documentation --risks --boundary`" + `. Always follow the result's ` + "`next`" + `. One worktree per agent; rerun ` + "`quipu start N`" + ` to renew long leases. Native parent and blocker links are authority. Never create local task ledger, autonomous Epic, or approve your own work.
 `,
 	".github/ISSUE_TEMPLATE/decision.yml": `name: Decision
 description: Decision requiring named approver.
@@ -158,7 +158,7 @@ body:
     validations: {required: true}
 `,
 	".github/ISSUE_TEMPLATE/work.yml": `name: Work
-description: Story, Contract, Task, Gate, or Defect with GitHub-first contract.
+description: Story, Contract, Task, Gate, or Defect with Quipu work contract.
 title: "US- — "
 body:
   - type: markdown
@@ -193,7 +193,7 @@ func Install(root, owner string, projectNumber int, defaultBranch string) error 
 	}
 	all := make(map[string]string, len(files)+1)
 	for path, body := range files {
-		all[path] = strings.ReplaceAll(body, "__GFD_DEFAULT_BRANCH__", defaultBranch)
+		all[path] = strings.ReplaceAll(body, "__QUIPU_DEFAULT_BRANCH__", defaultBranch)
 	}
 	all[".github/ISSUE_TEMPLATE/config.yml"] = fmt.Sprintf(`blank_issues_enabled: false
 contact_links:

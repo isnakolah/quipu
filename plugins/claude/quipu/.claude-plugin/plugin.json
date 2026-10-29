@@ -1,0 +1,18 @@
+{
+  "name": "quipu",
+  "version": "0.1.0",
+  "description": "Quipu: GitHub-native project management skill and guard hooks",
+  "author": {"name": "isnakolah", "url": "https://github.com/isnakolah"},
+  "repository": "https://github.com/isnakolah/quipu",
+  "license": "MIT",
+  "keywords": ["github", "delivery", "writer", "agents"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Quipu",
+    "shortDescription": "Plan, start, and finish GitHub work as one team of people and agents",
+    "longDescription": "See the board, start Ready work on its own branch, and finish it with proof. Every change goes through the serialized Project Writer and is knotted into the Issue record.",
+    "developerName": "isnakolah",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"]
+  }
+}

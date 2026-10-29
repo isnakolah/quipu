@@ -14,5 +14,5 @@ jobs:
         with: {go-version: '1.26.4'}
       - run: go test -race ./...
       - run: go vet ./...
-      - run: go build ./cmd/gfd
+      - run: go build ./cmd/quipu
       - run: scripts/check-plugins.sh

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/isnakolah/github-first-delivery/internal/github"
+	gh "github.com/isnakolah/quipu/internal/github"
 )
 
 // PendingRequest is a validated request comment eligible for exactly one receipt.
@@ -20,7 +20,7 @@ type PendingRequest struct {
 func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
 	receipted := make(map[string]bool)
 	for _, comment := range comments {
-		if strings.Contains(comment.Body, ReceiptPrefix) {
+		if HasReceiptMarker(comment.Body) {
 			for _, id := range receiptRequestIDs(comment.Body) {
 				receipted[id] = true
 			}
@@ -29,7 +29,7 @@ func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
 	var pending []PendingRequest
 	var rejected []Receipt
 	for _, comment := range comments {
-		if !strings.HasPrefix(strings.TrimSpace(comment.Body), RequestPrefix) {
+		if !IsRequest(comment.Body) {
 			continue
 		}
 		if receipted[requestID(comment.Body)] {
