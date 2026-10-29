@@ -40,29 +40,28 @@ project_number=$(gh project create --owner "$owner" --title "$repo" --format jso
 echo "Project #$project_number"
 
 step "audit: PRs are not Issues"
-"$quipu" adopt --owner "$owner" --repo "$repo" --json | tee audit.json
-jq -e '.issues_found == 0 and .safe_to_adopt == true' audit.json >/dev/null
+"$quipu" adopt --owner "$owner" --repo "$repo" --json | tee "$work/audit.json"
+jq -e '.issues_found == 0 and .safe_to_adopt == true' "$work/audit.json" >/dev/null
 
 step "first adoption"
 "$quipu" adopt --owner "$owner" --repo "$repo" --project-number "$project_number" --apply --json \
-  --quipu-version "$pin" --runs-on self-hosted,macOS --schedule off --writer-on-pr=false | tee first.json
-jq -e '.changed == true' first.json >/dev/null
+  --quipu-version "$pin" --runs-on self-hosted,macOS --schedule off --writer-on-pr=false | tee "$work/first.json"
+jq -e '.changed == true' "$work/first.json" >/dev/null
 grep -q 'runs-on: \[self-hosted, macOS\]' .github/workflows/quipu-writer.yml
 grep -q "cmd/quipu@$pin" .github/workflows/quipu-writer.yml
 ! grep -q 'schedule:' .github/workflows/quipu-writer.yml
 ! grep -q 'pull_request:' .github/workflows/quipu-writer.yml
 
 step "second adoption changes nothing"
-"$quipu" adopt --apply --json | tee second.json
-jq -e '.changed == false and ((.changes // []) | length == 0) and ((.kept // []) | length == 0)' second.json >/dev/null
-test -z "$(git status --porcelain -- .github/quipu)" || git status --porcelain
+"$quipu" adopt --apply --json | tee "$work/second.json"
+jq -e '.changed == false and ((.changes // []) | length == 0) and ((.kept // []) | length == 0)' "$work/second.json" >/dev/null
 
 step "commit the adoption, then protect"
 git add -A && git commit -qm "chore(quipu): adopt Quipu" && git push -q origin main
-if "$quipu" protect --apply --json >protect.json 2>protect.err; then
+if "$quipu" protect --apply >"$work/protect.out" 2>&1; then
   gh api "repos/$owner/$repo/rulesets" --jq '[.[].name] | sort | join(", ")'
 else
-  printf 'protect: %s\n' "$(cat protect.err)"
+  printf 'protect refused: %s\n' "$(tail -1 "$work/protect.out")"
 fi
 "$quipu" doctor || true
 

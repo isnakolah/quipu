@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/isnakolah/quipu/internal/model"
@@ -99,5 +101,15 @@ func TestBranchRulesetPayload(t *testing.T) {
 	exclude := got["conditions"].(map[string]any)["ref_name"].(map[string]any)["exclude"]
 	if !reflect.DeepEqual(exclude, []any{"refs/heads/trunk", "refs/heads/[0-9][0-9][0-9]*/*", "refs/heads/dependabot/**"}) {
 		t.Fatalf("exclude = %v", exclude)
+	}
+}
+
+func TestRulesetFixExplainsThePlan(t *testing.T) {
+	plan := errors.New("gh api repos/o/r/rulesets: {\"message\":\"Upgrade to GitHub Pro or make this repository public to enable this feature.\"}")
+	if fix := rulesetFix(plan); !strings.Contains(fix, "GitHub Pro") {
+		t.Fatalf("fix = %q", fix)
+	}
+	if fix := rulesetFix(errors.New("HTTP 404")); fix != "owner: quipu protect --apply" {
+		t.Fatalf("fix = %q", fix)
 	}
 }

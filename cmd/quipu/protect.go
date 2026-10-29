@@ -115,6 +115,9 @@ func protectRepository(c model.Config, adminsExempt bool) error {
 			err = ghJSON("PUT", fmt.Sprintf("%s/rulesets/%d", repo, id), payload)
 		}
 		if err != nil {
+			if fix := rulesetFix(err); strings.HasPrefix(fix, "rulesets") {
+				return fmt.Errorf("ruleset %s: %w; %s", name, err, fix)
+			}
 			return fmt.Errorf("ruleset %s: %w", name, err)
 		}
 	}
@@ -302,16 +305,32 @@ func judgeBranchRules(branch string, raw []byte, checks []string) doctorCheck {
 	return doctorCheck{"branch protection", "ok", branch + " protected by rulesets: PRs, checks " + strings.Join(append(append([]string{}, checks...), "policy"), ", "), ""}
 }
 
+// rulesetFix explains a failure to read or write rulesets.
+func rulesetFix(err error) string {
+	if strings.Contains(err.Error(), "Upgrade to GitHub Pro") || strings.Contains(err.Error(), "make this repository public") {
+		return "rulesets on a private repository need GitHub Pro, Team, or Enterprise; upgrade or make the repository public, then quipu protect --apply"
+	}
+	return "owner: quipu protect --apply"
+}
+
+func lastLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndex(s, "\n"); i >= 0 {
+		s = s[i+1:]
+	}
+	return s
+}
+
 func githubChecks(c model.Config) []doctorCheck {
 	var checks []doctorCheck
 	repo := "repos/" + c.Owner + "/" + c.Repository
 	if output, err := ghOutput("api", repo+"/rules/branches/"+c.DefaultBranch); err != nil {
-		checks = append(checks, doctorCheck{"branch protection", "warn", "cannot read the rules on " + c.DefaultBranch, "owner: quipu doctor"})
+		checks = append(checks, doctorCheck{"branch protection", "fail", "cannot read the rules on " + c.DefaultBranch + ": " + lastLine(err.Error()), rulesetFix(err)})
 	} else {
 		checks = append(checks, judgeBranchRules(c.DefaultBranch, output, c.Checks()))
 	}
 	if id, err := rulesetID(repo, branchRulesetName); err != nil {
-		checks = append(checks, doctorCheck{"branch names", "warn", "cannot read rulesets", "owner: quipu doctor"})
+		checks = append(checks, doctorCheck{"branch names", "fail", "cannot read rulesets: " + lastLine(err.Error()), rulesetFix(err)})
 	} else if id == 0 {
 		checks = append(checks, doctorCheck{"branch names", "fail", "no " + branchRulesetName + " ruleset", "owner: quipu protect --apply"})
 	} else {
