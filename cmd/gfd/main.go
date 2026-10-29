@@ -42,6 +42,12 @@ func run(args []string) error {
 	case "version":
 		fmt.Println(version)
 		return nil
+	case "status":
+		return statusCommand(args[1:])
+	case "start":
+		return startCommand(args[1:])
+	case "done":
+		return doneCommand(args[1:])
 	case "init":
 		return initCommand(args[1:])
 	case "doctor":
@@ -98,23 +104,19 @@ func guardCommand(args []string) error {
 	if os.Getenv("GFD_BOOTSTRAP_ADMIN") == "1" {
 		return nil
 	}
-	issue, holder, branch := os.Getenv("GFD_LEASE_ISSUE"), os.Getenv("GFD_LEASE_HOLDER"), os.Getenv("GFD_LEASE_BRANCH")
-	if issue == "" || holder == "" || branch == "" {
-		return errors.New("gfd active lease issue, holder, or branch context missing; operation denied")
-	}
-	number, err := strconv.Atoi(issue)
-	if err != nil || number < 1 {
-		return errors.New("GFD_LEASE_ISSUE must be a positive Issue number")
+	lease, err := currentLeaseContext()
+	if err != nil {
+		return err
 	}
 	c, err := loadConfig()
 	if err != nil {
 		return fmt.Errorf("gfd configuration unavailable; operation denied: %w", err)
 	}
-	state, err := loadLiveWork(c, number)
+	state, err := loadLiveWork(c, lease.Issue)
 	if err != nil {
 		return fmt.Errorf("gfd could not verify active lease; operation denied: %w", err)
 	}
-	if state.Holder != holder || state.Branch != branch {
+	if state.Holder != lease.Holder || state.Branch != lease.Branch {
 		return errors.New("gfd live lease does not match session lease context; operation denied")
 	}
 	expires, err := time.Parse(time.RFC3339, state.Expiry)
@@ -566,7 +568,16 @@ func configuredFieldIDsFromMap(projectNumber int, fields map[string]projectField
 	return ids, nil
 }
 func usage() error {
-	return errors.New("usage: gfd {init|adopt|doctor|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|version}")
+	return errors.New(`usage: gfd <command>
+
+Everyday:
+  status     what is in progress, in review, ready, and needs attention
+  start N    claim Issue #N, create its branch, and record the lease locally
+  start --next  claim the highest-priority Ready work (for agents)
+  done N     link the PR, then after merge record evidence and close #N
+
+Setup and advanced:
+  init|adopt|doctor|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|version`)
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")
@@ -1249,6 +1260,23 @@ func workListCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	candidates, err := loadWorkCandidates(c)
+	if err != nil {
+		return err
+	}
+	ready := selectReadyWork(candidates, time.Now())
+	if *asJSON {
+		return printValue(map[string]any{"repository": c.Owner + "/" + c.Repository, "work": ready}, true)
+	}
+	for _, item := range ready {
+		fmt.Printf("#%d [%s/%s/%s] %s\n", item.Number, item.Kind, item.Area, item.Priority, item.Title)
+	}
+	return nil
+}
+
+// loadWorkCandidates reads open Issues with the Project fields that decide
+// whether work can be picked up.
+func loadWorkCandidates(c model.Config) ([]workCandidate, error) {
 	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:OPEN) { nodes {
 id number title body parent { id } subIssues(first:1) { nodes { id } } blockedBy(first:100) { nodes { state } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
@@ -1258,7 +1286,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 } } } }`, c.Owner, c.Repository)
 	output, err := ghOutput("api", "graphql", "-f", "query="+query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var response struct {
 		Data struct {
@@ -1304,7 +1332,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(output, &response); err != nil {
-		return err
+		return nil, err
 	}
 	candidates := make([]workCandidate, 0, len(response.Data.Repository.Issues.Nodes))
 	for _, issue := range response.Data.Repository.Issues.Nodes {
@@ -1338,14 +1366,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 		}
 		candidates = append(candidates, candidate)
 	}
-	ready := selectReadyWork(candidates, time.Now())
-	if *asJSON {
-		return printValue(map[string]any{"repository": c.Owner + "/" + c.Repository, "work": ready}, true)
-	}
-	for _, item := range ready {
-		fmt.Printf("#%d [%s/%s/%s] %s\n", item.Number, item.Kind, item.Area, item.Priority, item.Title)
-	}
-	return nil
+	return candidates, nil
 }
 
 func selectReadyWork(candidates []workCandidate, now time.Time) []readyWork {

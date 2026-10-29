@@ -100,7 +100,7 @@ jobs:
 `,
 	".agent/rules/github-first-delivery.md": `# GitHub-first delivery
 
-Run ` + "`gfd context`" + ` before work. Select only Ready, unblocked, unleased leaf work. Claim before creating branch or editing. Native parent and blocker links are authority. Submit evidence before completion. Never create local task ledger or autonomous Epic.
+Agents run this project. Loop: ` + "`gfd status --json`" + `, then ` + "`gfd start --next --json`" + ` (stop if ` + "`Idle`" + `), implement on the created branch, open a PR whose body says ` + "`Refs #N`" + `, run ` + "`gfd done N --json`" + `; after merge run ` + "`gfd done N --json`" + ` with ` + "`--criteria --commands --documentation --risks --boundary`" + `. Always follow the result's ` + "`next`" + `. One worktree per agent; rerun ` + "`gfd start N`" + ` to renew long leases. Native parent and blocker links are authority. Never create local task ledger, autonomous Epic, or approve your own work.
 `,
 	".github/ISSUE_TEMPLATE/decision.yml": `name: Decision
 description: Decision requiring named approver.
