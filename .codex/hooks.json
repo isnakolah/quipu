@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v quipu \u003e/dev/null 2\u003e\u00261 || { echo 'QUIPU DENIED [quipu-missing]: quipu is not installed, so this repository cannot check the call. Do instead: install quipu (docs/source-install.md), then retry.' \u003e\u00262; exit 2; }; quipu guard",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash|shell|exec_command|apply_patch|mcp__.*"
+      }
+    ]
+  }
+}
