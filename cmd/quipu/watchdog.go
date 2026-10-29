@@ -46,6 +46,7 @@ func writerReconcileCommand(args []string) error {
 	apply := applyFlag(fs)
 	asJSON := jsonFlag(fs)
 	since := fs.Duration("since", 0, "only Issues updated within this window, such as 30m; all Issues when 0")
+	sinceLastRun := fs.Bool("since-last-run", false, "only Issues updated since the last successful Writer run began; all Issues when there is none")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -59,7 +60,15 @@ func writerReconcileCommand(args []string) error {
 			return err
 		}
 	}
-	output, err := ghOutput("api", "--paginate", "--slurp", reconcileIssuesPath(c, *since, now))
+	window := *since
+	if *sinceLastRun {
+		started, err := lastWriterRun(c)
+		if err != nil {
+			return err
+		}
+		window = drainWindow(started, now)
+	}
+	output, err := ghOutput("api", "--paginate", "--slurp", reconcileIssuesPath(c, window, now))
 	if err != nil {
 		return err
 	}
@@ -98,7 +107,7 @@ func writerReconcileCommand(args []string) error {
 			total.Warnings = append(total.Warnings, fmt.Sprintf("#%d: %s", number, warning))
 		}
 	}
-	result := map[string]any{"issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed,
+	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed,
 		"issues_reopened": total.Reopened, "drift_restored": total.Restored, "issues_triaged": total.Triaged,
 		"policy_rechecked": total.Rechecked, "warnings": append([]string{}, total.Warnings...), "errors": failures, "apply": *apply}
 	if err := printValue(result, *asJSON); err != nil {
@@ -111,15 +120,49 @@ func writerReconcileCommand(args []string) error {
 }
 
 // reconcileIssuesPath lists the Issues a reconcile pass scans. With since,
-// only recently updated Issues: the comment-triggered Writer run uses this to
-// drain every pending request, because Actions cancels queued runs in its
-// concurrency group when many agents post requests at once.
+// only Issues updated in that window: event-triggered Writer runs scan back to
+// the last successful run, which drains every pending request even though
+// Actions keeps only one queued run per concurrency group.
 func reconcileIssuesPath(c model.Config, since time.Duration, now time.Time) string {
 	path := "repos/" + c.Owner + "/" + c.Repository + "/issues?state=all&per_page=100"
 	if since > 0 {
 		path += "&since=" + now.Add(-since).UTC().Format(time.RFC3339)
 	}
 	return path
+}
+
+// drainMargin covers clock skew between runners and GitHub.
+const drainMargin = 10 * time.Minute
+
+// drainWindow reaches back to the start of the last successful Writer run,
+// so a runner that slept for hours, or a run GitHub cancelled in the
+// concurrency queue, loses no request. Zero (every Issue) without one.
+func drainWindow(lastStarted, now time.Time) time.Duration {
+	if lastStarted.IsZero() || lastStarted.After(now) {
+		return 0
+	}
+	return now.Sub(lastStarted) + drainMargin
+}
+
+// lastWriterRun is when the last successful Quipu Writer run started.
+func lastWriterRun(c model.Config) (time.Time, error) {
+	output, err := ghOutput("api", fmt.Sprintf("repos/%s/%s/actions/workflows/quipu-writer.yml/runs?status=success&per_page=1", c.Owner, c.Repository))
+	if err != nil {
+		if strings.Contains(err.Error(), "Not Found") {
+			return time.Time{}, nil
+		}
+		return time.Time{}, err
+	}
+	var runs struct {
+		Runs []struct {
+			Started string `json:"run_started_at"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(output, &runs); err != nil || len(runs.Runs) == 0 {
+		return time.Time{}, err
+	}
+	started, _ := time.Parse(time.RFC3339, runs.Runs[0].Started)
+	return started, nil
 }
 
 // watch is one reconcile pass over one Issue.
