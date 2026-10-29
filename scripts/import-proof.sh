@@ -118,7 +118,7 @@ step "the Writer records the statuses"
 "$quipu" writer reconcile --apply --json | tee "$work/writer.json"
 check '.requests_receipted == 4 and (.errors // [] | length) == 0' "$work/writer.json"
 
-number() { gh issue list --repo "$owner/$repo" --state all --search "\"key=$1\" in:body" --json number --jq '.[0].number'; }
+number() { gh api "repos/$owner/$repo/issues?state=all&per_page=100" --jq ".[] | select(.body // \"\" | contains(\"key=$1 -->\")) | .number"; }
 issue() { gh issue view "$(number "$1")" --repo "$owner/$repo" --json state,stateReason --jq '.state + " " + .stateReason'; }
 board() { gh project item-list "$project_number" --owner "$owner" --format json --jq ".items[] | select(.content.number == $(number "$1")) | .status"; }
 for expected in "STORY-1|CLOSED COMPLETED|Done" "TASK-3|CLOSED NOT_PLANNED|Cancelled" "STORY-2|OPEN |Ready" "TASK-4|OPEN |Ready" "TASK-5|OPEN |Backlog" "EPIC-1|OPEN |Backlog"; do
