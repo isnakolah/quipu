@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 const ConfigVersion = 1
@@ -18,6 +19,9 @@ type Config struct {
 	WriterVersion    string   `yaml:"writer_version" json:"writer_version"`
 	AuthorizedActors []string `yaml:"authorized_actors" json:"authorized_actors"`
 	Policy           Policy   `yaml:"policy" json:"policy"`
+	// ReceiptsTrustedBefore keeps receipts posted before the Writer moved to
+	// its bot identity trusted. Later receipts count only from the bot.
+	ReceiptsTrustedBefore string `yaml:"receipts_trusted_before,omitempty" json:"receipts_trusted_before,omitempty"`
 }
 
 type Project struct {
@@ -58,6 +62,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("authorized actors must be nonempty and unique")
 		}
 		actors[actor] = true
+	}
+	if c.ReceiptsTrustedBefore != "" {
+		if _, err := time.Parse(time.RFC3339, c.ReceiptsTrustedBefore); err != nil {
+			return fmt.Errorf("receipts_trusted_before must be RFC3339")
+		}
 	}
 	seen := map[string]bool{}
 	for _, area := range c.Areas {

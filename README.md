@@ -17,7 +17,16 @@ quipu done N --json --criteria "..." --commands "..." --documentation "..." --ri
                                  # PR merged: record evidence (PR, SHA, CI filled in) and close
 ```
 
-Every result carries a `next` field that says exactly what to do. Agents follow it; people can too, without `--json`.
+Every result carries a `next` field that says exactly what to do. Agents follow it; people can too, without `--json`. The full agent handbook is [AGENTS.md](AGENTS.md) (`quipu guide`); owners read the [owner guide](docs/owner-guide.md).
+
+## Quipu is the only way in
+
+Once a repository uses Quipu, work moves only through it:
+
+- **Agents are guarded.** A hook runs `quipu guard` before every agent tool call. Without a lease an agent can only read and test; with one it can change only its own worktree and branch, push only that branch, and open PRs that say `Refs #N`. Merging, approving, labels, Issue and board edits, and changes to `.git`, the config, workflows, and hooks are denied, each with the command to use instead.
+- **PRs are checked.** The required `policy` check fails any PR that does not implement exactly one leased leaf Issue, or that would close an Issue on merge.
+- **GitHub undoes the rest.** The Writer reopens Issues closed outside the flow, restores hand-edited board fields from its receipts, flags Issues created outside the flow, and only trusts receipts its own workflow posted.
+- **`main` is protected.** `quipu protect` requires the checks, blocks direct and force pushes, and allows only `NNN/slug` branches.
 
 - **Races are safe.** The Writer serializes every change. When two agents claim the same item, one wins, and `--next` moves the other on to the next item.
 - **Long work keeps its lease.** Leases last two hours; rerunning `quipu start N` renews one that has less than 30 minutes left.
@@ -66,13 +75,13 @@ GOBIN="$HOME/.local/bin" go install ./cmd/quipu
 quipu doctor
 ```
 
-Install the Claude or Codex plugin from `plugins/`, then review and explicitly trust its hooks.
+Every Quipu repository commits its guard hooks (`.claude/settings.json`, `.codex/hooks.json`; `quipu hooks --apply` writes them). Approve them once in Claude Code and Codex, and optionally install the plugin from `plugins/` for session hints. See [source install](docs/source-install.md).
 
 ## Operating contract
 
 GitHub is authority. No local `plan/`, `tasks/`, roadmap, or TODO ledger. Every live non-Epic Issue has native parent. Every implementation branch and PR maps to one leaf Issue. Project `Status` is only mutable workflow state; status labels forbidden. Writer serializes mutations. Evidence receipt, not merged PR, closes work.
 
-Read [operations guide](docs/operations.md), [source install and recovery](docs/source-install.md), [architecture](docs/architecture.md), and GitHub Project before work.
+Read the [agent handbook](AGENTS.md), [owner guide](docs/owner-guide.md), [operations guide](docs/operations.md), [source install](docs/source-install.md), and [architecture](docs/architecture.md).
 
 ## Development
 
@@ -81,9 +90,10 @@ go test ./...
 go vet ./...
 go build ./cmd/quipu
 scripts/check-plugins.sh
+go run ./cmd/quipu guide --sync   # after changing internal/guide/agent.md or the guard/error tables
 ```
 
-Plugins live under `plugins/codex` and `plugins/claude`. Hooks guard common paths only; Writer, CI, and protected branches enforce policy.
+Plugins live under `plugins/codex` and `plugins/claude`. AGENTS.md, CLAUDE.md, `.agent/rules/quipu.md`, and both plugin skills are generated from `internal/guide/agent.md`; `TestGuidesInSync` fails when they drift.
 
 Projects started before the rename from `gfd` keep working: Quipu still reads the old `gfd-request`/`gfd-receipt`/`gfd-journal` comment markers, and new records use `quipu-*`.
 

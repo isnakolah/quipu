@@ -337,6 +337,7 @@ func startCommand(args []string) error {
 	o.Branch = ""
 	// Several agents may race for the same top item; the Writer accepts one
 	// claim and rejects the rest, so a rejected claim moves on to the next.
+	lost := 0
 	for i, item := range ready {
 		if i == 3 {
 			break
@@ -348,9 +349,13 @@ func startCommand(args []string) error {
 		if !errors.Is(err, errRejected) {
 			return err
 		}
+		lost++
 		fmt.Fprintf(os.Stderr, "#%d taken (%v); trying next\n", item.Number, err)
 	}
-	return printFlowResult(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Ask the owner to make work Ready, or run quipu status."}, *asJSON)
+	if lost > 0 {
+		return printFlowResult(flowResult{Status: "Busy", Next: fmt.Sprintf("Other agents took the top %d Ready items first. Rerun quipu start --next --json.", lost)}, *asJSON)
+	}
+	return printFlowResult(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Report that and stop; the owner makes work Ready. quipu status --json shows the board."}, *asJSON)
 }
 
 // nextWork orders pick-up candidates by priority, then Issue number.
@@ -425,10 +430,10 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		}
 	}
 	if state.Status != "In progress" && state.Status != "In review" {
-		return flowResult{}, fmt.Errorf("#%d is %q; only Ready work can be started", number, state.Status)
+		return flowResult{}, flowErr("not-ready", "#%d is %q; only Ready work can be started", number, state.Status)
 	}
 	if state.Holder != actor {
-		return flowResult{}, fmt.Errorf("#%d is held by %q, not %q", number, state.Holder, actor)
+		return flowResult{}, flowErr("held-by", "#%d is held by %q on %s, not by this worktree (%q)", number, state.Holder, state.Branch, actor)
 	}
 	if expiry, err := time.Parse(time.RFC3339, state.Expiry); err == nil && time.Until(expiry) < renewWithin {
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "renew"}, wait); err != nil {
@@ -565,10 +570,10 @@ func doneCommand(args []string) error {
 	}
 	if state.Status == "Claimed" || state.Status == "In progress" {
 		if pull.State == "MERGED" {
-			return fmt.Errorf("PR %s merged before review was recorded; link an open PR or ask an owner to recover #%d", pull.URL, number)
+			return flowErr("pr-merged-early", "PR %s merged before #%d was moved to review", pull.URL, number)
 		}
 		if pull.State != "OPEN" {
-			return fmt.Errorf("PR %s is %s; reopen it or open a new one", pull.URL, pull.State)
+			return flowErr("pr-closed", "PR %s is %s", pull.URL, pull.State)
 		}
 		if state.Status == "Claimed" {
 			if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, *wait); err != nil {
@@ -583,8 +588,11 @@ func doneCommand(args []string) error {
 		}
 	}
 	if state.Status == "In review" {
+		if pull.State == "CLOSED" {
+			return flowErr("pr-closed", "PR %s was closed without merging", pull.URL)
+		}
 		if pull.State != "MERGED" {
-			return printFlowResult(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("Wait for review and merge of %s; address review comments on %s. After merge, run: quipu done %d --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number)}, *asJSON)
+			return printFlowResult(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("The owner reviews and merges %s; never merge it yourself. Address review comments by pushing to %s (rerun quipu start %d first if the guard reports the lease). After the merge, run: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number, number)}, *asJSON)
 		}
 		e.FinalSHA = pull.MergeCommit
 		if e.CIURL == "" {
@@ -601,7 +609,7 @@ func doneCommand(args []string) error {
 		}
 	}
 	if state.Status != "Evidence pending" {
-		return fmt.Errorf("#%d is %q; done applies to work In progress, In review, or Verifying", number, state.Status)
+		return flowErr("not-active", "#%d is %q; done applies to work In progress, In review, or Evidence pending", number, state.Status)
 	}
 	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: "Done"}, *wait); err != nil {
 		return err
@@ -616,6 +624,107 @@ func doneCommand(args []string) error {
 	return printFlowResult(result, *asJSON)
 }
 
+// ---- quipu propose / quipu ready ----
+
+// proposeCommand is how an agent suggests new work: a marked comment on the
+// parent Issue for the owner, never an Issue of its own.
+func proposeCommand(args []string) error {
+	fs := flag.NewFlagSet("propose", flag.ContinueOnError)
+	parent := fs.Int("parent", 0, "Issue the proposal belongs under (an Epic or Story)")
+	title := fs.String("title", "", "proposed work title")
+	body := fs.String("body", "", "why, scope, and acceptance criteria")
+	bodyFile := fs.String("body-file", "", "file with the proposal body")
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *bodyFile != "" {
+		raw, err := os.ReadFile(*bodyFile)
+		if err != nil {
+			return err
+		}
+		*body = string(raw)
+	}
+	if *parent < 1 || strings.TrimSpace(*title) == "" || strings.TrimSpace(*body) == "" {
+		return errors.New("usage: quipu propose --parent N --title TEXT (--body TEXT | --body-file FILE) [--json]")
+	}
+	if strings.Contains(*body, "quipu-request") || strings.Contains(*body, "quipu-receipt") {
+		return errors.New("a proposal cannot contain Quipu request or receipt markers")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	here, err := currentWorktree()
+	if err != nil {
+		return err
+	}
+	actor, err := resolveActor(here, "", 0)
+	if err != nil {
+		return err
+	}
+	comment := fmt.Sprintf("<!-- quipu-proposal:v1 -->\n**Proposed work:** %s\n\n_Proposed by %s. The owner decides whether it becomes an Issue._\n\n%s\n", strings.TrimSpace(*title), actor, strings.TrimSpace(*body))
+	if _, err := github.NewClient().CreateComment(context.Background(), c.Owner, c.Repository, *parent, comment); err != nil {
+		return err
+	}
+	return printFlowResult(flowResult{Issue: *parent, Status: "Proposed", Next: "The owner decides. Continue your current work, or run quipu start --next --json."}, *asJSON)
+}
+
+// ownerMoves are the board moves the owner makes through the Writer, so the
+// board never needs hand edits. Claims, starts, and completion stay with
+// `quipu start` and `quipu done`.
+var ownerMoves = map[string]string{"backlog": "Backlog", "ready": "Ready", "blocked": "Blocked", "archived": "Archived"}
+
+// readyCommand is `quipu ready N`, the everyday owner move.
+func readyCommand(args []string) error { return moveTo("ready", "Ready", args) }
+
+// moveCommand is `quipu move N STATUS` for the other owner moves.
+func moveCommand(args []string) error {
+	var status string
+	rest := args[:0:0]
+	for _, arg := range args {
+		if name, ok := ownerMoves[strings.ToLower(arg)]; ok && status == "" {
+			status = name
+			continue
+		}
+		rest = append(rest, arg)
+	}
+	if status == "" {
+		return errors.New("usage: quipu move N backlog|ready|blocked|archived [--json]  (owner only)")
+	}
+	return moveTo("move", status, rest)
+}
+
+func moveTo(name, status string, args []string) error {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for the Writer receipt")
+	asJSON := jsonFlag(fs)
+	number, err := parseIssueArg(fs, args, false)
+	if err != nil {
+		return fmt.Errorf("usage: quipu %s N [--json]  (owner only): %w", name, err)
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	here, err := currentWorktree()
+	if err != nil {
+		return err
+	}
+	actor, err := resolveActor(here, "", number)
+	if err != nil {
+		return err
+	}
+	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: status}, *wait); err != nil {
+		return err
+	}
+	next := fmt.Sprintf("#%d is %s.", number, status)
+	if status == "Ready" {
+		next = fmt.Sprintf("Agents can now take #%d with quipu start --next --json.", number)
+	}
+	return printFlowResult(flowResult{Issue: number, Status: status, Next: next}, *asJSON)
+}
+
 type pullRequest struct {
 	URL, State, MergeCommit, CIURL string
 }
@@ -624,7 +733,7 @@ func findPullRequest(c model.Config, explicit, branch string) (pullRequest, erro
 	target := explicit
 	if target == "" {
 		if branch == "" {
-			return pullRequest{}, errors.New("work has no branch; pass --pr URL")
+			return pullRequest{}, flowErr("pr-missing", "the work has no branch; pass --pr URL")
 		}
 		output, err := ghOutput("pr", "list", "--repo", c.Owner+"/"+c.Repository, "--head", branch, "--state", "all", "--json", "url,state", "--limit", "5")
 		if err != nil {
@@ -636,7 +745,7 @@ func findPullRequest(c model.Config, explicit, branch string) (pullRequest, erro
 		}
 		target = pickPullRequest(pulls)
 		if target == "" {
-			return pullRequest{}, fmt.Errorf("no PR found from branch %s; push it and open a PR first", branch)
+			return pullRequest{}, flowErr("pr-missing", "no PR found from branch %s", branch)
 		}
 	}
 	output, err := ghOutput("pr", "view", target, "--repo", c.Owner+"/"+c.Repository, "--json", "url,state,mergeCommit,statusCheckRollup")
@@ -679,13 +788,14 @@ type prCheck struct {
 	DetailsURL string `json:"detailsUrl"`
 }
 
-// passingCIURL returns a successful check run URL only when no check failed.
+// passingCIURL returns a successful check run URL only when no check failed,
+// preferring the test check: the Writer accepts only a run on this PR.
 func passingCIURL(checks []prCheck) string {
 	url := ""
 	for _, check := range checks {
 		switch check.Conclusion {
 		case "SUCCESS", "NEUTRAL", "SKIPPED":
-			if url == "" && check.Conclusion == "SUCCESS" {
+			if check.Conclusion == "SUCCESS" && (url == "" || check.Name == "test") {
 				url = check.DetailsURL
 			}
 		default:
@@ -728,7 +838,7 @@ func promptMissingEvidence(e *writer.Evidence, in io.Reader, out io.Writer) erro
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("evidence incomplete: %s", strings.Join(missing, "; "))
+		return flowErr("evidence-missing", "evidence incomplete: %s", strings.Join(missing, "; "))
 	}
 	return e.Validate()
 }
@@ -849,23 +959,27 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 		if err != nil {
 			return err
 		}
-		if receipt, ok := receiptFor(comments, r.ID); ok {
+		if receipt, ok := receiptFor(receiptTrust(c).Receipts(comments), r.ID); ok {
 			if receipt.Result != "accepted" {
-				return fmt.Errorf("#%d %s %w: %s", number, r.Action, errRejected, receipt.Detail)
+				e := flowErr(rejectionCode(receipt.Detail), "#%d %s rejected by the Writer: %s", number, r.Action, receipt.Detail)
+				e.cause = errRejected
+				return e
 			}
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("#%d %s request %s %w after %s; check the Quipu Writer workflow, then rerun", number, r.Action, r.ID, errNoReceipt, wait)
+			e := flowErr("no-receipt", "#%d %s request %s has no Writer receipt after %s", number, r.Action, r.ID, wait)
+			e.cause = errNoReceipt
+			return e
 		}
 		time.Sleep(5 * time.Second)
 	}
 }
 
-func receiptFor(comments []github.Comment, requestID string) (writer.Receipt, bool) {
-	for _, comment := range comments {
-		receipt, err := writer.ParseReceipt(comment.Body)
-		if err == nil && receipt.RequestID == requestID {
+// receiptFor finds the receipt for requestID among trusted receipts.
+func receiptFor(receipts []writer.Receipt, requestID string) (writer.Receipt, bool) {
+	for _, receipt := range receipts {
+		if receipt.RequestID == requestID {
 			return receipt, true
 		}
 	}

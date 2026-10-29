@@ -23,3 +23,6 @@ authorized_actors: [isnakolah]
 policy:
   lease_ttl_minutes: 120
   reconcile_minutes: 5
+# Receipts before this moment were posted with the Writer token; later ones
+# count only when the Writer bot (github-actions[bot]) posted them.
+receipts_trusted_before: "2026-10-29T15:08:21Z"

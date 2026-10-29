@@ -1,20 +1,22 @@
 #!/bin/sh
-# Session start: name the agent provider and show the board and this worktree's lease.
-# Stop: remind the agent of work it still holds.
+# SessionStart: name this agent, show the board, and give the one next
+# command for this worktree. Stop: remind the agent of work it still holds.
 set -eu
 [ -t 0 ] || cat >/dev/null
 if ! command -v quipu >/dev/null 2>&1; then
-  printf '%s\n' 'quipu missing: source install required'
+  printf '%s\n' 'quipu is not installed, so the guard denies every change in Quipu repositories. Ask the owner to install it (docs/source-install.md).'
   exit 0
 fi
 git_dir=$(git rev-parse --git-dir 2>/dev/null || true)
-lease=""
+issue="" branch=""
 if [ -n "$git_dir" ] && [ -f "$git_dir/quipu-lease" ]; then
   lease=$(cat "$git_dir/quipu-lease")
+  issue=$(printf '%s' "$lease" | sed -n 's/.*"issue":\([0-9][0-9]*\).*/\1/p')
+  branch=$(printf '%s' "$lease" | sed -n 's/.*"branch":"\([^"]*\)".*/\1/p')
 fi
 if [ "${1:-}" = "--stop" ]; then
-  if [ -n "$lease" ]; then
-    printf '%s\n' "quipu lease still held: $lease. Finish with 'quipu done N', or rerun 'quipu start N' to renew."
+  if [ -n "$issue" ]; then
+    printf '%s\n' "This worktree still holds #$issue on $branch. If the work is unfinished, keep going; when the PR is ready, run: quipu done $issue --json"
   fi
   exit 0
 fi
@@ -24,14 +26,10 @@ fi
 if [ -z "${QUIPU_AGENT:-}" ]; then
   QUIPU_AGENT=codex
   export QUIPU_AGENT
-  # Claude Code persists variables written here for later Bash commands.
-  if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-    printf 'export QUIPU_AGENT=%s\n' "$QUIPU_AGENT" >> "$CLAUDE_ENV_FILE"
-  fi
 fi
 quipu status 2>/dev/null || true
-if [ -n "$lease" ]; then
-  printf '%s\n' "Resuming lease: $lease"
-elif [ -z "${QUIPU_LEASE_ISSUE:-}" ]; then
-  printf '%s\n' "No active lease in this worktree: run 'quipu start --next' (or 'quipu start N') before editing, or 'quipu start --next --worktree' to dispatch work into a new worktree."
+if [ -n "$issue" ]; then
+  printf '%s\n' "This worktree holds #$issue on $branch. Resume it: quipu start $issue --json"
+else
+  printf '%s\n' "This worktree holds no work, so edits are denied. Take work: quipu start --next --json. Rules: quipu guide"
 fi

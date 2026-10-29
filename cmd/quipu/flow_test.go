@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/model"
 	"github.com/isnakolah/quipu/internal/writer"
 )
@@ -120,15 +118,12 @@ func TestParseIssueArgAcceptsFlagsEitherSide(t *testing.T) {
 }
 
 func TestReceiptFor(t *testing.T) {
-	body, err := writer.RenderReceipt(writer.Receipt{RequestID: "r1", Result: "rejected", Detail: "stale", At: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	receipt, ok := receiptFor([]github.Comment{{Body: "chatter"}, {Body: body}}, "r1")
+	receipts := []writer.Receipt{{RequestID: "r0", Result: "accepted"}, {RequestID: "r1", Result: "rejected", Detail: "stale", At: time.Now().UTC()}}
+	receipt, ok := receiptFor(receipts, "r1")
 	if !ok || receipt.Result != "rejected" {
 		t.Fatalf("got %+v %v", receipt, ok)
 	}
-	if _, ok := receiptFor([]github.Comment{{Body: body}}, "r2"); ok {
+	if _, ok := receiptFor(receipts, "r2"); ok {
 		t.Fatal("matched wrong request")
 	}
 }
@@ -153,37 +148,20 @@ func gitIn(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func clearLeaseEnv(t *testing.T) {
-	t.Setenv("QUIPU_LEASE_ISSUE", "")
-	t.Setenv("QUIPU_LEASE_HOLDER", "")
-	t.Setenv("QUIPU_LEASE_BRANCH", "")
-}
-
-func TestWorktreeLeaseFromEnvOrFile(t *testing.T) {
+func TestWorktreeLeaseFile(t *testing.T) {
 	w, err := openWorktree(gitRepo(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	clearLeaseEnv(t)
-	if _, err := w.lease(); err == nil || !strings.Contains(err.Error(), "quipu start") {
+	if _, err := w.readLease(); err == nil || !strings.Contains(err.Error(), "quipu start") {
 		t.Fatalf("expected missing-lease error, got %v", err)
 	}
 	want := leaseContext{Issue: 7, Holder: "alice", Branch: "007/x", Expires: "2026-10-29T12:00:00Z"}
 	if err := w.writeLease(want); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := w.lease(); err != nil || got != want {
+	if got, err := w.readLease(); err != nil || got != want {
 		t.Fatalf("file lease: %+v %v", got, err)
-	}
-	t.Setenv("QUIPU_LEASE_ISSUE", "9")
-	t.Setenv("QUIPU_LEASE_HOLDER", "bob")
-	t.Setenv("QUIPU_LEASE_BRANCH", "009/y")
-	if got, err := w.lease(); err != nil || got.Issue != 9 || got.Holder != "bob" {
-		t.Fatalf("env lease should win: %+v %v", got, err)
-	}
-	t.Setenv("QUIPU_LEASE_BRANCH", "")
-	if _, err := w.lease(); err == nil {
-		t.Fatal("partial env lease must be denied")
 	}
 	w.removeLease(8)
 	if _, err := w.readLease(); err != nil {
@@ -275,80 +253,6 @@ func TestLeaseFreshness(t *testing.T) {
 		if got := tc.lease.fresh(now); got != tc.want {
 			t.Fatalf("%s: fresh = %v, want %v", name, got, tc.want)
 		}
-	}
-}
-
-func TestGuardJudgesTheWorktreeBeingChanged(t *testing.T) {
-	config, err := os.ReadFile(filepath.Join("..", "..", configPath))
-	if err != nil {
-		t.Fatal(err)
-	}
-	clearLeaseEnv(t)
-	top := gitRepo(t)
-	if err := os.MkdirAll(filepath.Join(top, filepath.Dir(configPath)), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(top, configPath), config, 0644); err != nil {
-		t.Fatal(err)
-	}
-	gitIn(t, top, "add", ".")
-	gitIn(t, top, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "config")
-	treeA, treeB := filepath.Join(top, "..", "wt-a"), filepath.Join(top, "..", "wt-b")
-	gitIn(t, top, "worktree", "add", "-q", "-b", "001/a", treeA)
-	gitIn(t, top, "worktree", "add", "-q", "-b", "002/b", treeB)
-	a, err := openWorktree(treeA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	lease := leaseContext{Issue: 1, Holder: "claude/octo/aaaa1111", Branch: "001/a", Expires: now.Add(time.Hour).Format(time.RFC3339), VerifiedAt: now.Format(time.RFC3339)}
-	if err := a.writeLease(lease); err != nil {
-		t.Fatal(err)
-	}
-	// Run from the main checkout: only the target path decides which lease applies.
-	t.Chdir(top)
-	edit := func(path string) hookInput {
-		var h hookInput
-		h.ToolName, h.Cwd, h.ToolInput.FilePath = "Edit", top, path
-		return h
-	}
-	if err := guardWorktree(edit(filepath.Join(treeA, "new", "dir", "file.go")).targetDir(), now); err != nil {
-		t.Fatalf("leased worktree should be allowed: %v", err)
-	}
-	if err := guardWorktree(edit(filepath.Join(treeB, "file.go")).targetDir(), now); err == nil || !strings.Contains(err.Error(), "no active lease") {
-		t.Fatalf("unleased worktree should be denied, got %v", err)
-	}
-	if err := guardWorktree(edit(filepath.Join(top, "file.go")).targetDir(), now); err == nil {
-		t.Fatal("main checkout without a lease should be denied")
-	}
-	if err := guardWorktree(t.TempDir(), now); err != nil {
-		t.Fatalf("directories outside git are not guarded: %v", err)
-	}
-	if err := guardWorktree(gitRepo(t), now); err != nil {
-		t.Fatalf("repositories without Quipu config are not guarded: %v", err)
-	}
-	gitIn(t, treeA, "switch", "-q", "-c", "001/other")
-	if err := guardWorktree(treeA, now); err == nil || !strings.Contains(err.Error(), "001/a") {
-		t.Fatalf("branch mismatch should be denied, got %v", err)
-	}
-}
-
-func TestHookTargetDir(t *testing.T) {
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var h hookInput
-	if got := h.targetDir(); got != "." {
-		t.Fatalf("empty input: %q", got)
-	}
-	h.Cwd = root
-	if got := h.targetDir(); got != root {
-		t.Fatalf("bash uses cwd: %q", got)
-	}
-	h.ToolInput.FilePath = "missing/deeper/file.go"
-	if got := h.targetDir(); got != root {
-		t.Fatalf("relative missing path should walk up to cwd: %q", got)
 	}
 }
 

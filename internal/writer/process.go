@@ -17,10 +17,12 @@ type PendingRequest struct {
 	Author    string
 }
 
-func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
+// Pending returns the requests without a trusted receipt, and receipts for
+// requests that are malformed, edited, or posted under someone else's name.
+func Pending(comments []gh.Comment, trust Trust) ([]PendingRequest, []Receipt) {
 	receipted := make(map[string]bool)
 	for _, comment := range comments {
-		if HasReceiptMarker(comment.Body) {
+		if HasReceiptMarker(comment.Body) && trust.Trusted(comment) {
 			for _, id := range receiptRequestIDs(comment.Body) {
 				receipted[id] = true
 			}
