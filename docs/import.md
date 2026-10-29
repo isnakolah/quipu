@@ -32,6 +32,8 @@ Done receipts carry historical evidence: the commits as the final SHA, the sourc
 
 Every Issue body ends with `<!-- quipu-import:v1 key=KEY -->`. A second run matches Issues by that key and creates nothing twice. It only repairs what is missing: an Issue not on the Project, a parent or blocker link, or a status request that was never posted or was rejected. Fix a rejected request's cause, then run it again.
 
+A large manifest makes several GitHub calls per item. If GitHub's rate limit stops the import partway (`API rate limit already exceeded`), wait for the limit to reset (`gh api rate_limit`) and run the same command again; it picks up where it stopped.
+
 Changing an item's title, body, or status in the manifest after it was imported does nothing; change the Issue through the normal flow instead.
 
 ## Manifest schema
