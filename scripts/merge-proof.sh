@@ -12,6 +12,7 @@ set -euo pipefail
 
 owner=${QUIPU_PROOF_OWNER:-$(gh api user --jq .login)}
 repo="quipu-merge-proof-$(date +%s)"
+visibility=${QUIPU_PROOF_VISIBILITY:-private} # private Actions need billing; public is free
 source_dir=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 project_number=""
@@ -22,6 +23,10 @@ cleanup() {
   [ -z "$writer_pid" ] || kill "$writer_pid" 2>/dev/null || true
   if [ -n "$project_number" ]; then
     gh project delete "$project_number" --owner "$owner" >/dev/null 2>&1 || true
+  fi
+  if [ "$status" -ne 0 ] && [ -n "${QUIPU_PROOF_KEEP:-}" ]; then
+    printf '%s\n' "kept $owner/$repo and Project $project_number for inspection" >&2
+    rm -rf "$work"; exit "$status"
   fi
   gh repo delete "$owner/$repo" --yes >/dev/null 2>&1 || printf '%s\n' "cleanup blocked; delete $owner/$repo by hand" >&2
   rm -rf "$work"
@@ -42,8 +47,8 @@ quipu=${QUIPU_BIN:-$work/quipu}
 [ -n "${QUIPU_BIN:-}" ] || (cd "$source_dir" && go build -o "$quipu" ./cmd/quipu)
 pin=${QUIPU_PIN:-$(git -C "$source_dir" rev-parse HEAD)}
 
-step "adopted private repository $owner/$repo with merge: agent and commit_format: issue-prefix"
-gh repo create "$owner/$repo" --private --add-readme >/dev/null
+step "adopted $visibility repository $owner/$repo with merge: agent and commit_format: issue-prefix"
+gh repo create "$owner/$repo" "--$visibility" --add-readme >/dev/null
 gh repo clone "$owner/$repo" "$work/repo" -- -q
 cd "$work/repo"
 project_number=$(gh project create --owner "$owner" --title "$repo" --format json --jq .number)
