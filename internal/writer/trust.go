@@ -113,7 +113,7 @@ func Closed(receipts []Receipt) bool {
 			continue
 		}
 		if r.State != nil {
-			return r.State.Status == "Done" || r.State.Status == "Cancelled"
+			return r.State.Status == "Done" || r.State.Status == "Cancelled" || r.State.Status == "Archived"
 		}
 		if strings.Contains(r.Detail, "Done and Issue closed") {
 			return true

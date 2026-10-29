@@ -1,31 +1,27 @@
 name: Work
-description: Story, Contract, Task, Gate, or Defect.
+description: Story, Contract, Task, Gate, or Defect with Quipu work contract.
 title: "US- — "
 body:
-  - type: textarea
-    id: contract
+  - type: markdown
     attributes:
-      label: Work contract
       value: |
         <!-- work:v1 -->
         ## Outcome
-
         ## Scope
         Includes:
         -
         Excludes:
         -
-
         ## Acceptance criteria
         - [ ]
-
         ## Required evidence
         -
         - Verification boundary: local | CI | target host | provider | staging | production | release
-
         ## Documentation impact
-        None: specific reason
-
+        None: explain specific reason
         ## Source and relationships
         - Native parent and blocker links are authoritative.
+  - type: textarea
+    id: contract
+    attributes: {label: Work contract, description: "Copy exact contract above. Add native parent after creation."}
     validations: {required: true}

@@ -194,7 +194,8 @@ func retryPendingWikiJournals(c model.Config, number int, receipts []writer.Rece
 }
 
 // validateReviewPR accepts only an open PR into the default branch, from the
-// leased branch, that references this Issue.
+// leased branch, that references this Issue. A merged one is accepted too, so
+// the owner can recover work whose PR merged before it reached review.
 func validateReviewPR(c model.Config, number int, branch, pr string) error {
 	if pr == "" {
 		return errors.New("PR link requires pull request URL")
@@ -203,8 +204,8 @@ func validateReviewPR(c model.Config, number int, branch, pr string) error {
 	if err != nil {
 		return err
 	}
-	if view.URL != pr || view.State != "OPEN" {
-		return errors.New("PR link requires an open canonical pull request URL")
+	if view.URL != pr || (view.State != "OPEN" && view.State != "MERGED") {
+		return errors.New("PR link requires an open or merged canonical pull request URL")
 	}
 	return checkPRWork(c, number, branch, view)
 }

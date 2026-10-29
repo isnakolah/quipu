@@ -90,8 +90,12 @@ func TestApplyLifecycleInitialBacklogStatus(t *testing.T) {
 	if err != nil || state.Status != "Backlog" {
 		t.Fatalf("state=%+v err=%v", state, err)
 	}
-	if _, err := ApplyLifecycle(WorkState{Status: "Ready"}, Request{Action: "status", Status: "Backlog"}, time.Now()); err == nil {
-		t.Fatal("expected backwards status rejection")
+	// The owner may send unstarted work back to Backlog, never work underway.
+	if state, err := ApplyLifecycle(WorkState{Status: "Ready"}, Request{Action: "status", Status: "Backlog"}, time.Now()); err != nil || state.Status != "Backlog" {
+		t.Fatalf("Ready -> Backlog: state=%+v err=%v", state, err)
+	}
+	if _, err := ApplyLifecycle(WorkState{Status: "In progress"}, Request{Action: "status", Status: "Backlog"}, time.Now()); err == nil {
+		t.Fatal("expected In progress -> Backlog rejection")
 	}
 }
 

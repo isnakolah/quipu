@@ -84,6 +84,11 @@ func printError(err error, args []string, stdout, stderr io.Writer) {
 	if errors.Is(err, errReported) {
 		return
 	}
+	if d := (denial{}); errors.As(err, &d) {
+		// Agents read this line as the hook's reason; keep it exactly as documented.
+		fmt.Fprintln(stderr, d.Error())
+		return
+	}
 	if !wantsJSON(args) {
 		fmt.Fprintln(stderr, "quipu:", err)
 		return

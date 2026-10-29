@@ -1,10 +1,11 @@
 name: Epic
-description: Owner-approved outcome. Never implementation leaf.
+description: Owner-approved long-lived outcome. Never implementation leaf.
 title: "EPIC — "
 labels: ["kind:epic"]
 body:
   - type: markdown
-    attributes: {value: "Owner approval required before Ready. Epic never carries implementation branch."}
+    attributes:
+      value: "Owner approval required before Ready. Epic never carries implementation branch."
   - type: textarea
     id: outcome
     attributes: {label: Outcome}
@@ -27,5 +28,5 @@ body:
     validations: {required: true}
   - type: input
     id: approval
-    attributes: {label: Owner approval}
+    attributes: {label: Owner approval, placeholder: "@owner approval comment URL"}
     validations: {required: true}

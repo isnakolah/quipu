@@ -824,6 +824,9 @@ var quipuAgentCommands = setOf("status", "start", "done", "doctor", "context", "
 	"help", "-h", "--help", "propose", "guard", "policy")
 
 func (g *guard) quipu(rest []shellArg) error {
+	if len(rest) > 0 && rest[0].s == "guide" && hasFlag(rest, "--sync") {
+		return deny("quipu-admin", "quipu guide --sync")
+	}
 	if len(rest) == 0 || quipuAgentCommands[rest[0].s] {
 		return nil
 	}

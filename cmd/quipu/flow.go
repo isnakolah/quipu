@@ -670,15 +670,38 @@ func proposeCommand(args []string) error {
 	return printFlowResult(flowResult{Issue: *parent, Status: "Proposed", Next: "The owner decides. Continue your current work, or run quipu start --next --json."}, *asJSON)
 }
 
-// readyCommand is the owner's way to make Backlog work Ready through the
-// Writer, so the board never needs hand edits.
-func readyCommand(args []string) error {
-	fs := flag.NewFlagSet("ready", flag.ContinueOnError)
+// ownerMoves are the board moves the owner makes through the Writer, so the
+// board never needs hand edits. Claims, starts, and completion stay with
+// `quipu start` and `quipu done`.
+var ownerMoves = map[string]string{"backlog": "Backlog", "ready": "Ready", "blocked": "Blocked", "archived": "Archived"}
+
+// readyCommand is `quipu ready N`, the everyday owner move.
+func readyCommand(args []string) error { return moveTo("ready", "Ready", args) }
+
+// moveCommand is `quipu move N STATUS` for the other owner moves.
+func moveCommand(args []string) error {
+	var status string
+	rest := args[:0:0]
+	for _, arg := range args {
+		if name, ok := ownerMoves[strings.ToLower(arg)]; ok && status == "" {
+			status = name
+			continue
+		}
+		rest = append(rest, arg)
+	}
+	if status == "" {
+		return errors.New("usage: quipu move N backlog|ready|blocked|archived [--json]  (owner only)")
+	}
+	return moveTo("move", status, rest)
+}
+
+func moveTo(name, status string, args []string) error {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for the Writer receipt")
 	asJSON := jsonFlag(fs)
 	number, err := parseIssueArg(fs, args, false)
 	if err != nil {
-		return errors.New("usage: quipu ready N [--json]  (owner only)")
+		return fmt.Errorf("usage: quipu %s N [--json]  (owner only): %w", name, err)
 	}
 	c, err := loadConfig()
 	if err != nil {
@@ -692,10 +715,14 @@ func readyCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: "Ready"}, *wait); err != nil {
+	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: status}, *wait); err != nil {
 		return err
 	}
-	return printFlowResult(flowResult{Issue: number, Status: "Ready", Next: fmt.Sprintf("Agents can now take #%d with quipu start --next --json.", number)}, *asJSON)
+	next := fmt.Sprintf("#%d is %s.", number, status)
+	if status == "Ready" {
+		next = fmt.Sprintf("Agents can now take #%d with quipu start --next --json.", number)
+	}
+	return printFlowResult(flowResult{Issue: number, Status: status, Next: next}, *asJSON)
 }
 
 type pullRequest struct {

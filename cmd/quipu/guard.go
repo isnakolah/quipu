@@ -47,6 +47,7 @@ var guardRules = []guardRule{
 	{"github-write", "GitHub state changes go through the Quipu Writer", "use `quipu start`, `quipu done`, or `quipu propose`; read with gh view/list commands"},
 	{"pr-body", "a PR must be created from the leased branch with a body saying exactly `Refs #N` for the leased Issue and no closing keywords", "run `gh pr create --base <default> --head <leased branch> --title ... --body \"Refs #N ...\"`"},
 	{"quipu-admin", "Quipu recovery and admin commands are owner-only", "use `quipu start`, `quipu done`, or `quipu propose`; ask the owner for recovery"},
+	{"quipu-missing", "quipu is not installed, so no call can be checked", "ask the owner to install quipu (docs/source-install.md in the Quipu repository)"},
 	{"unparsable", "the guard could not tell what this command does", "rewrite it as plain commands without eval, variables as command names, or computed paths"},
 }
 

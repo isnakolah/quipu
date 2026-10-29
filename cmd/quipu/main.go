@@ -56,6 +56,8 @@ func run(args []string) error {
 		return proposeCommand(args[1:])
 	case "ready":
 		return readyCommand(args[1:])
+	case "move":
+		return moveCommand(args[1:])
 	case "protect":
 		return protectCommand(args[1:])
 	case "init":
@@ -90,6 +92,8 @@ func run(args []string) error {
 		return guardCommand(args[1:])
 	case "hooks":
 		return hooksCommand(args[1:])
+	case "guide":
+		return guideCommand(args[1:])
 	default:
 		return usage()
 	}
@@ -408,8 +412,13 @@ func adoptCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	guides, err := syncGuides(".", true)
+	if err != nil {
+		return err
+	}
+	report["guides_written"] = guides
 	report["hooks_written"] = hooks
-	report["next"] = "commit the config and hooks, set the QUIPU_WRITER_TOKEN secret, run `quipu protect --apply`, then `quipu doctor`"
+	report["next"] = "commit the config, hooks, and agent guides, set the QUIPU_WRITER_TOKEN secret, run `quipu protect --apply`, then `quipu doctor`"
 	return printValue(report, *asJSON)
 }
 
@@ -467,6 +476,7 @@ Everyday:
 Setup and advanced:
 Owner:
   ready N    make #N Ready for agents
+  move N S   move #N to backlog, ready, blocked, or archived
   protect    make GitHub enforce the flow (--apply)
   hooks      install the agent guard hooks in this repository (--apply)
 
@@ -529,6 +539,9 @@ func initCommand(args []string) error {
 		return err
 	}
 	if _, err := bootstrap.InstallHooks(".", true); err != nil {
+		return err
+	}
+	if _, err := syncGuides(".", true); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {

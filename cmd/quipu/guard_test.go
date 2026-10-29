@@ -155,6 +155,8 @@ func TestGuardShellCommands(t *testing.T) {
 		{f.a, "sed -i '' s/guard// .codex/hooks.json", "quipu-config"},
 		{f.a, "echo x > .github/workflows/quipu-writer.yml", "quipu-config"},
 		{f.a, "quipu hooks", ""},
+		{f.a, "quipu guide", ""},
+		{f.top, "quipu guide --sync", "quipu-admin"},
 		{f.a, "quipu hooks --apply", "quipu-admin"},
 		{f.a, "gh pr create --base main --head 001/a --title t --body 'Refs #1' --label quipu:owner-approved", "github-write"},
 		{f.a, "gh pr create --title t", "pr-body"},
