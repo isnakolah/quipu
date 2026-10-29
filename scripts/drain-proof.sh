@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Disposable proof for scale and draining: 104 Ready Stories under one Epic
-# (105 Issues, more than one page) are imported, and one
+# Disposable proof for scale and draining: 104 Ready Stories under two Epics
+# (106 Issues, more than one page; GitHub allows 100 sub-issues per parent)
+# are imported, and one
 # `quipu writer reconcile --since-last-run` pass answers every request;
 # status and validate then see all of them.
 # Creates, then deletes, a private repository and a Project.
@@ -42,16 +43,16 @@ project_number=$(gh project create --owner "$owner" --title "$repo" --format jso
 printf '%s\n' 'receipts_trusted_before: "2100-01-01T00:00:00Z"' >>.github/quipu/config.yaml
 
 {
-  printf 'schema: quipu-import/v1\nitems:\n  - key: EPIC\n    kind: epic\n    title: Disposable drain proof\n'
+  printf 'schema: quipu-import/v1\nitems:\n  - key: EPIC-A\n    kind: epic\n    title: Drain proof A\n  - key: EPIC-B\n    kind: epic\n    title: Drain proof B\n'
   for i in $(seq 1 "$stories"); do
-    printf '  - key: S%03d\n    kind: story\n    title: Story %d\n    parent: EPIC\n    status: Ready\n    body: |\n' "$i" "$i"
+    printf '  - key: S%03d\n    kind: story\n    title: Story %d\n    parent: EPIC-%s\n    status: Ready\n    body: |\n' "$i" "$i" "$( [ "$i" -le $((stories / 2)) ] && echo A || echo B)"
     printf '      %s\n' '<!-- work:v1 -->' '## Outcome' 'Proof work.' '## Scope' 'Includes:' '- The proof.' 'Excludes:' '- Everything else.' \
       '## Acceptance criteria' '- [ ] It drains.' '## Required evidence' '- Proof log.' '- Verification boundary: provider' \
       '## Documentation impact' 'None: disposable proof.' '## Source and relationships' '- Native parent and blocker links are authoritative.'
   done
 } >"$work/backlog.yaml"
 
-step "import $stories Ready Stories ($((stories + 1)) Issues)"
+step "import $stories Ready Stories ($((stories + 2)) Issues)"
 start=$(date +%s)
 "$quipu" import --manifest "$work/backlog.yaml" --apply --json >"$work/import.json" || { cat "$work/import.json" >&2; exit 1; }
 jq -e "(.import_requests | length) == $stories" "$work/import.json" >/dev/null
@@ -61,13 +62,13 @@ step "one Writer pass drains every request"
 start=$(date +%s)
 "$quipu" writer reconcile --since-last-run --apply --json | tee "$work/writer.json"
 echo "drained in $(( $(date +%s) - start ))s"
-jq -e ".requests_receipted == $stories and .issues_scanned == $((stories + 1)) and (.errors | length) == 0" "$work/writer.json" >/dev/null
+jq -e ".requests_receipted == $stories and .issues_scanned == $((stories + 2)) and (.errors | length) == 0" "$work/writer.json" >/dev/null
 
 step "status and validate see every Issue"
 "$quipu" status --json >"$work/status.json"
 jq -e "(.ready | length) == $stories" "$work/status.json" >/dev/null && echo "status: $stories Ready"
 "$quipu" validate --json | tee "$work/validate.json"
-jq -e ".valid == true and .open_issues == $((stories + 1))" "$work/validate.json" >/dev/null
+jq -e ".valid == true and .open_issues == $((stories + 2))" "$work/validate.json" >/dev/null
 
 step "a second pass has nothing left"
 "$quipu" writer reconcile --since-last-run --apply --json | jq -e '.requests_receipted == 0' >/dev/null && echo "nothing pending"

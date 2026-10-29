@@ -27,6 +27,9 @@ import (
 
 const importSchema = "quipu-import/v1"
 
+// maxSubIssues is GitHub's limit on sub-issues under one parent.
+const maxSubIssues = 100
+
 type importManifest struct {
 	Schema string       `yaml:"schema"`
 	Source string       `yaml:"source"`
@@ -169,6 +172,17 @@ func (m importManifest) validate(c model.Config) error {
 			if err := model.ValidateWorkContract(item.Body); err != nil {
 				add("%s: open %s needs a work:v1 contract body: %v", at, item.Kind, err)
 			}
+		}
+	}
+	children := map[string]int{}
+	for _, item := range m.Items {
+		if item.Parent != "" {
+			children[item.Parent]++
+		}
+	}
+	for _, item := range m.Items {
+		if n := children[item.Key]; n > maxSubIssues {
+			add("%s: has %d children; GitHub allows %d sub-issues per parent, so split it", item.Key, n, maxSubIssues)
 		}
 	}
 	if _, err := m.ordered(); err != nil {

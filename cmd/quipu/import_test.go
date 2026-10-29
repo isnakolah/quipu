@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,22 @@ func TestManifestDefaultsAndOrder(t *testing.T) {
 	}
 	if ordered[2].Source != "docs/plan.md:10-40" {
 		t.Fatal("an item's own source wins over the manifest's")
+	}
+}
+
+func TestManifestRejectsMoreSubIssuesThanGitHubAllows(t *testing.T) {
+	m := validManifest(t)
+	for i := 0; i < maxSubIssues; i++ {
+		m.Items = append(m.Items, importItem{Key: fmt.Sprintf("S%03d", i), Kind: "task", Title: "Task", Parent: "EPIC-1",
+			Area: "app", Priority: "P2", Status: "Cancelled", Reason: "proof"})
+	}
+	err := m.validate(importConfig())
+	if err == nil || !strings.Contains(err.Error(), "EPIC-1: has 102 children; GitHub allows 100 sub-issues per parent") {
+		t.Fatalf("err = %v", err)
+	}
+	m.Items = m.Items[:len(m.Items)-2]
+	if err := m.validate(importConfig()); err != nil {
+		t.Fatalf("exactly %d children is allowed: %v", maxSubIssues, err)
 	}
 }
 

@@ -12,7 +12,7 @@ gh workflow run quipu-writer.yml                            # or wait for the Wr
 
 1. **Validates the whole manifest** and lists every problem at once. Nothing is created until it is valid.
 2. **Creates each Issue**, parents before children, with its `kind:` and `area:` labels, adds it to the Project with Kind, Area, Priority, Proof, and Status Backlog, and records Epic approval.
-3. **Links native parents and blockers.**
+3. **Links native parents and blockers.** GitHub allows 100 sub-issues per parent, so validation rejects a manifest that puts more under one item.
 4. **Asks the Writer to record every status beyond Backlog** with an `import` request. The Writer applies it once, to an Issue that has not entered the flow yet, and posts a receipt:
 
 | Manifest status | Board after the Writer | Issue |
