@@ -83,11 +83,46 @@ func run(args []string) error {
 	}
 }
 
+// hookInput is the PreToolUse payload from Claude Code or Codex. The guard
+// judges the worktree the tool acts in, not the process's own directory, so
+// agents editing in parallel worktrees are each checked against their lease.
 type hookInput struct {
 	ToolName  string `json:"tool_name"`
+	Cwd       string `json:"cwd"`
 	ToolInput struct {
-		Command string `json:"command"`
+		Command      string `json:"command"`
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
 	} `json:"tool_input"`
+}
+
+// targetDir is the nearest existing directory the tool call acts in: the
+// edited file's directory, else the session cwd, else the current directory.
+func (h hookInput) targetDir() string {
+	path := h.ToolInput.FilePath
+	if path == "" {
+		path = h.ToolInput.NotebookPath
+	}
+	if path == "" {
+		if h.Cwd != "" {
+			return h.Cwd
+		}
+		return "."
+	}
+	if !filepath.IsAbs(path) && h.Cwd != "" {
+		path = filepath.Join(h.Cwd, path)
+	}
+	dir := filepath.Dir(path)
+	for {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "."
+		}
+		dir = parent
+	}
 }
 
 func guardCommand(args []string) error {
@@ -104,13 +139,33 @@ func guardCommand(args []string) error {
 	if os.Getenv("QUIPU_BOOTSTRAP_ADMIN") == "1" {
 		return nil
 	}
-	lease, err := currentLeaseContext()
+	return guardWorktree(input.targetDir(), time.Now().UTC())
+}
+
+// guardWorktree allows a change in dir only when dir's worktree holds an
+// active lease and is on the leased branch. Directories outside any
+// Quipu-managed repository are not Quipu's to guard.
+func guardWorktree(dir string, now time.Time) error {
+	w, err := openWorktree(dir)
+	if err != nil {
+		return nil
+	}
+	c, err := loadConfigAt(w.Top)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("quipu configuration unavailable; operation denied: %w", err)
+	}
+	lease, err := w.lease()
 	if err != nil {
 		return err
 	}
-	c, err := loadConfig()
-	if err != nil {
-		return fmt.Errorf("quipu configuration unavailable; operation denied: %w", err)
+	if branch := w.branch(); branch != lease.Branch {
+		return fmt.Errorf("quipu worktree %s is on %q but its lease is for #%d on %q; operation denied", w.Top, branch, lease.Issue, lease.Branch)
+	}
+	if lease.fresh(now) {
+		return nil
 	}
 	state, err := loadLiveWork(c, lease.Issue)
 	if err != nil {
@@ -120,15 +175,20 @@ func guardCommand(args []string) error {
 		return errors.New("quipu live lease does not match session lease context; operation denied")
 	}
 	expires, err := time.Parse(time.RFC3339, state.Expiry)
-	if err != nil || !expires.After(time.Now().UTC()) {
+	if err != nil || !expires.After(now) {
 		return errors.New("quipu live lease is expired or malformed; operation denied")
 	}
 	switch state.Status {
 	case "Claimed", "In progress", "In review", "Evidence pending":
-		return nil
 	default:
 		return errors.New("quipu lease not in active state; operation denied")
 	}
+	// Cache the check so the next edits within leaseVerifyTTL stay off the API.
+	if stored, err := w.readLease(); err == nil && stored.Issue == lease.Issue && stored.Holder == lease.Holder {
+		stored.Expires, stored.VerifiedAt = state.Expiry, now.Format(time.RFC3339)
+		_ = w.writeLease(stored)
+	}
+	return nil
 }
 
 func stateChangingShell(command string) bool {
@@ -574,6 +634,7 @@ Everyday:
   status     what is in progress, in review, ready, and needs attention
   start N    claim Issue #N, create its branch, and record the lease locally
   start --next  claim the highest-priority Ready work (for agents)
+  start --next --worktree  claim it into a new git worktree (dispatch a parallel agent)
   done N     link the PR, then after merge record evidence and close #N
 
 Setup and advanced:
@@ -914,9 +975,20 @@ func split(s string) []string {
 	}
 	return out
 }
+
+// loadConfig reads the configuration of the repository containing the
+// current directory, so commands work from any subdirectory or worktree.
 func loadConfig() (model.Config, error) {
+	top := "."
+	if w, err := currentWorktree(); err == nil {
+		top = w.Top
+	}
+	return loadConfigAt(top)
+}
+
+func loadConfigAt(top string) (model.Config, error) {
 	var c model.Config
-	raw, err := os.ReadFile(configPath)
+	raw, err := os.ReadFile(filepath.Join(top, configPath))
 	if err != nil {
 		return c, err
 	}
@@ -1579,6 +1651,7 @@ func writerReconcileCommand(args []string) error {
 	fs := flag.NewFlagSet("writer reconcile", flag.ContinueOnError)
 	apply := applyFlag(fs)
 	asJSON := jsonFlag(fs)
+	since := fs.Duration("since", 0, "only Issues updated within this window, such as 30m; all Issues when 0")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1586,7 +1659,7 @@ func writerReconcileCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := ghOutput("api", "--paginate", "--slurp", "repos/"+c.Owner+"/"+c.Repository+"/issues?state=all&per_page=100")
+	output, err := ghOutput("api", "--paginate", "--slurp", reconcileIssuesPath(c, *since, time.Now()))
 	if err != nil {
 		return err
 	}
@@ -1620,6 +1693,18 @@ func writerReconcileCommand(args []string) error {
 		report["leases_reclaimed"] = report["leases_reclaimed"].(int) + reclaimed
 	}
 	return printValue(report, *asJSON)
+}
+
+// reconcileIssuesPath lists the Issues a reconcile pass scans. With since,
+// only recently updated Issues: the comment-triggered Writer run uses this to
+// drain every pending request, because Actions cancels queued runs in its
+// concurrency group when many agents post requests at once.
+func reconcileIssuesPath(c model.Config, since time.Duration, now time.Time) string {
+	path := "repos/" + c.Owner + "/" + c.Repository + "/issues?state=all&per_page=100"
+	if since > 0 {
+		path += "&since=" + now.Add(-since).UTC().Format(time.RFC3339)
+	}
+	return path
 }
 
 func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {

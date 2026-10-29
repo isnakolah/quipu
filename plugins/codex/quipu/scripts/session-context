@@ -1,9 +1,8 @@
 #!/bin/sh
-# Session start: give this agent session its own identity and show the board.
+# Session start: name the agent provider and show the board and this worktree's lease.
 # Stop: remind the agent of work it still holds.
 set -eu
-input=""
-[ -t 0 ] || input=$(cat)
+[ -t 0 ] || cat >/dev/null
 if ! command -v quipu >/dev/null 2>&1; then
   printf '%s\n' 'quipu missing: source install required'
   exit 0
@@ -19,9 +18,11 @@ if [ "${1:-}" = "--stop" ]; then
   fi
   exit 0
 fi
-session=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9-]*\)".*/\1/p' | cut -c1-8)
-if [ -z "${QUIPU_AGENT:-}" ] && [ -n "$session" ]; then
-  QUIPU_AGENT="codex/$session"
+# Quipu names the lease holder codex/<login>/<worktree-id>: the identity
+# belongs to the worktree, so parallel agents in separate worktrees never
+# collide and a new session in the same worktree resumes its work.
+if [ -z "${QUIPU_AGENT:-}" ]; then
+  QUIPU_AGENT=codex
   export QUIPU_AGENT
   # Claude Code persists variables written here for later Bash commands.
   if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
@@ -32,5 +33,5 @@ quipu status 2>/dev/null || true
 if [ -n "$lease" ]; then
   printf '%s\n' "Resuming lease: $lease"
 elif [ -z "${QUIPU_LEASE_ISSUE:-}" ]; then
-  printf '%s\n' "No active lease: run 'quipu start --next' (or 'quipu start N') before editing."
+  printf '%s\n' "No active lease in this worktree: run 'quipu start --next' (or 'quipu start N') before editing, or 'quipu start --next --worktree' to dispatch work into a new worktree."
 fi

@@ -19,10 +19,31 @@ quipu done N --json --criteria "..." --commands "..." --documentation "..." --ri
 
 Every result carries a `next` field that says exactly what to do. Agents follow it; people can too, without `--json`.
 
-- **Many agents at once.** Each session holds leases as `provider/login/session` (set by the plugin session hook), so agents sharing one GitHub login never collide. Run one git worktree per agent.
 - **Races are safe.** The Writer serializes every change. When two agents claim the same item, one wins, and `--next` moves the other on to the next item.
 - **Long work keeps its lease.** Leases last two hours; rerunning `quipu start N` renews one that has less than 30 minutes left.
 - **The owner decides.** Agents never create Epics or approve their own work. The owner makes work Ready, approves goals, and reviews.
+
+## Many agents in parallel worktrees
+
+Each agent works in its own git worktree, and Quipu ties everything local to the worktree, not to the session:
+
+- **Identity.** The lease holder is `provider/login/worktree-id`. The id is created once per worktree, so agents sharing one GitHub login never collide, and a fresh session in the same worktree resumes the work it left.
+- **Lease.** `start` records the lease in that worktree's git directory. The edit guard checks the worktree that a tool call touches, so parallel agents are each held to their own lease and branch. A live check is cached for five minutes to keep many agents off the API rate limit.
+
+There are two ways to run several agents:
+
+```sh
+# In place: the agent tool made the worktree (Claude Code, Codex, Conductor...)
+quipu start --next --json                  # inside that worktree
+
+# Dispatcher: Quipu makes the worktree
+quipu start --next --worktree --json       # returns "worktree": "../quipu-worktrees/quipu-086"
+# launch an agent in that directory; it resumes the lease. Repeat per agent.
+```
+
+`quipu done N` works from any checkout and finds the worktree holding the lease. Remove a finished worktree with `git worktree remove <path>` when nothing runs in it. If `start` says a branch is checked out in another worktree, continue there.
+
+Under load the Writer drains every request posted in the last 30 minutes on each run, so requests from many agents are not lost when GitHub Actions cancels queued runs.
 
 `start` and `done` post the same durable Writer requests as `quipu work`, `quipu pr link`, and `quipu evidence submit`, and wait for each receipt. Those lower-level commands remain for recovery.
 

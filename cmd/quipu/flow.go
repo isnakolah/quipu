@@ -14,8 +14,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -26,8 +24,6 @@ import (
 	"github.com/isnakolah/quipu/internal/model"
 	"github.com/isnakolah/quipu/internal/writer"
 )
-
-const leaseFileName = "quipu-lease"
 
 // ---- quipu status ----
 
@@ -294,23 +290,40 @@ func leaseRemaining(expires string, now time.Time) string {
 // long-running agents keep their work by calling `start N` again.
 const renewWithin = 30 * time.Minute
 
+// startOptions are the `quipu start` flags shared by every attempt in a --next run.
+type startOptions struct {
+	Actor, Branch string
+	Wait          time.Duration
+	// Worktree dispatches the work into its own new worktree under WorktreeRoot
+	// instead of switching the current one.
+	Worktree     bool
+	WorktreeRoot string
+}
+
 func startCommand(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
-	actorFlag := fs.String("actor", "", "lease holder; defaults to QUIPU_ACTOR, then the GitHub login plus QUIPU_AGENT")
-	branchFlag := fs.String("branch", "", "NNN/short-description branch; derived from the title when omitted")
+	o := startOptions{}
+	fs.StringVar(&o.Actor, "actor", "", "lease holder; defaults to QUIPU_ACTOR, then provider/login/worktree-id")
+	fs.StringVar(&o.Branch, "branch", "", "NNN/short-description branch; derived from the title when omitted")
 	next := fs.Bool("next", false, "pick the highest-priority Ready, unblocked, unleased leaf")
-	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for each Writer receipt")
+	fs.DurationVar(&o.Wait, "wait", 3*time.Minute, "how long to wait for each Writer receipt")
+	fs.BoolVar(&o.Worktree, "worktree", false, "create a new git worktree for the work instead of switching this one")
+	fs.StringVar(&o.WorktreeRoot, "worktree-root", "", "where --worktree creates worktrees; defaults to ../<checkout>-worktrees")
 	asJSON := jsonFlag(fs)
 	number, err := parseIssueArg(fs, args, true)
 	if err != nil || (number == 0) != *next {
-		return errors.New("usage: quipu start (N | --next) [--branch NNN/slug] [--actor ID] [--json]")
+		return errors.New("usage: quipu start (N | --next) [--worktree [--worktree-root DIR]] [--branch NNN/slug] [--actor ID] [--json]")
+	}
+	here, err := currentWorktree()
+	if err != nil {
+		return err
 	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	if !*next {
-		result, err := startIssue(c, number, *actorFlag, *branchFlag, *wait)
+		result, err := startIssue(c, here, number, o)
 		if err != nil {
 			return err
 		}
@@ -321,13 +334,14 @@ func startCommand(args []string) error {
 		return err
 	}
 	ready := nextWork(candidates, time.Now())
+	o.Branch = ""
 	// Several agents may race for the same top item; the Writer accepts one
 	// claim and rejects the rest, so a rejected claim moves on to the next.
 	for i, item := range ready {
 		if i == 3 {
 			break
 		}
-		result, err := startIssue(c, item.Number, *actorFlag, "", *wait)
+		result, err := startIssue(c, here, item.Number, o)
 		if err == nil {
 			return printFlowResult(result, *asJSON)
 		}
@@ -346,15 +360,15 @@ func nextWork(candidates []workCandidate, now time.Time) []readyWork {
 	return ready
 }
 
-func startIssue(c model.Config, number int, actorFlag, branch string, wait time.Duration) (flowResult, error) {
-	actor, err := resolveActor(actorFlag, number)
-	if err != nil {
-		return flowResult{}, err
-	}
+// startIssue claims and starts one Issue for the worktree that will do it:
+// here, or with o.Worktree a new worktree created before the claim so the
+// lease belongs to that worktree's identity. A lost claim removes what it made.
+func startIssue(c model.Config, here worktree, number int, o startOptions) (result flowResult, err error) {
 	state, err := loadLiveWork(c, number)
 	if err != nil {
 		return flowResult{}, err
 	}
+	branch := o.Branch
 	switch {
 	case branch != "":
 	case state.Branch != "":
@@ -366,6 +380,34 @@ func startIssue(c model.Config, number int, actorFlag, branch string, wait time.
 		}
 		branch = branchName(number, title)
 	}
+	w := here
+	if o.Worktree {
+		path := dispatchPath(here.Top, o.WorktreeRoot, c.Repository, number)
+		created, createdTree, createdBranch, err := here.addWorktree(path, branch, c.DefaultBranch)
+		if err != nil {
+			return flowResult{}, err
+		}
+		if createdTree {
+			// Undo on failure, except when a request may still be accepted:
+			// a rerun then reuses this worktree and so its lease identity.
+			defer func() {
+				if err != nil && !errors.Is(err, errNoReceipt) {
+					here.removeWorktree(path, branch, createdBranch)
+				}
+			}()
+		}
+		w = created
+	} else if w.branch() != branch {
+		// Fail before claiming when another worktree already has the branch.
+		if err := w.requireBranchFree(branch); err != nil {
+			return flowResult{}, err
+		}
+	}
+	actor, err := resolveActor(w, o.Actor, number)
+	if err != nil {
+		return flowResult{}, err
+	}
+	wait := o.Wait
 	if state.Status == "Ready" {
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "claim", Branch: branch}, wait); err != nil {
 			return flowResult{}, err
@@ -396,16 +438,21 @@ func startIssue(c model.Config, number int, actorFlag, branch string, wait time.
 			return flowResult{}, err
 		}
 	}
-	if err := switchBranch(state.Branch, c.DefaultBranch); err != nil {
+	if err := w.switchBranch(state.Branch, c.DefaultBranch); err != nil {
 		return flowResult{}, err
 	}
-	if err := writeLeaseFile(leaseContext{Issue: number, Holder: state.Holder, Branch: state.Branch}); err != nil {
+	lease := leaseContext{Issue: number, Holder: state.Holder, Branch: state.Branch, Expires: state.Expiry, VerifiedAt: time.Now().UTC().Format(time.RFC3339)}
+	if err := w.writeLease(lease); err != nil {
 		return flowResult{}, err
 	}
-	result := flowResult{Issue: number, Status: state.Status, Branch: state.Branch, Holder: state.Holder, LeaseExpires: state.Expiry}
+	result = flowResult{Issue: number, Status: state.Status, Branch: state.Branch, Holder: state.Holder, LeaseExpires: state.Expiry}
 	result.Next = fmt.Sprintf("Implement #%d on %s. Push and open a PR whose body says \"Refs #%d\", then run: quipu done %d. Rerun quipu start %d to renew the lease on long work.", number, state.Branch, number, number, number)
 	if state.Status == "In review" {
 		result.Next = fmt.Sprintf("Address review on %s, then run: quipu done %d", state.Branch, number)
+	}
+	if o.Worktree {
+		result.Worktree = w.Top
+		result.Next = fmt.Sprintf("Work in %s (cd there or launch the agent there). %s", w.Top, result.Next)
 	}
 	return result, nil
 }
@@ -419,6 +466,7 @@ type flowResult struct {
 	Holder       string `json:"holder,omitempty"`
 	LeaseExpires string `json:"lease_expires,omitempty"`
 	PR           string `json:"pr,omitempty"`
+	Worktree     string `json:"worktree,omitempty"`
 	Next         string `json:"next"`
 }
 
@@ -436,6 +484,9 @@ func printFlowResult(result flowResult, asJSON bool) error {
 		}
 		if result.PR != "" {
 			line += " — " + result.PR
+		}
+		if result.Worktree != "" {
+			line += " in " + result.Worktree
 		}
 		fmt.Println(line)
 	}
@@ -463,26 +514,6 @@ func branchName(number int, title string) string {
 	return fmt.Sprintf("%03d/%s", number, slug)
 }
 
-func switchBranch(branch, base string) error {
-	if exec.Command("git", "rev-parse", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil {
-		return runGit("switch", branch)
-	}
-	_ = exec.Command("git", "fetch", "--quiet", "origin", base).Run()
-	start := "origin/" + base
-	if exec.Command("git", "rev-parse", "--verify", "--quiet", start).Run() != nil {
-		start = base
-	}
-	return runGit("switch", "-c", branch, start)
-}
-
-func runGit(args ...string) error {
-	output, err := exec.Command("git", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
 // ---- quipu done ----
 
 func doneCommand(args []string) error {
@@ -504,11 +535,18 @@ func doneCommand(args []string) error {
 	if err != nil {
 		return errors.New("usage: quipu done N [--pr URL] [--criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]")
 	}
+	here, err := currentWorktree()
+	if err != nil {
+		return err
+	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	actor, err := resolveActor(*actorFlag, number)
+	// A dispatcher may finish work from another checkout, so act as the
+	// worktree that holds this Issue's lease when there is one.
+	w := here.holding(number)
+	actor, err := resolveActor(w, *actorFlag, number)
 	if err != nil {
 		return err
 	}
@@ -568,8 +606,14 @@ func doneCommand(args []string) error {
 	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: "Done"}, *wait); err != nil {
 		return err
 	}
-	removeLeaseFile(number)
-	return printFlowResult(flowResult{Issue: number, Status: "Done", PR: pull.URL, Next: "Closed. Pick the next task: quipu start --next"}, *asJSON)
+	w.removeLease(number)
+	result := flowResult{Issue: number, Status: "Done", PR: pull.URL, Next: "Closed. Pick the next task: quipu start --next"}
+	if w.linked() {
+		// Never delete the worktree an agent may still be running in.
+		result.Worktree = w.Top
+		result.Next = fmt.Sprintf("Closed. When nothing runs in it, remove the worktree: git worktree remove %s. Pick the next task: quipu start --next", w.Top)
+	}
+	return printFlowResult(result, *asJSON)
 }
 
 type pullRequest struct {
@@ -726,15 +770,16 @@ func parseIssueArg(fs *flag.FlagSet, args []string, optional bool) (int, error) 
 	return number, nil
 }
 
-// resolveActor picks who holds the lease. Several agents can share one GitHub
-// login, so each session gets its own identity: the lease already recorded
-// in this worktree, then QUIPU_ACTOR, then provider/login/session built from
-// QUIPU_AGENT (set by the agent's session hook), then the bare login.
-func resolveActor(explicit string, number int) (string, error) {
+// resolveActor picks who holds the lease for work done in worktree w. Many
+// agents can share one GitHub login, so the identity belongs to the worktree:
+// the lease already recorded there, then QUIPU_ACTOR, then
+// provider/login/worktree-id. A new session in the same worktree therefore
+// resumes its work, and two worktrees never share a lease.
+func resolveActor(w worktree, explicit string, number int) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if lease, err := readLeaseFile(); err == nil && lease.Issue == number {
+	if lease, err := w.readLease(); err == nil && lease.Issue == number {
 		return lease.Holder, nil
 	}
 	if actor := strings.TrimSpace(os.Getenv("QUIPU_ACTOR")); actor != "" {
@@ -744,21 +789,22 @@ func resolveActor(explicit string, number int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve GitHub login (pass --actor): %w", err)
 	}
-	return agentActor(strings.TrimSpace(string(output)), os.Getenv("QUIPU_AGENT")), nil
+	id, err := w.agentID()
+	if err != nil {
+		return "", err
+	}
+	return agentActor(strings.TrimSpace(string(output)), os.Getenv("QUIPU_AGENT"), id), nil
 }
 
 // agentActor builds an identity the Writer matches to the comment author:
-// "claude/session" becomes "claude/login/session".
-func agentActor(login, agent string) string {
-	agent = strings.Trim(strings.TrimSpace(agent), "/")
-	if agent == "" {
-		return login
+// provider/login/worktree-id, where the provider is QUIPU_AGENT's first
+// segment (set by the agent's session hook) and defaults to "agent".
+func agentActor(login, agent, id string) string {
+	provider, _, _ := strings.Cut(strings.Trim(strings.TrimSpace(agent), "/"), "/")
+	if provider == "" {
+		provider = "agent"
 	}
-	provider, session, found := strings.Cut(agent, "/")
-	if !found || session == "" {
-		return provider + "/" + login
-	}
-	return provider + "/" + login + "/" + strings.ReplaceAll(session, "/", "-")
+	return provider + "/" + login + "/" + id
 }
 
 func issueTitle(c model.Config, number int) (string, error) {
@@ -771,6 +817,10 @@ func issueTitle(c model.Config, number int) (string, error) {
 
 // errRejected marks a request the Writer refused, such as a lost claim race.
 var errRejected = errors.New("rejected by Writer")
+
+// errNoReceipt marks a request still unanswered when the wait ran out; the
+// Writer may yet accept it.
+var errNoReceipt = errors.New("has no Writer receipt")
 
 // sendAndWait posts one Writer request built from fresh live state and waits
 // for the Writer receipt, so callers can chain lifecycle steps safely.
@@ -806,7 +856,7 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("#%d %s request %s has no Writer receipt after %s; check the Quipu Writer workflow, then rerun", number, r.Action, r.ID, wait)
+			return fmt.Errorf("#%d %s request %s %w after %s; check the Quipu Writer workflow, then rerun", number, r.Action, r.ID, errNoReceipt, wait)
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -820,75 +870,4 @@ func receiptFor(comments []github.Comment, requestID string) (writer.Receipt, bo
 		}
 	}
 	return writer.Receipt{}, false
-}
-
-// ---- local lease context ----
-
-// leaseContext is the session's claimed work. Hooks read it from
-// QUIPU_LEASE_* variables or, when those are unset, from .git/quipu-lease written
-// by `quipu start`. Either way the guard re-verifies it against live GitHub.
-type leaseContext struct {
-	Issue  int    `json:"issue"`
-	Holder string `json:"holder"`
-	Branch string `json:"branch"`
-}
-
-func currentLeaseContext() (leaseContext, error) {
-	issue, holder, branch := os.Getenv("QUIPU_LEASE_ISSUE"), os.Getenv("QUIPU_LEASE_HOLDER"), os.Getenv("QUIPU_LEASE_BRANCH")
-	if issue == "" && holder == "" && branch == "" {
-		return readLeaseFile()
-	}
-	if issue == "" || holder == "" || branch == "" {
-		return leaseContext{}, errors.New("quipu active lease issue, holder, or branch context missing; operation denied")
-	}
-	number, err := strconv.Atoi(issue)
-	if err != nil || number < 1 {
-		return leaseContext{}, errors.New("QUIPU_LEASE_ISSUE must be a positive Issue number")
-	}
-	return leaseContext{Issue: number, Holder: holder, Branch: branch}, nil
-}
-
-func leaseFilePath() (string, error) {
-	output, err := exec.Command("git", "rev-parse", "--git-dir").Output()
-	if err != nil {
-		return "", errors.New("not inside a git repository")
-	}
-	return filepath.Join(strings.TrimSpace(string(output)), leaseFileName), nil
-}
-
-func readLeaseFile() (leaseContext, error) {
-	missing := errors.New("quipu no active lease; run `quipu start N` first; operation denied")
-	path, err := leaseFilePath()
-	if err != nil {
-		return leaseContext{}, missing
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return leaseContext{}, missing
-	}
-	var lease leaseContext
-	if err := json.Unmarshal(raw, &lease); err != nil || lease.Issue < 1 || lease.Holder == "" || lease.Branch == "" {
-		return leaseContext{}, errors.New("quipu lease file is malformed; rerun `quipu start N`; operation denied")
-	}
-	return lease, nil
-}
-
-func writeLeaseFile(lease leaseContext) error {
-	path, err := leaseFilePath()
-	if err != nil {
-		return err
-	}
-	raw, err := json.Marshal(lease)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, raw, 0600)
-}
-
-func removeLeaseFile(number int) {
-	if lease, err := readLeaseFile(); err == nil && lease.Issue == number {
-		if path, err := leaseFilePath(); err == nil {
-			_ = os.Remove(path)
-		}
-	}
 }
