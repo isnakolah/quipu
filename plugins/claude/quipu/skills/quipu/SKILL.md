@@ -50,6 +50,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu done N --json` | PR open: move to review | `status: "In review"`, `pr`, `next` |
 | `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` | PR merged: record evidence and close | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
+| `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
 | `quipu guide` | to read this handbook | this text |
 | `quipu doctor --json` | something seems misconfigured | a list of checks with fixes |
 | `quipu context`, `quipu validate`, `quipu version` | inspecting | read-only reports |

@@ -1274,10 +1274,13 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 	return candidates, nil
 }
 
+var ownerDecidedKinds = map[string]bool{"epic": true, "decision": true, "gate": true}
+
 func selectReadyWork(candidates []workCandidate, now time.Time) []readyWork {
 	ready := make([]readyWork, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Status != "Ready" || candidate.ParentID == "" || candidate.HasChildren || strings.EqualFold(candidate.Kind, "Epic") {
+		// Epics, Decisions, and Gates are decided by the owner, not implemented.
+		if candidate.Status != "Ready" || candidate.ParentID == "" || candidate.HasChildren || ownerDecidedKinds[strings.ToLower(candidate.Kind)] {
 			continue
 		}
 		if err := model.ValidateWorkContract(candidate.Body); err != nil {

@@ -22,7 +22,16 @@ type Config struct {
 	// ReceiptsTrustedBefore keeps receipts posted before the Writer moved to
 	// its bot identity trusted. Later receipts count only from the bot.
 	ReceiptsTrustedBefore string `yaml:"receipts_trusted_before,omitempty" json:"receipts_trusted_before,omitempty"`
+	// ReadyBy says who makes work Ready: "owner" (the default) or "agents".
+	ReadyBy string `yaml:"ready_by,omitempty" json:"ready_by,omitempty"`
+	// PolicyExemptAuthors are bot accounts, such as dependabot[bot], whose
+	// PRs skip the work checks. Changes to Quipu's own files still need the
+	// owner's approval label.
+	PolicyExemptAuthors []string `yaml:"policy_exempt_authors,omitempty" json:"policy_exempt_authors,omitempty"`
 }
+
+// AgentsMakeReady reports whether agents may run `quipu ready`.
+func (c Config) AgentsMakeReady() bool { return c.ReadyBy == "agents" }
 
 type Project struct {
 	ID     string            `yaml:"id" json:"id"`
@@ -62,6 +71,15 @@ func (c Config) Validate() error {
 			return fmt.Errorf("authorized actors must be nonempty and unique")
 		}
 		actors[actor] = true
+	}
+	if c.ReadyBy != "" && c.ReadyBy != "owner" && c.ReadyBy != "agents" {
+		return fmt.Errorf("ready_by must be owner or agents")
+	}
+	for _, author := range c.PolicyExemptAuthors {
+		// Only bots: a person's login is shared with their agents.
+		if !strings.HasSuffix(author, "[bot]") {
+			return fmt.Errorf("policy_exempt_authors accepts only bot accounts like dependabot[bot], not %q", author)
+		}
 	}
 	if c.ReceiptsTrustedBefore != "" {
 		if _, err := time.Parse(time.RFC3339, c.ReceiptsTrustedBefore); err != nil {
