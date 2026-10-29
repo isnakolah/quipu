@@ -131,6 +131,9 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 			return rejectedReceipt(request, err)
 		}
 	}
+	if request.Action == "import" && writer.LastState(receipts) != nil {
+		return rejectedReceipt(request, errors.New("import applies only to work that has not entered the flow"))
+	}
 	current := writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Branch: state.Branch}}
 	if state.Expiry != "" {
 		current.Lease.Expires, _ = time.Parse(time.RFC3339, state.Expiry)
@@ -142,18 +145,41 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if err := updateLiveWork(c, state.ItemID, next); err != nil {
 		return rejectedReceipt(request, err)
 	}
-	if next.Status == "Done" {
-		if err := github.NewClient().SetIssueState(context.Background(), c.Owner, c.Repository, number, "closed"); err != nil {
-			return rejectedReceipt(request, fmt.Errorf("close completed Issue: %w", err))
+	if next.Status == "Done" || next.Status == "Cancelled" {
+		reason := "completed"
+		if next.Status == "Cancelled" {
+			reason = "not_planned"
+		}
+		if err := github.NewClient().CloseIssue(context.Background(), c.Owner, c.Repository, number, reason); err != nil {
+			return rejectedReceipt(request, fmt.Errorf("close %s Issue: %w", next.Status, err))
 		}
 	}
 	receipt := writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "accepted", Detail: "lifecycle state changed to " + next.Status, At: time.Now().UTC(), State: writer.StateOf(next)}
+	if request.Action == "import" {
+		return importReceipt(receipt, *request.Import)
+	}
 	if request.Action == "evidence.submit" {
 		receipt.Detail = "evidence recorded; lifecycle state changed to Evidence pending"
 		receipt.Evidence = request.Evidence
 	}
 	if next.Status == "Done" {
 		receipt.Detail = "completion evidence verified; lifecycle state changed to Done and Issue closed"
+	}
+	return receipt
+}
+
+// importReceipt records an imported Issue's history. Done carries the
+// historical evidence that makes the closed Issue a trusted Done.
+func importReceipt(receipt writer.Receipt, record writer.Import) writer.Receipt {
+	receipt.Detail = fmt.Sprintf("imported %s as %s", record.Key, record.Status)
+	switch record.Status {
+	case "Done":
+		receipt.Evidence = writer.HistoricalEvidence(record)
+		receipt.Detail += " with historical evidence (" + writer.HistoricalBoundary + "); Issue closed"
+	case "Cancelled":
+		receipt.Detail += ": " + record.Reason + "; Issue closed as not planned"
+	case "In progress":
+		receipt.Detail += "; no agent holds it yet, so it waits in Ready on its branch for quipu start"
 	}
 	return receipt
 }

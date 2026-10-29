@@ -98,6 +98,7 @@ func TestGuardShellCommands(t *testing.T) {
 		{f.a, "gh api graphql -f query='{ viewer { login } }'", ""},
 		{f.a, "quipu status --json && quipu start 1 --json", ""},
 		{f.a, "quipu done 1 --json --criteria x", ""},
+		{f.a, "quipu import --manifest backlog.yaml --apply", "quipu-admin"},
 		{f.a, "cd " + outside + " && rm -rf scratch", ""},
 		{f.a, "echo x > " + filepath.Join(outside, "notes.txt"), ""},
 		// Never allowed, even with a lease.

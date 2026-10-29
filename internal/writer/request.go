@@ -40,7 +40,40 @@ type Request struct {
 	Status              string    `json:"status,omitempty"`
 	PR                  string    `json:"pr,omitempty"`
 	Evidence            *Evidence `json:"evidence,omitempty"`
+	Import              *Import   `json:"import,omitempty"`
 }
+
+// Import records where an imported Issue stood before Quipu. The Writer
+// applies it once, to an Issue that has not entered the flow yet.
+type Import struct {
+	Key     string   `json:"key"`
+	Status  string   `json:"status"`
+	Source  string   `json:"source,omitempty"`
+	Commits []string `json:"commits,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
+}
+
+// HistoricalBoundary marks evidence for work finished before Quipu.
+const HistoricalBoundary = "local, before Quipu"
+
+// HistoricalEvidence is the evidence an imported Done Issue closes with:
+// where the record came from and the commits that did the work.
+func HistoricalEvidence(i Import) *Evidence {
+	sha := "None: before Quipu"
+	if len(i.Commits) > 0 {
+		sha = strings.Join(i.Commits, ", ")
+	}
+	source := i.Source
+	if source == "" {
+		source = "import manifest"
+	}
+	return &Evidence{
+		FinalSHA: sha, CIURL: "None: before Quipu", Commands: "None: before Quipu", Environments: HistoricalBoundary,
+		Criteria: "Imported as Done from " + source, Artifacts: source, Documentation: "None: imported history",
+		Risks: "Not verified by Quipu: finished before the repository adopted it", Boundary: HistoricalBoundary,
+	}
+}
+
 type Evidence struct{ FinalSHA, CIURL, Commands, Environments, Criteria, Artifacts, Documentation, Risks, Boundary string }
 
 func (e Evidence) Validate() error {

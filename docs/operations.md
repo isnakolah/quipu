@@ -42,6 +42,7 @@ The `QUIPU_WRITER_TOKEN` secret (a classic PAT with `project` plus `public_repo`
 - `pr.link` needs an open (or, for recovery, merged) PR into the default branch, from the leased branch, with `Refs #N`.
 - `evidence.submit` needs that PR merged, the final SHA equal to its merge commit, and the CI URL a successful Actions run of this repository on the PR.
 - `Done` needs accepted evidence from the current claim and a synchronized Wiki journal (when `wiki_mode` is `journal`).
+- `import` applies once, to an Issue with no receipt state yet, from an authorized actor; it records the manifest status (In progress waits in Ready) and closes Done and Cancelled work.
 - Claimed and In progress leases that expire return to Ready with their branch kept. In review work keeps its holder.
 
 ### Watchdog
@@ -75,6 +76,8 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 - labels (`kind:`, `area:`, `quipu:needs-triage`, `quipu:owner-approved`), Issues and (for `wiki_mode: journal`) the Wiki;
 - the Project fields, Status options, and standard views; options are never rewritten on a Project with items;
 - the config, workflows, Issue forms, agent handbook, and hooks; existing files that differ are kept unless `--replace`.
+
+`quipu import --manifest FILE --apply` brings existing work in after adoption: it creates Issues, Project fields, parents, and blockers, and posts an `import` Writer request for every status beyond Backlog. The Writer applies an import request only to an Issue with no receipt state yet; Done closes with historical evidence (boundary `local, before Quipu`), Cancelled closes as not planned. See [import](import.md).
 
 The workflows are rendered from the config's `workflows` section: runner labels per job, the pinned `quipu_version`, the Writer schedule, and whether PR events run the Writer. They install that version with `go install`, unless the runner already has `quipu` on its `PATH`.
 

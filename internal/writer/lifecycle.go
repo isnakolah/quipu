@@ -123,6 +123,8 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 			return WorkState{}, err
 		}
 		return WorkState{Status: "Blocked", Lease: Lease{Branch: current.Lease.Branch}}, nil
+	case "import":
+		return applyImport(current, request)
 	case "resume":
 		if err := RequireTransition(current.Status, "Ready"); err != nil {
 			return WorkState{}, err
@@ -131,6 +133,34 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 	default:
 		return WorkState{}, fmt.Errorf("unsupported lifecycle action %q", request.Action)
 	}
+}
+
+// importedStates maps a manifest status to the state the Writer records.
+// In progress work has no lease yet, so it waits in Ready on its branch
+// until an agent resumes it with quipu start.
+var importedStates = map[string]string{
+	"Ready": "Ready", "Blocked": "Blocked", "In progress": "Ready", "Done": "Done", "Cancelled": "Cancelled",
+}
+
+func applyImport(current WorkState, request Request) (WorkState, error) {
+	if request.Import == nil {
+		return WorkState{}, fmt.Errorf("import request requires an import record")
+	}
+	if current.Status != "Backlog" || current.Lease.Holder != "" {
+		return WorkState{}, fmt.Errorf("import applies only to new Backlog work, not %q", current.Status)
+	}
+	status, ok := importedStates[request.Import.Status]
+	if !ok {
+		return WorkState{}, fmt.Errorf("cannot import status %q", request.Import.Status)
+	}
+	if request.Import.Status == "Cancelled" && request.Import.Reason == "" {
+		return WorkState{}, fmt.Errorf("imported Cancelled work needs a reason")
+	}
+	next := WorkState{Status: status}
+	if request.Import.Status == "In progress" {
+		next.Lease.Branch = request.Branch
+	}
+	return next, nil
 }
 
 func activeHolder(current WorkState, actor string, now time.Time) error {
