@@ -78,6 +78,8 @@ func run(args []string) error {
 		return configureCommand(args[1:])
 	case "writer":
 		return writerCommand(args[1:])
+	case "import":
+		return importCommand(args[1:])
 	case "adopt":
 		return adoptCommand(args[1:])
 	case "issue":
@@ -237,7 +239,12 @@ func addBlockerCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { i:issue(number:%d){id} b:issue(number:%d){id} } }", c.Owner, c.Repository, *issue, *blocker)
+	return addBlocker(c, *issue, *blocker)
+}
+
+// addBlocker records a native "blocked by" link.
+func addBlocker(c model.Config, issue, blocker int) error {
+	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { i:issue(number:%d){id} b:issue(number:%d){id} } }", c.Owner, c.Repository, issue, blocker)
 	output, err := ghOutput("api", "graphql", "-f", "query="+query)
 	if err != nil {
 		return err
@@ -261,11 +268,9 @@ func addBlockerCommand(args []string) error {
 		return errors.New("Issue or blocker not found")
 	}
 	mutation := fmt.Sprintf("mutation { addBlockedBy(input:{issueId:\"%s\",blockingIssueId:\"%s\"}) { issue { number } } }", response.Data.Repository.I.ID, response.Data.Repository.B.ID)
-	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+mutation)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	_, err = ghOutput("api", "graphql", "-f", "query="+mutation)
+	return err
 }
-
 func linkParentCommand(args []string) error {
 	fs := flag.NewFlagSet("issue link-parent", flag.ContinueOnError)
 	parent := fs.Int("parent", 0, "parent Issue number")
@@ -387,7 +392,7 @@ Owner:
   hooks      install the agent guard hooks in this repository (--apply)
 
 Setup and advanced:
-  init|adopt|doctor|guide|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
+  init|adopt|import|doctor|guide|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")

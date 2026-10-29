@@ -931,24 +931,33 @@ var errNoReceipt = errors.New("has no Writer receipt")
 
 // sendAndWait posts one Writer request built from fresh live state and waits
 // for the Writer receipt, so callers can chain lifecycle steps safely.
-func sendAndWait(c model.Config, number int, actor string, r writer.Request, wait time.Duration) error {
+// postRequest posts a Writer request against the Issue's current state and
+// returns its ID.
+func postRequest(c model.Config, number int, actor string, r writer.Request) (string, error) {
 	state, err := loadLiveWork(c, number)
 	if err != nil {
-		return err
+		return "", err
 	}
 	fingerprint, err := fingerprintLiveWork(state)
 	if err != nil {
-		return err
+		return "", err
 	}
 	r.ID, r.IssueID, r.Actor, r.ExpectedFingerprint = fmt.Sprintf("%d", time.Now().UnixNano()), state.IssueID, actor, fingerprint
 	body, err := writer.RenderRequest(r)
 	if err != nil {
+		return "", err
+	}
+	_, err = github.NewClient().CreateComment(context.Background(), c.Owner, c.Repository, number, body)
+	return r.ID, err
+}
+
+func sendAndWait(c model.Config, number int, actor string, r writer.Request, wait time.Duration) error {
+	id, err := postRequest(c, number, actor, r)
+	if err != nil {
 		return err
 	}
+	r.ID = id
 	client := github.NewClient()
-	if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
-		return err
-	}
 	fmt.Fprintf(os.Stderr, "#%d %s requested; waiting for Writer...\n", number, r.Action)
 	deadline := time.Now().Add(wait)
 	for {

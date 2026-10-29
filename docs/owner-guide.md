@@ -53,7 +53,7 @@ quipu adopt --owner OWNER --repo REPO --project-number N --apply \
   --runs-on self-hosted,macOS --quipu-version v0.2.0
 ```
 
-It provisions what `init` does, changing only what is missing: labels, the Project fields, Status options, and views, the workflows and Issue forms, the config, the handbook, and the hooks. Run it again at any time; a second run reports `"changed": false`. It refuses a repository that already has Issues; bring existing work in with `quipu import`.
+It provisions what `init` does, changing only what is missing: labels, the Project fields, Status options, and views, the workflows and Issue forms, the config, the handbook, and the hooks. Run it again at any time; a second run reports `"changed": false`. It refuses a repository that already has Issues. Then bring your existing backlog and history in with `quipu import --manifest FILE --apply` ([import](import.md)): it creates the Issues with parents, blockers, and fields, and the Writer closes imported Done work with historical evidence.
 
 Files that already exist and differ from Quipu's (your own `ci.yml`, say) are kept and listed under `kept`. Rerun with `--replace` to overwrite them. When you keep your own CI, set `required_checks` to its job names so protection requires them.
 

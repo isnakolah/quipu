@@ -124,6 +124,14 @@ func (c *Client) SetIssueState(ctx context.Context, owner, repo string, number i
 	return c.Do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]string{"state": state}, nil)
 }
 
+// CloseIssue closes an Issue as completed or not_planned.
+func (c *Client) CloseIssue(ctx context.Context, owner, repo string, number int, reason string) error {
+	if reason != "completed" && reason != "not_planned" {
+		return fmt.Errorf("unsupported close reason %q", reason)
+	}
+	return c.Do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]string{"state": "closed", "state_reason": reason}, nil)
+}
+
 // AddLabels adds labels to an Issue; GitHub creates labels that do not exist.
 func (c *Client) AddLabels(ctx context.Context, owner, repo string, number int, labels ...string) error {
 	return c.Do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, number), map[string][]string{"labels": labels}, nil)
