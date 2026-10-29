@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -24,6 +25,9 @@ type Options struct {
 	// Schedule is the Writer's cron schedule; empty turns it off.
 	Schedule            string
 	WriterOnPullRequest bool
+	// DefectsFrom names the workflows whose failed default-branch runs the
+	// Writer turns into Defects.
+	DefectsFrom []string
 }
 
 // installQuipu uses a quipu already on the runner's PATH (a self-hosted
@@ -58,6 +62,11 @@ on:
   schedule:
     - cron: '[[.Schedule]]'
 [[- end]]
+[[- if .DefectsFrom]]
+  workflow_run:
+    workflows: [[quoted .DefectsFrom]]
+    types: [completed]
+[[- end]]
   workflow_dispatch:
 permissions:
   actions: write
@@ -70,7 +79,9 @@ concurrency:
 jobs:
   writer:
     runs-on: [[runner "writer"]]
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) &&
+      (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_branch == '[[.DefaultBranch]]'))
     steps:
       - uses: actions/checkout@v4
         with: {ref: [[.DefaultBranch]]}
@@ -81,6 +92,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
           QUIPU_RECEIPT_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           if [ -z "$GITHUB_TOKEN" ]; then
             echo '::error::QUIPU_WRITER_TOKEN is not configured, so no work can be claimed, reviewed, or finished. Owner: create a classic PAT with the project scope plus public_repo (public repository) or repo (private repository), then run gh secret set QUIPU_WRITER_TOKEN.'
@@ -89,6 +101,9 @@ jobs:
             exit 1
           fi
           case "$EVENT" in
+            workflow_run)
+              # A run failed on the default branch: file one Ready P0 Defect.
+              quipu writer defect --run-id "$RUN_ID" --apply --json ;;
             issue_comment|issues)
               # Drain everything since the last successful run: Actions keeps
               # only one queued run per concurrency group, and runners sleep.
@@ -249,7 +264,13 @@ func Render(o Options) (map[string]string, error) {
 	if o.QuipuVersion == "" {
 		return nil, fmt.Errorf("a pinned Quipu version is required")
 	}
-	funcs := template.FuncMap{"runner": func(job string) string {
+	funcs := template.FuncMap{"quoted": func(names []string) string {
+		quoted := make([]string, len(names))
+		for i, name := range names {
+			quoted[i] = strconv.Quote(name)
+		}
+		return "[" + strings.Join(quoted, ", ") + "]"
+	}, "runner": func(job string) string {
 		labels := o.RunsOn[job]
 		switch len(labels) {
 		case 0:

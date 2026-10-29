@@ -71,6 +71,7 @@ workflows:
   quipu_version: v0.2.0             # tag or commit the workflows install
   schedule: "*/15 * * * *"          # Writer cron; "off" to rely on events only
   writer_on_pull_request: false     # skip Writer runs on PR events
+  defects_from: [CI]                # failed default-branch runs become Ready P0 Defects; [] for off
 required_checks: [test]             # CI checks main requires besides policy
 ```
 
@@ -101,7 +102,7 @@ Set these in `.github/quipu/config.yaml` through a reviewed PR (the file is owne
 | `merge: agent` | `owner` | `quipu done N` merges the agent's PR itself, with a merge commit pinned to the checked head, once `policy` and every `required_checks` entry pass; it then records evidence and closes the Issue. You stop reviewing before merge, so keep `required_checks` meaningful. `gh pr merge` stays blocked for agents. |
 | `commit_format: issue-prefix` | none | Commits must read `#NNN type(scope): summary` with a `Refs: #N` footer line. `policy` checks every PR commit and that the PR title is `type(scope): summary`; with `merge: agent`, `quipu done` writes the merge commit the same way. For local checks, call `quipu verify-commit "$1"` from a `commit-msg` hook. When you merge by hand, write the merge subject yourself. |
 | `required_checks: [build, unit]` | `[test]` | The CI checks `quipu protect` requires on the default branch, besides `policy`. |
-| `workflows` | hosted runners, every five minutes | Runners, pinned Quipu version, schedule, and PR trigger; see [Runners and workflows](#runners-and-workflows). |
+| `workflows` | hosted runners, every five minutes, Defects from `CI` | Runners, pinned Quipu version, schedule, PR trigger, and which failed default-branch workflows become Ready P0 Defects; see [Runners and workflows](#runners-and-workflows) and [operations](operations.md#defects-from-failed-runs). |
 
 `quipu start --next` never picks Epics, Decisions, or Gates: you decide those.
 

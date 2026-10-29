@@ -121,3 +121,38 @@ func TestRenderFollowsWorkflowOptions(t *testing.T) {
 		t.Fatal("expected an unpinned version to be refused")
 	}
 }
+
+func TestWriterWatchesDefectWorkflows(t *testing.T) {
+	o := options()
+	o.DefectsFrom = []string{"CI", "Source install proof"}
+	files, err := Render(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := files[".github/workflows/quipu-writer.yml"]
+	var parsed struct {
+		On struct {
+			WorkflowRun struct {
+				Workflows []string `yaml:"workflows"`
+				Types     []string `yaml:"types"`
+			} `yaml:"workflow_run"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			If string `yaml:"if"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(writer), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parsed.On.WorkflowRun.Workflows, o.DefectsFrom) || !reflect.DeepEqual(parsed.On.WorkflowRun.Types, []string{"completed"}) {
+		t.Fatalf("workflow_run = %+v", parsed.On.WorkflowRun)
+	}
+	if !strings.Contains(parsed.Jobs["writer"].If, "workflow_run.head_branch == 'trunk'") || !strings.Contains(writer, `quipu writer defect --run-id "$RUN_ID" --apply --json`) {
+		t.Fatalf("writer job does not file Defects for trunk failures:\n%s", writer)
+	}
+	o.DefectsFrom = nil
+	files, _ = Render(o)
+	if strings.Contains(files[".github/workflows/quipu-writer.yml"], "workflow_run:") {
+		t.Fatal("no watched workflows, no workflow_run trigger")
+	}
+}
