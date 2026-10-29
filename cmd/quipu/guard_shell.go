@@ -821,7 +821,7 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 // ---- quipu, go, curl ----
 
 var quipuAgentCommands = setOf("status", "start", "done", "doctor", "context", "validate", "guide", "version",
-	"help", "-h", "--help", "propose", "guard", "policy")
+	"help", "-h", "--help", "propose", "guard", "policy", "verify-commit")
 
 func (g *guard) quipu(rest []shellArg, dir string) error {
 	if len(rest) > 0 && rest[0].s == "guide" && hasFlag(rest, "--sync") {

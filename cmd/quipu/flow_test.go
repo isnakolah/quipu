@@ -76,6 +76,14 @@ func TestPassingCIURL(t *testing.T) {
 	if got := passingCIURL(append(ok, prCheck{Conclusion: ""})); got != "" {
 		t.Fatalf("pending checks returned %q", got)
 	}
+	status := prCheck{Context: "policy", State: "SUCCESS"}
+	if got := passingCIURL(append([]prCheck{status}, ok...)); got != "https://ci/1" {
+		t.Fatalf("a successful commit status is no failure, got %q", got)
+	}
+	status.State = "PENDING"
+	if got := passingCIURL(append(ok, status)); got != "" {
+		t.Fatalf("a pending commit status returned %q", got)
+	}
 }
 
 func TestPickPullRequestPrefersOpenThenMerged(t *testing.T) {

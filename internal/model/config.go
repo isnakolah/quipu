@@ -31,8 +31,14 @@ type Config struct {
 	PolicyExemptAuthors []string `yaml:"policy_exempt_authors,omitempty" json:"policy_exempt_authors,omitempty"`
 	// RequiredChecks are the CI check names main requires besides policy.
 	// Empty means ["test"], the job in Quipu's generated CI workflow.
-	RequiredChecks []string  `yaml:"required_checks,omitempty" json:"required_checks,omitempty"`
-	Workflows      Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
+	RequiredChecks []string `yaml:"required_checks,omitempty" json:"required_checks,omitempty"`
+	// Merge says who merges work PRs: "owner" (the default) or "agent", in
+	// which case `quipu done` merges once every required check is green.
+	Merge string `yaml:"merge,omitempty" json:"merge,omitempty"`
+	// CommitFormat "issue-prefix" requires `#NNN type(scope): summary`
+	// commit subjects with a `Refs: #N` footer.
+	CommitFormat string    `yaml:"commit_format,omitempty" json:"commit_format,omitempty"`
+	Workflows    Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
 }
 
 // Workflows shapes the generated GitHub Actions workflows.
@@ -125,6 +131,9 @@ func (w Workflows) validate() error {
 	return nil
 }
 
+// AgentsMerge reports whether `quipu done` merges green PRs.
+func (c Config) AgentsMerge() bool { return c.Merge == "agent" }
+
 // AgentsMakeReady reports whether agents may run `quipu ready`.
 func (c Config) AgentsMakeReady() bool { return c.ReadyBy == "agents" }
 
@@ -175,6 +184,12 @@ func (c Config) Validate() error {
 		if !strings.HasSuffix(author, "[bot]") {
 			return fmt.Errorf("policy_exempt_authors accepts only bot accounts like dependabot[bot], not %q", author)
 		}
+	}
+	if c.Merge != "" && c.Merge != "owner" && c.Merge != "agent" {
+		return fmt.Errorf("merge must be owner or agent")
+	}
+	if c.CommitFormat != "" && c.CommitFormat != "issue-prefix" {
+		return fmt.Errorf("commit_format must be issue-prefix or unset")
 	}
 	if err := c.Workflows.validate(); err != nil {
 		return err

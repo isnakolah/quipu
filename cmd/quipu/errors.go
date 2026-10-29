@@ -33,6 +33,10 @@ var flowErrors = []flowErrorKind{
 	{"pr-closed", "the PR was closed without merging", "open a new PR from the same branch with `Refs #N`, then rerun `quipu done N --json`"},
 	{"pr-merged-early", "the PR merged before `quipu done` moved the work to review", "tell the owner; they recover it with `quipu pr link` and `quipu evidence submit`"},
 	{"evidence-missing", "recording evidence after merge needs every evidence field", "rerun `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` (add `--ci-url URL` if checks have not passed)"},
+	{"checks-pending", "with `merge: agent`, a required check on the PR has not finished", "wait for them with `gh pr checks <PR> --watch --required`, then rerun the same `quipu done N --json ...`"},
+	{"checks-failing", "with `merge: agent`, a required check on the PR failed or never ran", "fix the cause, push to the work branch, then rerun the same `quipu done N --json ...`"},
+	{"merge-blocked", "GitHub cannot merge the PR: it is a draft, behind the default branch, conflicting, or refused by a rule", "update the branch (`git fetch origin && git merge origin/<default>`), resolve conflicts, push, then rerun the same `quipu done N --json ...`"},
+	{"commit-format", "a commit message breaks the repository's `commit_format`", "write it as `#NNN type(scope): summary` with a `Refs: #N` footer line (`git commit --amend` for the last commit), and title the PR `type(scope): summary`"},
 	{"not-active", "the Issue is not in progress, in review, or awaiting evidence", "check `quipu status --json`; start work with `quipu start N --json`"},
 }
 

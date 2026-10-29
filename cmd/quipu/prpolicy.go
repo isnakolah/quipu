@@ -130,6 +130,17 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 	if len(issues) != 1 {
 		return violations
 	}
+	if c.CommitFormat == policycheck.IssuePrefix {
+		if _, _, err := policycheck.IssuePrefixMessage(issues[0], pull.Title); err != nil {
+			add("%v; the merge commit is built from it. Fix: retitle the PR", err)
+		}
+		for _, message := range pull.Commits {
+			if _, err := policycheck.CheckIssuePrefix(message, issues[0]); err != nil {
+				add("%v. Fix: reword the commit (git rebase -i, then push --force-with-lease)", err)
+				break
+			}
+		}
+	}
 	if ok && number != issues[0] {
 		add("branch %q maps to #%d but the body references #%d. Fix: reference the branch's Issue", pull.Head, number, issues[0])
 	}
