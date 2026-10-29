@@ -22,6 +22,7 @@ import (
 
 	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/model"
+	policycheck "github.com/isnakolah/quipu/internal/policy"
 	"github.com/isnakolah/quipu/internal/writer"
 )
 
@@ -588,8 +589,35 @@ func doneCommand(args []string) error {
 		if pull.State == "CLOSED" {
 			return flowErr("pr-closed", "PR %s was closed without merging", pull.URL)
 		}
-		if pull.State != "MERGED" {
+		if pull.State != "MERGED" && !c.AgentsMerge() {
 			return printFlowResult(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("The owner reviews and merges %s; never merge it yourself. Address review comments by pushing to %s (rerun quipu start %d first if the guard reports the lease). After the merge, run: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number, number)}, *asJSON)
+		}
+		if pull.State != "MERGED" {
+			// merge: agent. Collect the evidence first, so a merged PR never
+			// waits on an agent that forgot a flag.
+			e.FinalSHA = "pending merge"
+			if e.CIURL == "" {
+				e.CIURL = pull.CIURL
+			}
+			if e.CIURL == "" {
+				e.CIURL = "pending merge"
+			}
+			if err := promptMissingEvidence(&e, os.Stdin, os.Stderr); err != nil {
+				return err
+			}
+			ciURL, err := mergeWhenGreen(c, number, pull.URL)
+			if err != nil {
+				return err
+			}
+			if pull, err = findPullRequest(c, pull.URL, state.Branch); err != nil {
+				return err
+			}
+			if pull.State != "MERGED" {
+				return flowErr("merge-blocked", "PR %s is %s after merging", pull.URL, pull.State)
+			}
+			if e.CIURL == "pending merge" {
+				e.CIURL = ciURL
+			}
 		}
 		e.FinalSHA = pull.MergeCommit
 		if e.CIURL == "" {
@@ -783,6 +811,102 @@ type prCheck struct {
 	Name       string `json:"name"`
 	Conclusion string `json:"conclusion"`
 	DetailsURL string `json:"detailsUrl"`
+	// Status is a check run's progress; commit statuses have Context and
+	// State instead of Name and Conclusion.
+	Status  string `json:"status"`
+	Context string `json:"context"`
+	State   string `json:"state"`
+}
+
+// mergeGate passes when every required check has a successful result and
+// none of them is failing or still running.
+func mergeGate(checks []prCheck, required []string) error {
+	results := map[string][]string{}
+	for _, check := range checks {
+		name, result := check.Name, check.Conclusion
+		if name == "" {
+			name, result = check.Context, check.State
+		}
+		if check.Status != "" && check.Status != "COMPLETED" {
+			result = "PENDING"
+		}
+		results[name] = append(results[name], result)
+	}
+	var pending, failing []string
+	for _, name := range required {
+		got := results[name]
+		switch {
+		case len(got) == 0:
+			failing = append(failing, name+" (never ran)")
+		case containsAny(got, "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"):
+			failing = append(failing, name)
+		case containsAny(got, "PENDING", "EXPECTED", "QUEUED", ""):
+			pending = append(pending, name)
+		case !containsAny(got, "SUCCESS"):
+			failing = append(failing, name)
+		}
+	}
+	if len(failing) > 0 {
+		return flowErr("checks-failing", "required checks not passing: %s", strings.Join(failing, ", "))
+	}
+	if len(pending) > 0 {
+		return flowErr("checks-pending", "required checks still running: %s", strings.Join(pending, ", "))
+	}
+	return nil
+}
+
+func containsAny(values []string, wanted ...string) bool {
+	for _, value := range values {
+		for _, want := range wanted {
+			if value == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mergeWhenGreen merges the PR with a merge commit, pinned to the head the
+// checks ran on, when the repository lets agents merge. It returns the run
+// URL of the first required check, for the evidence.
+func mergeWhenGreen(c model.Config, number int, url string) (string, error) {
+	output, err := ghOutput("pr", "view", url, "--repo", c.Owner+"/"+c.Repository, "--json", "title,isDraft,mergeStateStatus,headRefOid,statusCheckRollup")
+	if err != nil {
+		return "", err
+	}
+	var view struct {
+		Title            string    `json:"title"`
+		IsDraft          bool      `json:"isDraft"`
+		MergeStateStatus string    `json:"mergeStateStatus"`
+		HeadRefOid       string    `json:"headRefOid"`
+		Checks           []prCheck `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal(output, &view); err != nil {
+		return "", err
+	}
+	if err := mergeGate(view.Checks, append(append([]string{}, c.Checks()...), "policy")); err != nil {
+		return "", err
+	}
+	if view.IsDraft || view.MergeStateStatus == "BEHIND" || view.MergeStateStatus == "DIRTY" {
+		return "", flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", url, view.IsDraft, view.MergeStateStatus)
+	}
+	args := []string{"pr", "merge", url, "--repo", c.Owner + "/" + c.Repository, "--merge", "--match-head-commit", view.HeadRefOid}
+	if c.CommitFormat == policycheck.IssuePrefix {
+		subject, body, err := policycheck.IssuePrefixMessage(number, view.Title)
+		if err != nil {
+			return "", flowErr("commit-format", "%v", err)
+		}
+		args = append(args, "--subject", subject, "--body", body)
+	}
+	if _, err := ghOutput(args...); err != nil {
+		return "", flowErr("merge-blocked", "GitHub refused to merge %s: %v", url, err)
+	}
+	for _, check := range view.Checks {
+		if check.Name == c.Checks()[0] && check.Conclusion == "SUCCESS" {
+			return check.DetailsURL, nil
+		}
+	}
+	return "", nil
 }
 
 // passingCIURL returns a successful check run URL only when no check failed,
@@ -790,6 +914,13 @@ type prCheck struct {
 func passingCIURL(checks []prCheck) string {
 	url := ""
 	for _, check := range checks {
+		if check.Name == "" && check.Context != "" {
+			// A commit status is no Actions run, so it never supplies the URL.
+			if check.State != "SUCCESS" {
+				return ""
+			}
+			continue
+		}
 		switch check.Conclusion {
 		case "SUCCESS", "NEUTRAL", "SKIPPED":
 			if check.Conclusion == "SUCCESS" && (url == "" || check.Name == "test") {

@@ -66,6 +66,10 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 - `authorized_actors`: GitHub logins allowed to post Writer requests. Change it through a reviewed PR.
 - `receipts_trusted_before`: the cutover time before which receipts from the Writer token are trusted. Set once when receipts moved to the workflow token.
 - `policy.lease_ttl_minutes`, `policy.reconcile_minutes`, `wiki_mode`, `areas`, `default_branch`, and the Project field IDs.
+- `ready_by` (`owner` or `agents`), `policy_exempt_authors` (bot accounts only), and `required_checks` (default `[test]`; `policy` is always required).
+- `merge`: `owner` (default) or `agent`. With `agent`, `quipu done` gates on the PR's status check rollup: every required check and `policy` must have a successful result and none may be failing or running (`checks-failing`, `checks-pending`); a draft, behind, or conflicting PR is `merge-blocked`. It merges with `gh pr merge --merge --match-head-commit`, so a push after the checks ran cannot slip in.
+- `commit_format`: unset or `issue-prefix` (`#NNN type(scope): summary`, footer `Refs: #N`, merge commits from git exempt). Enforced by `policy` for every PR commit and the PR title, and by `quipu verify-commit FILE` in a `commit-msg` hook.
+- `workflows`: runners, pinned Quipu version, schedule, and PR trigger for the generated workflows.
 
 ## Bootstrap and adoption
 

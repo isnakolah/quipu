@@ -78,6 +78,8 @@ func run(args []string) error {
 		return configureCommand(args[1:])
 	case "writer":
 		return writerCommand(args[1:])
+	case "verify-commit":
+		return verifyCommitCommand(args[1:])
 	case "import":
 		return importCommand(args[1:])
 	case "adopt":
@@ -392,7 +394,7 @@ Owner:
   hooks      install the agent guard hooks in this repository (--apply)
 
 Setup and advanced:
-  init|adopt|import|doctor|guide|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
+  init|adopt|import|verify-commit|doctor|guide|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")

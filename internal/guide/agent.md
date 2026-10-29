@@ -100,6 +100,18 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. While checks run it stops with `checks-pending`; rerun the same command later. `gh pr merge` stays blocked.
+
+**When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
+
+```text
+#042 feat(sync): retry failed uploads
+
+Why the change was needed.
+
+Refs: #42
+```
+
 - **Changes requested:** push more commits to the same branch. If the guard says the lease expired, run `quipu start N --json` to renew it first.
 - **Merged:** run `quipu done N --json` with the evidence flags below.
 - **Closed without merging:** open a new PR from the same branch with `Refs #N`, then run `quipu done N --json` again.
