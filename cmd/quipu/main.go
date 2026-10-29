@@ -908,17 +908,14 @@ func validateCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:[OPEN,CLOSED]) { nodes {
-id number body state parent { id }
+	output, err := issuePages(c, "states:[OPEN,CLOSED]", `id number body state parent { id }
 blockedBy(first:100) { nodes { id } }
 labels(first:100) { nodes { name } }
 comments(first:100) { nodes { body author { login } } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
-} } } }
-} } } }`, c.Owner, c.Repository)
-	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
+} } } }`)
 	if err != nil {
 		return err
 	}
@@ -1182,14 +1179,11 @@ func workListCommand(args []string) error {
 // loadWorkCandidates reads open Issues with the Project fields that decide
 // whether work can be picked up.
 func loadWorkCandidates(c model.Config) ([]workCandidate, error) {
-	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:OPEN) { nodes {
-id number title body parent { id } subIssues(first:1) { nodes { id } } blockedBy(first:100) { nodes { state } }
+	output, err := issuePages(c, "states:OPEN", `id number title body parent { id } subIssues(first:1) { nodes { id } } blockedBy(first:100) { nodes { state } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
-} } } }
-} } } }`, c.Owner, c.Repository)
-	output, err := ghOutput("api", "graphql", "-f", "query="+query)
+} } } }`)
 	if err != nil {
 		return nil, err
 	}

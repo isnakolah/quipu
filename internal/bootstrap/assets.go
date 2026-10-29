@@ -55,9 +55,9 @@ jobs:
           fi
           case "$EVENT" in
             issue_comment|issues)
-              # Drain every recent change: Actions cancels queued runs in this
-              # concurrency group, so one surviving run must serve them all.
-              quipu writer reconcile --since 30m --apply --json ;;
+              # Drain everything since the last successful run: Actions keeps
+              # only one queued run per concurrency group, and runners sleep.
+              quipu writer reconcile --since-last-run --apply --json ;;
             *)
               quipu writer reconcile --apply --json ;;
           esac

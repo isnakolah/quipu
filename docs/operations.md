@@ -56,7 +56,7 @@ Each reconcile pass, after applying requests:
 - re-runs the `policy` check of open PRs whose verdict changed with the work under them;
 - carries on past an Issue that fails and reports every failure at the end.
 
-It runs on every Issue comment and Issue event (both over the Issues updated in the last 30 minutes, because Actions cancels queued runs when many agents post at once), on PR events, every five minutes, and on demand with `gh workflow run quipu-writer.yml`.
+It runs on every Issue comment and Issue event, on PR events, every five minutes, and on demand with `gh workflow run quipu-writer.yml`. Event-triggered runs scan every Issue updated since the last successful Writer run began (`--since-last-run`), so nothing is lost when Actions drops queued runs (it keeps one per concurrency group) or a self-hosted runner sleeps for hours; scheduled runs scan every Issue. All reads page past 100 Issues.
 
 ## Configuration
 
