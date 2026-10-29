@@ -29,7 +29,9 @@ jobs:
         run: |
           test -n "$GITHUB_TOKEN" || { echo 'QUIPU_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            go run ./cmd/quipu writer run --issue-number "${{ github.event.issue.number }}" --apply
+            # Drain every recent request: Actions cancels queued runs in this
+            # concurrency group, so one surviving run must serve them all.
+            go run ./cmd/quipu writer reconcile --since 30m --apply
           else
             go run ./cmd/quipu writer reconcile --apply
           fi
