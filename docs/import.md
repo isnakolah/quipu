@@ -96,7 +96,7 @@ items:
 - Open work (any status but Done or Cancelled) that is not an Epic needs a body that satisfies the [work contract](owner-guide.md#day-to-day), starting with `<!-- work:v1 -->`: Outcome, Scope with Includes and Excludes, Acceptance criteria, Required evidence with a Verification boundary, Documentation impact, Source and relationships. Done and Cancelled history needs no contract.
 - Done work cannot be blocked by open work.
 - `commits` belong to Done work, `branch` to In progress work, and `reason` is required for Cancelled work.
-- The repository's area list (`areas` in `.github/quipu/config.yaml`) must include every `area` used.
+- The repository's area list (`areas` in `quipu.yml`) must include every `area` used.
 
 ## Limits
 

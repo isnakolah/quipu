@@ -45,10 +45,10 @@ func adoptCommand(args []string) error {
 	}
 	if adopted {
 		if (*owner != "" && !strings.EqualFold(*owner, c.Owner)) || (*repo != "" && !strings.EqualFold(*repo, c.Repository)) {
-			return fmt.Errorf("%s belongs to %s/%s, not %s/%s", configPath, c.Owner, c.Repository, *owner, *repo)
+			return fmt.Errorf("this config belongs to %s/%s, not %s/%s", c.Owner, c.Repository, *owner, *repo)
 		}
 		if *projectNumber != 0 && *projectNumber != c.Project.Number {
-			return fmt.Errorf("%s uses Project #%d; it cannot move to #%d", configPath, c.Project.Number, *projectNumber)
+			return fmt.Errorf("this config uses Project #%d; it cannot move to #%d", c.Project.Number, *projectNumber)
 		}
 	} else if *owner == "" || *repo == "" {
 		return errors.New("--owner and --repo are required")
@@ -103,12 +103,12 @@ func adoptCommand(args []string) error {
 
 // existingConfig loads the config when the repository was adopted already.
 func existingConfig(top string) (model.Config, bool, error) {
-	if _, err := os.Stat(filepath.Join(top, configPath)); os.IsNotExist(err) {
+	if !hasConfig(top) {
 		return model.Config{}, false, nil
 	}
 	c, err := loadConfigAt(top)
 	if err != nil {
-		return c, false, fmt.Errorf("%s: %w", configPath, err)
+		return c, false, err
 	}
 	return c, true, nil
 }
@@ -241,14 +241,21 @@ func writeConfig(top string, c model.Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(top, configPath)
+	// New repositories get quipu.yml; an adopted one keeps the file it has.
+	name, err := configFile(top)
+	if errors.Is(err, os.ErrNotExist) {
+		name = rootConfigPath
+	} else if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(top, name)
 	if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, raw) {
 		return nil, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	return []string{configPath}, os.WriteFile(path, raw, 0o644)
+	return []string{name}, os.WriteFile(path, raw, 0o644)
 }
 
 // realIssueCount counts the repository's Issues. The REST Issues list also
