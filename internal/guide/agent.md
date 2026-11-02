@@ -38,7 +38,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 
 | Command | When | What you get back |
 |---|---|---|
-| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention` |
+| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention`, `owner_queue` (what only the owner can move; leave it and take other work) |
 | `quipu start --next --json` | to take work | `issue`, `status`, `branch`, `holder`, `lease_expires`, `next` |
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
@@ -100,7 +100,7 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
-**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. While checks run it stops with `checks-pending`; rerun the same command later. `gh pr merge` stays blocked.
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
 
 **When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
 
@@ -137,7 +137,7 @@ The Writer rejects evidence unless the PR is merged from your leased branch with
 
 - A lease lasts two hours. Rerun `quipu start N --json` during long work; it renews the lease when less than 30 minutes remain.
 - An expired lease that nobody else took can be re-taken with `quipu start N --json`.
-- Claimed and In progress work whose lease expires returns to Ready, so another agent may take it. Work In review keeps its holder.
+- Claimed and In progress work whose lease expires returns to Ready, so another agent may take it, unless its branch has an open PR: that work stays yours, and `quipu start N --json` renews it. Work In review keeps its holder.
 - The guard checks your lease against GitHub at most every five minutes, so it stays fast with many agents.
 
 ## Proposing work

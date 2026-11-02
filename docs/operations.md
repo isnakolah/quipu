@@ -43,7 +43,7 @@ The `QUIPU_WRITER_TOKEN` secret (a classic PAT with `project` plus `public_repo`
 - `evidence.submit` needs that PR merged, the final SHA equal to its merge commit, and the CI URL a successful Actions run of this repository on the PR.
 - `Done` needs accepted evidence from the current claim and a synchronized Wiki journal (when `wiki_mode` is `journal`).
 - `import` applies once, to an Issue with no receipt state yet, from an authorized actor; it records the manifest status (In progress waits in Ready) and closes Done and Cancelled work.
-- Claimed and In progress leases that expire return to Ready with their branch kept. In review work keeps its holder.
+- Claimed and In progress leases that expire return to Ready with their branch kept, unless the branch has an open PR or the lookup fails. Then the work keeps its holder, who can renew once the Writer is back, and the next pass checks again; closing the PR releases it. In review work keeps its holder.
 
 ### Watchdog
 
@@ -79,7 +79,7 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 - `receipts_trusted_before`: the cutover time before which receipts from the Writer token are trusted. Set once when receipts moved to the workflow token.
 - `policy.lease_ttl_minutes`, `policy.reconcile_minutes`, `wiki_mode`, `areas`, `default_branch`, and the Project field IDs.
 - `ready_by` (`owner` or `agents`), `policy_exempt_authors` (bot accounts only), and `required_checks` (default `[test]`; `policy` is always required).
-- `merge`: `owner` (default) or `agent`. With `agent`, `quipu done` gates on the PR's status check rollup: every required check and `policy` must have a successful result and none may be failing or running (`checks-failing`, `checks-pending`); a draft, behind, or conflicting PR is `merge-blocked`. It merges with `gh pr merge --merge --match-head-commit`, so a push after the checks ran cannot slip in.
+- `merge`: `owner` (default) or `agent`. With `agent`, `quipu done` gates on the PR's status check rollup: every required check and `policy` must have a successful result and none may be failing or running (`checks-failing`, `checks-pending`). A queued check whose job's labels match no online runner is `checks-no-runner`, using `repos/{owner}/{repo}/actions/runners` (and the organization's runners where the token can read them). One runner must carry every label; a busy runner counts, and GitHub-hosted labels are never missing. If the token can't read runners, it stays `checks-pending` and says the runner state is unknown. `quipu doctor` makes the same comparison for the Writer, `policy`, every `workflows.runs_on` entry, and each required check, whose labels it reads from the default branch's workflow files; it warns when it can't tell. A draft, behind, or conflicting PR is `merge-blocked`. It merges with `gh pr merge --merge --match-head-commit`, so a push after the checks ran cannot slip in.
 - `commit_format`: unset or `issue-prefix` (`#NNN type(scope): summary`, footer `Refs: #N`, merge commits from git exempt). Enforced by `policy` for every PR commit and the PR title, and by `quipu verify-commit FILE` in a `commit-msg` hook.
 - `workflows`: runners, pinned Quipu version, schedule, and PR trigger for the generated workflows.
 

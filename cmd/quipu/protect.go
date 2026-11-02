@@ -246,6 +246,7 @@ func doctorChecks() []doctorCheck {
 		add("this worktree", "ok", "no lease; start work with quipu start --next --json", "")
 	}
 	checks = append(checks, githubChecks(c)...)
+	checks = append(checks, runnerChecks(c, here)...)
 	return checks
 }
 

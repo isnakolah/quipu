@@ -43,7 +43,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 
 | Command | When | What you get back |
 |---|---|---|
-| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention` |
+| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention`, `owner_queue` (what only the owner can move; leave it and take other work) |
 | `quipu start --next --json` | to take work | `issue`, `status`, `branch`, `holder`, `lease_expires`, `next` |
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
@@ -105,7 +105,7 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
-**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. While checks run it stops with `checks-pending`; rerun the same command later. `gh pr merge` stays blocked.
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
 
 **When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
 
@@ -142,7 +142,7 @@ The Writer rejects evidence unless the PR is merged from your leased branch with
 
 - A lease lasts two hours. Rerun `quipu start N --json` during long work; it renews the lease when less than 30 minutes remain.
 - An expired lease that nobody else took can be re-taken with `quipu start N --json`.
-- Claimed and In progress work whose lease expires returns to Ready, so another agent may take it. Work In review keeps its holder.
+- Claimed and In progress work whose lease expires returns to Ready, so another agent may take it, unless its branch has an open PR: that work stays yours, and `quipu start N --json` renews it. Work In review keeps its holder.
 - The guard checks your lease against GitHub at most every five minutes, so it stays fast with many agents.
 
 ## Proposing work
@@ -196,7 +196,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `held-by` | the Issue's lease belongs to another worktree or agent | continue in the worktree that holds it (`quipu status --json` shows holder and branch), or take other work with `quipu start --next --json` |
 | `not-ready` | the Issue is not Ready, so it cannot be started | take Ready work with `quipu start --next --json`; only the owner makes work Ready |
 | `branch-elsewhere` | the work branch is checked out in another worktree | continue in that worktree, or remove it with `git worktree remove <path>` if nothing runs there |
-| `no-receipt` | the Writer did not answer before the wait ran out | rerun the same command, it is safe; if it keeps happening, tell the owner the Quipu Writer workflow is not running |
+| `no-receipt` | the Writer did not answer before the wait ran out | the request stays queued, so take other work or rerun the same command later; it is safe. If it keeps happening, tell the owner what the message says about the Writer and its runner |
 | `rejected-stale` | the work changed while your request was in flight | rerun the same command |
 | `rejected-taken` | another agent claimed the work first | run `quipu start --next --json` for other work |
 | `rejected-blocked` | the work has an open blocker | take other work with `quipu start --next --json` |
@@ -209,6 +209,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `pr-merged-early` | the PR merged before `quipu done` moved the work to review | tell the owner; they recover it with `quipu pr link` and `quipu evidence submit` |
 | `evidence-missing` | recording evidence after merge needs every evidence field | rerun `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` (add `--ci-url URL` if checks have not passed) |
 | `checks-pending` | with `merge: agent`, a required check on the PR has not finished | wait for them with `gh pr checks <PR> --watch --required`, then rerun the same `quipu done N --json ...` |
+| `checks-no-runner` | with `merge: agent`, a required check is queued and no online runner has its labels, so it cannot start | do not poll; take other work with `quipu start --next --json` and tell the owner what the message names. The owner starts that runner, registers one with those labels, changes the job's `runs-on`, or takes the check out of `required_checks`. Then rerun the same `quipu done N --json ...` |
 | `checks-failing` | with `merge: agent`, a required check on the PR failed or never ran | fix the cause, push to the work branch, then rerun the same `quipu done N --json ...` |
 | `merge-blocked` | GitHub cannot merge the PR: it is a draft, behind the default branch, conflicting, or refused by a rule | update the branch (`git fetch origin && git merge origin/<default>`), resolve conflicts, push, then rerun the same `quipu done N --json ...` |
 | `commit-format` | a commit message breaks the repository's `commit_format` | write it as `#NNN type(scope): summary` with a `Refs: #N` footer line (`git commit --amend` for the last commit), and title the PR `type(scope): summary` |
