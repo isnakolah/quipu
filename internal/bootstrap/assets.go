@@ -28,6 +28,9 @@ type Options struct {
 	// DefectsFrom names the workflows whose failed default-branch runs the
 	// Writer turns into Defects.
 	DefectsFrom []string
+	// WakeOn names workflows whose finish wakes the Writer, so a queued merge
+	// does not wait for the schedule.
+	WakeOn []string
 }
 
 // installQuipu uses a quipu already on the runner's PATH (a self-hosted
@@ -62,9 +65,9 @@ on:
   schedule:
     - cron: '[[.Schedule]]'
 [[- end]]
-[[- if .DefectsFrom]]
+[[- if or .DefectsFrom .WakeOn]]
   workflow_run:
-    workflows: [[quoted .DefectsFrom]]
+    workflows: [[quoted (union .DefectsFrom .WakeOn)]]
     types: [completed]
 [[- end]]
   workflow_dispatch:
@@ -81,7 +84,7 @@ jobs:
     runs-on: [[runner "writer"]]
     if: >-
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) &&
-      (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_branch == '[[.DefaultBranch]]'))
+      (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_branch == '[[.DefaultBranch]]')[[if .WakeOn]] || github.event.workflow_run.head_repository.full_name == github.repository[[end]])
     steps:
       - uses: actions/checkout@v4
         with: {ref: [[.DefaultBranch]]}
@@ -103,7 +106,16 @@ jobs:
           case "$EVENT" in
             workflow_run)
               # A run failed on the default branch: file one Ready P0 Defect.
+[[- if .WakeOn]]
+              # A failure here must not hold up the queued merge below.
+              defect=0
+              quipu writer defect --run-id "$RUN_ID" --apply --json || defect=$?
+              # Checks finished: a queued merge may be able to go ahead.
+              quipu writer reconcile --apply --json
+              exit "$defect" ;;
+[[- else]]
               quipu writer defect --run-id "$RUN_ID" --apply --json ;;
+[[- end]]
             issue_comment|issues)
               # Drain everything since the last successful run: Actions keeps
               # only one queued run per concurrency group, and runners sleep.
@@ -270,6 +282,18 @@ func Render(o Options) (map[string]string, error) {
 			quoted[i] = strconv.Quote(name)
 		}
 		return "[" + strings.Join(quoted, ", ") + "]"
+	}, "union": func(lists ...[]string) []string {
+		var names []string
+		seen := map[string]bool{}
+		for _, list := range lists {
+			for _, name := range list {
+				if !seen[name] {
+					seen[name] = true
+					names = append(names, name)
+				}
+			}
+		}
+		return names
 	}, "runner": func(job string) string {
 		labels := o.RunsOn[job]
 		switch len(labels) {

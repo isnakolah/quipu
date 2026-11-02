@@ -32,13 +32,15 @@ quipu done N --json --criteria "..." --commands "..." --documentation "..." --ri
 
 Then go back to `quipu status --json`. If `start --next` returns `"status": "Idle"`, there is no Ready work: say so and stop. If it returns `"status": "Busy"`, other agents won every race: run it again.
 
+**Never wait on a runner or on checks.** Take other work, then look once with `quipu status --json`: `pull_requests` gives each active PR's check results and `next`. When a runner the repository needs is down, `quipu start` and `quipu done` say so in a `runner` field and on stderr, and start it themselves if the owner set a command for that. Carry on either way.
+
 Use the repository's default branch for `--base` (`main` here unless `quipu status` says otherwise).
 
 ## Commands you may run
 
 | Command | When | What you get back |
 |---|---|---|
-| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention`, `owner_queue` (what only the owner can move; leave it and take other work) |
+| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention`, `owner_queue` (what only the owner can move; leave it and take other work), `pull_requests` (each active PR's check results and what to do next) |
 | `quipu start --next --json` | to take work | `issue`, `status`, `branch`, `holder`, `lease_expires`, `next` |
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
@@ -47,6 +49,8 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
 | `quipu guide` | to read this handbook | this text |
+| `quipu runner status --json` | a check won't start, or work seems stuck | each runner's state and labels, what is queued for it, when the Writer last ran |
+| `quipu runner setup` | the owner asks how to set a runner up | the steps, printed for the owner |
 | `quipu doctor --json` | something seems misconfigured | a list of checks with fixes |
 | `quipu config --json` | to see what applies in this repository | each effective setting and where it came from |
 | `quipu context`, `quipu validate`, `quipu version` | inspecting | read-only reports |

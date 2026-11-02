@@ -134,7 +134,7 @@ func mergeDefaultIn(w worktree, branch, defaultBranch string) (string, error) {
 
 // queueMerge hands the PR and its evidence to the Writer and frees this
 // worktree. It does not wait: the request applies when the Writer next runs.
-func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head string, e writer.Evidence, why error, asJSON bool) error {
+func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head string, e writer.Evidence, why error, respond func(flowResult) error) error {
 	// The Writer checks this too, but by then this agent has moved on.
 	if err := validateReviewPR(c, number, branch, url); err != nil {
 		return flowErr("rejected", "PR %s cannot be queued: %v", url, err)
@@ -158,7 +158,7 @@ func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head
 			owner = " Tell the owner what this names: it cannot merge until a runner takes the check."
 		}
 	}
-	return printFlowResult(flowResult{Issue: number, Status: "In review", PR: url, Next: fmt.Sprintf("Queued (%s). The Writer merges %s when its checks pass and closes #%d, or returns #%d to Ready with the reason.%s Do not wait: take other work with quipu start --next --json.", reason, url, number, number, owner)}, asJSON)
+	return respond(flowResult{Issue: number, Status: "In review", PR: url, Next: fmt.Sprintf("Queued (%s). The Writer merges %s when its checks pass and closes #%d, or returns #%d to Ready with the reason.%s Do not wait: take other work with quipu start --next --json, and look again later with quipu status --json.", reason, url, number, number, owner)})
 }
 
 type queueStep int
