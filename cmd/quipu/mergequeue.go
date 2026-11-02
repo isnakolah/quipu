@@ -61,7 +61,7 @@ func requiredChecks(c model.Config) []string {
 }
 
 // mergePull merges with a merge commit, pinned to the head the checks ran on.
-func mergePull(c model.Config, number int, view mergeView) error {
+func mergePull(c model.Config, number int, view mergeView, flags ...string) error {
 	args := []string{"pr", "merge", view.URL, "--repo", c.Owner + "/" + c.Repository, "--merge", "--match-head-commit", view.HeadRefOid}
 	if c.CommitFormat == policycheck.IssuePrefix {
 		subject, body, err := policycheck.IssuePrefixMessage(number, view.Title)
@@ -70,7 +70,7 @@ func mergePull(c model.Config, number int, view mergeView) error {
 		}
 		args = append(args, "--subject", subject, "--body", body)
 	}
-	if _, err := ghOutput(args...); err != nil {
+	if _, err := ghOutput(append(args, flags...)...); err != nil {
 		return flowErr("merge-blocked", "GitHub refused to merge %s: %v", view.URL, err)
 	}
 	return nil

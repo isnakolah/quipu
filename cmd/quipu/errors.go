@@ -44,6 +44,9 @@ var flowErrors = []flowErrorKind{
 // flagErrors are the failures only a flag can cause. The handbook lists them
 // only when that flag is on.
 var flagErrors = []flowErrorKind{
+	{"local-check-failed", "with `merge_without_ci`, `local_check` did not pass, so nothing merged", "fix the cause, commit, push, then rerun the same `quipu done N --json ...`"},
+	{"worktree-unclean", "with `merge_without_ci`, the worktree has changes or is not at the PR's head, so a check here would not be checking what merges", "commit and push, or `git restore` the changes, then rerun the same `quipu done N --json ...`"},
+	{"policy-rules", "with `merge_without_ci`, the PR breaks a policy rule, and those are never waived", "fix each problem it lists, then rerun the same `quipu done N --json ...`; what only the owner can do, such as the `quipu:owner-approved` label, ask the owner for"},
 	{"merge-conflict", "with `update_behind: auto`, the work branch conflicts with the default branch, and the merge was undone", "run `git fetch origin && git merge origin/<default>`, resolve the conflicts, commit, push, then rerun the same `quipu done N --json ...`"},
 }
 
