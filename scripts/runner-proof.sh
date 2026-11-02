@@ -67,10 +67,11 @@ project_number=$(gh project create --owner "$owner" --title "$repo" --format jso
 printf '%s\n' 'merge: agent' 'merge_wait: background' >>quipu.yml
 # Each start adds a line to the starts file, so this proof can count them.
 runner_start="nohup '$work/runner/run.sh' >>'$work/runner.log' 2>&1 & echo started >>'$work/starts'"
-awk -v line="  runner_start: \"$runner_start\"" '{ print } /^workflows:$/ { print line }' quipu.yml >"$work/quipu.yml"
+# Quipu writes its config with four-space indents.
+awk -v line="    runner_start: \"$runner_start\"" '{ print } /^workflows:$/ { print line }' quipu.yml >"$work/quipu.yml"
 cp "$work/quipu.yml" quipu.yml
 grep -q runner_start quipu.yml
-"$quipu" adopt --apply --replace --json >/dev/null
+"$quipu" adopt --apply --replace --json >"$work/adopt.json" || { cat "$work/adopt.json" >&2; exit 1; }
 cat >.github/workflows/ci.yml <<YAML
 name: CI
 on:
@@ -85,7 +86,8 @@ jobs:
 YAML
 grep -q '"Quipu policy"' .github/workflows/quipu-writer.yml
 grep -q 'head_repository.full_name == github.repository' .github/workflows/quipu-writer.yml
-printf '%s' "${QUIPU_PROOF_WRITER_TOKEN:-$(gh auth token)}" | gh secret set QUIPU_WRITER_TOKEN --repo "$owner/$repo"
+# Piped, never expanded, so tracing this script with bash -x can't log the token.
+if [ -n "${QUIPU_PROOF_WRITER_TOKEN:-}" ]; then printenv QUIPU_PROOF_WRITER_TOKEN; else gh auth token; fi | gh secret set QUIPU_WRITER_TOKEN --repo "$owner/$repo"
 git add -A && git commit -qm "chore(quipu): adopt Quipu" && git push -q origin main
 
 step "a runner is registered for $label and left stopped"
