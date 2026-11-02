@@ -41,6 +41,12 @@ var flowErrors = []flowErrorKind{
 	{"not-active", "the Issue is not in progress, in review, or awaiting evidence", "check `quipu status --json`; start work with `quipu start N --json`"},
 }
 
+// flagErrors are the failures only a flag can cause. The handbook lists them
+// only when that flag is on.
+var flagErrors = []flowErrorKind{
+	{"merge-conflict", "with `update_behind: auto`, the work branch conflicts with the default branch, and the merge was undone", "run `git fetch origin && git merge origin/<default>`, resolve the conflicts, commit, push, then rerun the same `quipu done N --json ...`"},
+}
+
 // flowError is one coded failure.
 type flowError struct {
 	Code    string `json:"code"`
@@ -55,7 +61,7 @@ func (e *flowError) Unwrap() error { return e.cause }
 // flowErr builds a coded error whose next step comes from flowErrors.
 func flowErr(code, format string, args ...any) *flowError {
 	e := &flowError{Code: code, Message: fmt.Sprintf(format, args...)}
-	for _, kind := range flowErrors {
+	for _, kind := range append(append([]flowErrorKind{}, flowErrors...), flagErrors...) {
 		if kind.Code == code {
 			e.Next = kind.Next
 		}

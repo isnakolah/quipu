@@ -41,6 +41,8 @@ type Request struct {
 	PR                  string    `json:"pr,omitempty"`
 	Evidence            *Evidence `json:"evidence,omitempty"`
 	Import              *Import   `json:"import,omitempty"`
+	// Head is the PR head a merge.queue request was checked against.
+	Head string `json:"head,omitempty"`
 }
 
 // Import records where an imported Issue stood before Quipu. The Writer
@@ -91,6 +93,38 @@ type Receipt struct {
 	Evidence    *Evidence     `json:"evidence,omitempty"`
 	At          time.Time     `json:"at"`
 	State       *ReceiptState `json:"state,omitempty"`
+	Merge       *QueuedMerge  `json:"merge,omitempty"`
+}
+
+// QueuedMerge is a PR the Writer merges when its checks pass. Its evidence is
+// held here, not in Receipt.Evidence, because only evidence validated against
+// a merged PR may count towards Done.
+type QueuedMerge struct {
+	PR       string   `json:"pr"`
+	Head     string   `json:"head"`
+	Evidence Evidence `json:"evidence"`
+}
+
+// MergeResultID is the receipt that ends a queued merge.
+func MergeResultID(queued Receipt) string { return "merge-result-" + queued.RequestID }
+
+// LatestQueuedMerge returns the merge queued in the current claim that has not
+// ended yet, if there is one.
+func LatestQueuedMerge(receipts []Receipt) (Receipt, bool) {
+	since := CycleStart(receipts)
+	for i := len(receipts) - 1; i >= 0; i-- {
+		r := receipts[i]
+		if r.Result != "accepted" || r.Merge == nil || r.At.Before(since) {
+			continue
+		}
+		for _, later := range receipts {
+			if later.RequestID == MergeResultID(r) {
+				return Receipt{}, false
+			}
+		}
+		return r, true
+	}
+	return Receipt{}, false
 }
 
 func HashRequest(r Request) (string, error) {

@@ -49,6 +49,8 @@ func run(args []string) error {
 		return startCommand(args[1:])
 	case "done":
 		return doneCommand(args[1:])
+	case "triage":
+		return triageCommand(args[1:])
 	case "propose":
 		return proposeCommand(args[1:])
 	case "config":
@@ -325,30 +327,55 @@ func linkParent(c model.Config, parent, child int) error {
 }
 
 func addIssueToProject(c model.Config, issueURL, kind, area, priority string) error {
-	output, err := ghOutput("project", "item-add", fmt.Sprint(c.Project.Number), "--owner", c.Owner, "--url", issueURL, "--format", "json")
+	itemID, err := addProjectItem(c, issueURL)
 	if err != nil {
 		return err
+	}
+	return setProjectOptions(c, itemID, map[string]string{"Status": "Backlog", "Kind": kind, "Area": area, "Priority": priority, "Proof": "Not started"})
+}
+
+// addProjectItem adds the Issue to the Project and returns its item ID. An Issue
+// the Project already holds, such as through its auto-add workflow, keeps its item.
+func addProjectItem(c model.Config, issueURL string) (string, error) {
+	output, err := ghOutput("project", "item-add", fmt.Sprint(c.Project.Number), "--owner", c.Owner, "--url", issueURL, "--format", "json")
+	if err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			return "", err
+		}
+		number, numberErr := issueNumberFromURL(issueURL)
+		if numberErr != nil {
+			return "", err
+		}
+		state, stateErr := loadLiveWork(c, number)
+		if stateErr != nil {
+			return "", stateErr
+		}
+		return state.ItemID, nil
 	}
 	var item struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(output, &item); err != nil {
-		return err
+		return "", err
 	}
 	if item.ID == "" {
-		return errors.New("GitHub returned incomplete Project item identity")
+		return "", errors.New("GitHub returned incomplete Project item identity")
 	}
+	return item.ID, nil
+}
+
+// setProjectOptions sets single-select Project fields on an item.
+func setProjectOptions(c model.Config, itemID string, values map[string]string) error {
 	fields, err := configuredProjectFields(c)
 	if err != nil {
 		return err
 	}
-	values := map[string]string{"Status": "Backlog", "Kind": kind, "Area": area, "Priority": priority, "Proof": "Not started"}
 	for name, value := range values {
 		field, ok := fields[name]
 		if !ok || field.Options[value] == "" {
 			return fmt.Errorf("configured Project lacks %s option %q", name, value)
 		}
-		if err := setProjectFieldValue(c.Project.ID, item.ID, field.ID, field.Options[value], false); err != nil {
+		if err := setProjectFieldValue(c.Project.ID, itemID, field.ID, field.Options[value], false); err != nil {
 			return fmt.Errorf("set Project %s: %w", name, err)
 		}
 	}
@@ -395,7 +422,7 @@ Owner:
   hooks      install the agent guard hooks in this repository (--apply)
 
 Setup and advanced:
-  init|adopt|import|verify-commit|doctor|guide|config|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
+  init|adopt|import|verify-commit|doctor|guide|config|context|validate|issue|triage|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")

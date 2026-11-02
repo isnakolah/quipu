@@ -44,6 +44,7 @@ The `QUIPU_WRITER_TOKEN` secret (a classic PAT with `project` plus `public_repo`
 - `Done` needs accepted evidence from the current claim and a synchronized Wiki journal (when `wiki_mode` is `journal`).
 - `import` applies once, to an Issue with no receipt state yet, from an authorized actor; it records the manifest status (In progress waits in Ready) and closes Done and Cancelled work.
 - Claimed and In progress leases that expire return to Ready with their branch kept, unless the branch has an open PR or the lookup fails. Then the work keeps its holder, who can renew once the Writer is back, and the next pass checks again; closing the PR releases it. In review work keeps its holder.
+- `merge.queue` (with `merge_wait: background` on the default branch) needs the holder, work In review, an open PR, complete evidence, and the head it was checked against. It changes nothing on the board: the receipt holds the PR and evidence, apart from `Receipt.Evidence`, so a queued merge never counts towards Done.
 
 ### Watchdog
 
@@ -55,6 +56,7 @@ Each reconcile pass, after applying requests:
 - removes `status:` labels;
 - fills blank Project fields from labels (Status Backlog, Priority P2, Proof Not started) without overwriting set values;
 - re-runs the `policy` check of open PRs whose verdict changed with the work under them;
+- advances a queued merge: while checks run it does nothing, and a check that has not started yet only waits. When they pass it merges pinned to the checked head, then records the held evidence through the same checks as `evidence.submit` and closes the Issue. A failed check, closed PR, or refused merge returns the Issue to Ready on its branch, with the reason in the receipt. A push after queueing ends the queue, leaving the holder in place. A behind PR is updated with `gh pr update-branch` under `update_behind: auto`, and otherwise returns to Ready;
 - carries on past an Issue that fails and reports every failure at the end.
 
 ### Defects from failed runs
@@ -81,6 +83,7 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 - `ready_by` (`owner` or `agents`), `policy_exempt_authors` (bot accounts only), and `required_checks` (default `[test]`; `policy` is always required).
 - `merge`: `owner` (default) or `agent`. With `agent`, `quipu done` gates on the PR's status check rollup: every required check and `policy` must have a successful result and none may be failing or running (`checks-failing`, `checks-pending`). A queued check whose job's labels match no online runner is `checks-no-runner`, using `repos/{owner}/{repo}/actions/runners` (and the organization's runners where the token can read them). One runner must carry every label; a busy runner counts, and GitHub-hosted labels are never missing. If the token can't read runners, it stays `checks-pending` and says the runner state is unknown. `quipu doctor` makes the same comparison for the Writer, `policy`, every `workflows.runs_on` entry, and each required check, whose labels it reads from the default branch's workflow files; it warns when it can't tell. A draft, behind, or conflicting PR is `merge-blocked`. It merges with `gh pr merge --merge --match-head-commit`, so a push after the checks ran cannot slip in.
 - `commit_format`: unset or `issue-prefix` (`#NNN type(scope): summary`, footer `Refs: #N`, merge commits from git exempt). Enforced by `policy` for every PR commit and the PR title, and by `quipu verify-commit FILE` in a `commit-msg` hook.
+- `issues_by`, `triage_by`, `update_behind`, `merge_wait`, and `guard_reads`: the autonomy flags, all off by default and read from the default branch. The [owner guide](owner-guide.md#options) says what each one gives up. `quipu guide` adds a section for each flag on, and with every flag off it renders the handbook unchanged.
 - `workflows`: runners, pinned Quipu version, schedule, and PR trigger for the generated workflows.
 
 ## Bootstrap and adoption

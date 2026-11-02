@@ -247,6 +247,12 @@ func doctorChecks() []doctorCheck {
 	}
 	checks = append(checks, githubChecks(c)...)
 	checks = append(checks, runnerChecks(c, here)...)
+	enforced, _, err := loadEnforcedConfig(here, false)
+	if err != nil {
+		enforced = c.WithoutRelaxations()
+	}
+	current, found := readUnder(here.Top)(guideRule)
+	checks = append(checks, handbookCheck(current, found, enforced))
 	return checks
 }
 

@@ -35,11 +35,14 @@ type issueReport struct {
 	Receipted int
 	Reclaimed int
 	Kept      int
-	Reopened  int
-	Restored  int
-	Triaged   int
-	Rechecked int
-	Warnings  []string
+	// MergesQueued counts PRs waiting on the Writer, MergesDone those it merged.
+	MergesQueued int
+	MergesDone   int
+	Reopened     int
+	Restored     int
+	Triaged      int
+	Rechecked    int
+	Warnings     []string
 }
 
 func writerReconcileCommand(args []string) error {
@@ -101,6 +104,8 @@ func writerReconcileCommand(args []string) error {
 		total.Receipted += report.Receipted
 		total.Reclaimed += report.Reclaimed
 		total.Kept += report.Kept
+		total.MergesQueued += report.MergesQueued
+		total.MergesDone += report.MergesDone
 		total.Reopened += report.Reopened
 		total.Restored += report.Restored
 		total.Triaged += report.Triaged
@@ -110,6 +115,7 @@ func writerReconcileCommand(args []string) error {
 		}
 	}
 	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed, "leases_kept_for_open_pr": total.Kept,
+		"merges_queued": total.MergesQueued, "merges_done": total.MergesDone,
 		"issues_reopened": total.Reopened, "drift_restored": total.Restored, "issues_triaged": total.Triaged,
 		"policy_rechecked": total.Rechecked, "warnings": append([]string{}, total.Warnings...), "errors": failures, "apply": *apply}
 	if err := printValue(result, *asJSON); err != nil {
@@ -181,11 +187,12 @@ type watch struct {
 	receipts []writer.Receipt
 	report   issueReport
 	openPR   func(branch string) (bool, error)
+	ops      mergeOps
 }
 
 func reconcileIssue(c model.Config, number int, apply bool, trust writer.Trust, now time.Time) (issueReport, error) {
 	w := &watch{c: c, number: number, apply: apply, now: now, trust: trust, ctx: context.Background(), client: github.NewClient(), poster: receiptClient(),
-		openPR: func(branch string) (bool, error) { return branchHasOpenPR(c, branch) }}
+		openPR: func(branch string) (bool, error) { return branchHasOpenPR(c, branch) }, ops: liveMergeOps(c)}
 	err := w.run()
 	return w.report, err
 }
@@ -267,7 +274,11 @@ func (w *watch) run() error {
 	if err != nil {
 		return err
 	}
-	if w.apply && (changed || reclaimed) {
+	merged, err := w.queuedMerge(&state)
+	if err != nil {
+		return err
+	}
+	if w.apply && (changed || reclaimed || merged) {
 		for _, branch := range uniqueBranches(before.Branch, state.Branch) {
 			w.recheckPolicy(branch)
 		}

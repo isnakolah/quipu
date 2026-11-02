@@ -22,7 +22,6 @@ import (
 
 	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/model"
-	policycheck "github.com/isnakolah/quipu/internal/policy"
 	"github.com/isnakolah/quipu/internal/writer"
 )
 
@@ -632,17 +631,26 @@ func doneCommand(args []string) error {
 		if pull.State != "MERGED" {
 			// merge: agent. Collect the evidence first, so a merged PR never
 			// waits on an agent that forgot a flag.
-			e.FinalSHA = "pending merge"
+			e.FinalSHA = pendingMerge
 			if e.CIURL == "" {
 				e.CIURL = pull.CIURL
 			}
 			if e.CIURL == "" {
-				e.CIURL = "pending merge"
+				e.CIURL = pendingMerge
 			}
 			if err := promptMissingEvidence(&e, os.Stdin, os.Stderr); err != nil {
 				return err
 			}
 			ciURL, err := mergeWhenGreen(c, number, pull.URL)
+			head := ""
+			if errors.Is(err, errPRBehind) && c.UpdatesBehind() {
+				if head, err = mergeDefaultIn(w, state.Branch, c.DefaultBranch); err == nil {
+					err = flowErr("checks-pending", "updated %s with %s, so its checks run again", state.Branch, c.DefaultBranch)
+				}
+			}
+			if checksStillRunning(err) && c.MergesInBackground() {
+				return queueMerge(c, w, number, actor, pull.URL, head, e, err, *asJSON)
+			}
 			if err != nil {
 				return err
 			}
@@ -652,7 +660,7 @@ func doneCommand(args []string) error {
 			if pull.State != "MERGED" {
 				return flowErr("merge-blocked", "PR %s is %s after merging", pull.URL, pull.State)
 			}
-			if e.CIURL == "pending merge" {
+			if e.CIURL == pendingMerge {
 				e.CIURL = ciURL
 			}
 		}
@@ -855,9 +863,17 @@ type prCheck struct {
 	State   string `json:"state"`
 }
 
-// mergeGate passes when every required check has a successful result and
-// none of them is failing or still running.
-func mergeGate(checks []prCheck, required []string) error {
+type checkVerdict int
+
+const (
+	checkPassed checkVerdict = iota
+	checkFailing
+	checkNeverRan
+	checkPending
+)
+
+// judgeChecks gives each required check its verdict.
+func judgeChecks(checks []prCheck, required []string) map[string]checkVerdict {
 	results := map[string][]string{}
 	for _, check := range checks {
 		name, result := check.Name, check.Conclusion
@@ -869,18 +885,36 @@ func mergeGate(checks []prCheck, required []string) error {
 		}
 		results[name] = append(results[name], result)
 	}
-	var pending, failing []string
+	verdicts := make(map[string]checkVerdict, len(required))
 	for _, name := range required {
 		got := results[name]
 		switch {
 		case len(got) == 0:
-			failing = append(failing, name+" (never ran)")
+			verdicts[name] = checkNeverRan
 		case containsAny(got, "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"):
-			failing = append(failing, name)
+			verdicts[name] = checkFailing
 		case containsAny(got, "PENDING", "EXPECTED", "QUEUED", ""):
-			pending = append(pending, name)
+			verdicts[name] = checkPending
 		case !containsAny(got, "SUCCESS"):
+			verdicts[name] = checkFailing
+		}
+	}
+	return verdicts
+}
+
+// mergeGate passes when every required check has a successful result and
+// none of them is failing or still running.
+func mergeGate(checks []prCheck, required []string) error {
+	verdicts := judgeChecks(checks, required)
+	var pending, failing []string
+	for _, name := range required {
+		switch verdicts[name] {
+		case checkNeverRan:
+			failing = append(failing, name+" (never ran)")
+		case checkFailing:
 			failing = append(failing, name)
+		case checkPending:
+			pending = append(pending, name)
 		}
 	}
 	if len(failing) > 0 {
@@ -907,44 +941,25 @@ func containsAny(values []string, wanted ...string) bool {
 // checks ran on, when the repository lets agents merge. It returns the run
 // URL of the first required check, for the evidence.
 func mergeWhenGreen(c model.Config, number int, url string) (string, error) {
-	output, err := ghOutput("pr", "view", url, "--repo", c.Owner+"/"+c.Repository, "--json", "title,isDraft,mergeStateStatus,headRefOid,statusCheckRollup")
+	view, err := loadMergeView(c, url)
 	if err != nil {
 		return "", err
 	}
-	var view struct {
-		Title            string    `json:"title"`
-		IsDraft          bool      `json:"isDraft"`
-		MergeStateStatus string    `json:"mergeStateStatus"`
-		HeadRefOid       string    `json:"headRefOid"`
-		Checks           []prCheck `json:"statusCheckRollup"`
-	}
-	if err := json.Unmarshal(output, &view); err != nil {
-		return "", err
-	}
-	required := append(append([]string{}, c.Checks()...), "policy")
+	required := requiredChecks(c)
 	if err := mergeGate(view.Checks, required); err != nil {
 		return "", explainPendingChecks(c, err, view.Checks, required)
 	}
 	if view.IsDraft || view.MergeStateStatus == "BEHIND" || view.MergeStateStatus == "DIRTY" {
-		return "", flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", url, view.IsDraft, view.MergeStateStatus)
-	}
-	args := []string{"pr", "merge", url, "--repo", c.Owner + "/" + c.Repository, "--merge", "--match-head-commit", view.HeadRefOid}
-	if c.CommitFormat == policycheck.IssuePrefix {
-		subject, body, err := policycheck.IssuePrefixMessage(number, view.Title)
-		if err != nil {
-			return "", flowErr("commit-format", "%v", err)
+		e := flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", url, view.IsDraft, view.MergeStateStatus)
+		if !view.IsDraft && view.MergeStateStatus == "BEHIND" {
+			e.cause = errPRBehind
 		}
-		args = append(args, "--subject", subject, "--body", body)
+		return "", e
 	}
-	if _, err := ghOutput(args...); err != nil {
-		return "", flowErr("merge-blocked", "GitHub refused to merge %s: %v", url, err)
+	if err := mergePull(c, number, view); err != nil {
+		return "", err
 	}
-	for _, check := range view.Checks {
-		if check.Name == c.Checks()[0] && check.Conclusion == "SUCCESS" {
-			return check.DetailsURL, nil
-		}
-	}
-	return "", nil
+	return requiredRunURL(c, view.Checks), nil
 }
 
 // passingCIURL returns a successful check run URL only when no check failed,
