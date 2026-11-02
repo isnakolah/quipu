@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -22,7 +23,7 @@ import (
 )
 
 const (
-	noCIPrefix = "None: merged without CI at "
+	noCIPrefix          = "None: merged without CI at "
 	defaultEnvironments = "GitHub Actions CI"
 	defaultArtifacts    = "None: CI run linked"
 	// What the evidence says in place of those defaults, which name a CI run.
@@ -30,7 +31,10 @@ const (
 	noCIArtifacts   = "None: no CI ran"
 )
 
-var noCIValue = regexp.MustCompile(`^None: merged without CI at ([0-9a-f]{40}); `)
+// noCIAdminNote ends the CI field when the merge used the admin bypass.
+const noCIAdminNote = "; merged with the admin bypass"
+
+var noCIValue = regexp.MustCompile(`^None: merged without CI at ([0-9a-f]{40}); local_check (".*" exited 0|result not known to this rerun), as reported by quipu done(; merged with the admin bypass)?$`)
 
 // noCIEvidence is the CI field of a merge without CI. The exit code is the
 // client's report: the Writer cannot verify a run on another machine.
@@ -47,7 +51,9 @@ func isNoCIEvidence(ci string) bool { return strings.HasPrefix(ci, noCIPrefix) }
 
 // checkNoCIEvidence is what the Writer asks of evidence that skipped CI. Its
 // config comes from the default branch, so a PR cannot turn this on for itself.
-func checkNoCIEvidence(c model.Config, e writer.Evidence, head string) error {
+// A check that had failed by the time of the merge means nobody skipped CI: it
+// ran and said no. One that fails later is what skipping CI gives up.
+func checkNoCIEvidence(c model.Config, e writer.Evidence, view prView) error {
 	if !c.MergesWithoutCI() {
 		return errors.New("evidence says the merge skipped CI, but merge_without_ci is off on the default branch")
 	}
@@ -55,13 +61,32 @@ func checkNoCIEvidence(c model.Config, e writer.Evidence, head string) error {
 	if match == nil {
 		return fmt.Errorf("CI value %q is not the form quipu done writes", e.CIURL)
 	}
-	if match[1] != head {
-		return fmt.Errorf("evidence says the merge skipped CI at %s, but the PR's head is %s", match[1], head)
+	if match[1] != view.HeadRefOid {
+		return fmt.Errorf("evidence says the merge skipped CI at %s, but the PR's head is %s", match[1], view.HeadRefOid)
 	}
 	if e.Boundary != "local" {
 		return fmt.Errorf("a merge without CI was verified only locally, so its boundary must be local, not %q", e.Boundary)
 	}
+	if _, err := waivedChecks(checksBefore(view.Checks, view.MergedAt), requiredChecks(c)); err != nil {
+		return err
+	}
 	return nil
+}
+
+// checksBefore leaves out the checks that finished after a time.
+func checksBefore(checks []prCheck, at string) []prCheck {
+	limit, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		return checks
+	}
+	var before []prCheck
+	for _, check := range checks {
+		completed, err := time.Parse(time.RFC3339, check.CompletedAt)
+		if err != nil || !completed.After(limit) {
+			before = append(before, check)
+		}
+	}
+	return before
 }
 
 // noCISettings reads the flags that waive checks. A worktree's copy of the config
@@ -73,14 +98,22 @@ func noCISettings(c model.Config, source string) (noCI, bypass bool) {
 	return c.MergesWithoutCI(), c.BypassesRulesets()
 }
 
-// cancelledBeforeStarting is GitHub ending a job nothing ever picked up: it
-// never ran, so it says nothing about the code. The times are how it shows.
-func cancelledBeforeStarting(check prCheck) bool {
-	if check.Conclusion != "CANCELLED" {
+// didNotRun is a check that says nothing about the code: skipped, or GitHub
+// ending a job nothing ever picked up, which its times show. Times it can't read
+// count as a run, so an unknown shape blocks.
+func didNotRun(check prCheck) bool {
+	switch check.Conclusion {
+	case "SKIPPED", "NEUTRAL":
+		return true
+	case "CANCELLED":
+	default:
 		return false
 	}
 	started, err := time.Parse(time.RFC3339, check.StartedAt)
-	if err != nil || started.IsZero() {
+	if err != nil {
+		return false
+	}
+	if started.IsZero() {
 		return true
 	}
 	completed, err := time.Parse(time.RFC3339, check.CompletedAt)
@@ -88,12 +121,12 @@ func cancelledBeforeStarting(check prCheck) bool {
 }
 
 // waivedChecks names the required checks a merge without CI goes ahead without:
-// those pending, never run, or cancelled before starting. One that ran and failed
+// those pending, skipped, never run, or cancelled before starting. One that ran and failed
 // is an error, whatever the flags.
 func waivedChecks(checks []prCheck, required []string) ([]string, error) {
 	var ran []prCheck
 	for _, check := range checks {
-		if !cancelledBeforeStarting(check) {
+		if !didNotRun(check) {
 			ran = append(ran, check)
 		}
 	}
@@ -115,14 +148,24 @@ func waivedChecks(checks []prCheck, required []string) ([]string, error) {
 
 // noCIOps are the outside effects of a merge without CI.
 type noCIOps struct {
-	view       func() (mergeView, error)
-	update     func() error
-	head       func() (string, error)
-	dirty      func() (string, error)
-	violations func() ([]string, error)
-	check      func(command string) (int, error)
-	record     func(head, value string)
-	merge      func(view mergeView, admin bool) error
+	view          func() (mergeView, error)
+	update        func() error
+	head          func() (string, error)
+	dirty         func() (string, error)
+	violations    func() ([]string, error)
+	check         func(command string) (int, error)
+	record        func(head, value string)
+	forget        func(head string)
+	merge         func(view mergeView, admin bool) error
+	adminBlockers func(view mergeView) ([]string, error)
+}
+
+// blockedState is a PR GitHub won't merge whatever the checks say.
+func blockedState(view mergeView) error {
+	if view.IsDraft || view.MergeStateStatus == "DIRTY" || view.MergeStateStatus == "BEHIND" {
+		return flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", view.URL, view.IsDraft, view.MergeStateStatus)
+	}
+	return nil
 }
 
 // mergeWithoutCI merges with required checks waived. It returns "" and no error
@@ -143,21 +186,17 @@ func mergeWithoutCI(c model.Config, bypass bool, e writer.Evidence, ops noCIOps)
 	if e.Boundary != "local" {
 		return "", flowErr("evidence-missing", "this merge skips CI, so --boundary must be local, not %q", e.Boundary)
 	}
-	if view.IsDraft || view.MergeStateStatus == "DIRTY" {
-		return "", flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", view.URL, view.IsDraft, view.MergeStateStatus)
+	if err := checkCleanAt(ops, view.HeadRefOid); err != nil {
+		return "", err
 	}
-	if view.MergeStateStatus == "BEHIND" {
-		if !c.UpdatesBehind() {
-			return "", flowErr("merge-blocked", "PR %s is behind %s", view.URL, c.DefaultBranch)
-		}
+	if view.MergeStateStatus == "BEHIND" && !view.IsDraft && c.UpdatesBehind() {
 		if err := ops.update(); err != nil {
 			return "", err
 		}
-		if view, err = ops.view(); err != nil {
-			return "", err
-		}
+		// GitHub can lag behind the push, and the check must run on the new head.
+		return "", flowErr("checks-pending", "updated %s with %s; rerun quipu done to check and merge it", view.URL, c.DefaultBranch)
 	}
-	if err := checkCleanAt(ops, view.HeadRefOid); err != nil {
+	if err := blockedState(view); err != nil {
 		return "", err
 	}
 	violations, err := ops.violations()
@@ -185,6 +224,9 @@ func mergeWithoutCI(c model.Config, bypass bool, e writer.Evidence, ops noCIOps)
 	if view.HeadRefOid != head {
 		return "", flowErr("worktree-unclean", "PR %s moved to %s while local_check ran on %s; rerun quipu done", view.URL, view.HeadRefOid, head)
 	}
+	if err := blockedState(view); err != nil {
+		return "", err
+	}
 	waived, err := waivedChecks(view.Checks, required)
 	if err != nil {
 		return "", err
@@ -193,12 +235,98 @@ func mergeWithoutCI(c model.Config, bypass bool, e writer.Evidence, ops noCIOps)
 	ops.record(head, value)
 	err = ops.merge(view, false)
 	if err != nil && bypass && len(waived) > 0 {
-		err = ops.merge(view, true)
+		// --admin skips every rule, and GitHub's refusal doesn't say which one
+		// stopped it. So it is used only when nothing else could have.
+		blockers, blockerErr := ops.adminBlockers(view)
+		switch {
+		case blockerErr != nil:
+			err = flowErr("merge-blocked", "%v; and could not tell whether the admin bypass is safe: %v", err, blockerErr)
+		case len(blockers) > 0:
+			err = flowErr("merge-blocked", "%v; and the admin bypass only waives checks that never ran, not: %s", err, strings.Join(blockers, ", "))
+		default:
+			value += noCIAdminNote
+			ops.record(head, value)
+			err = ops.merge(view, true)
+		}
 	}
 	if err != nil {
+		ops.forget(head)
 		return "", err
 	}
 	return value, nil
+}
+
+// judgeAdminBlockers lists what the admin bypass would wrongly override.
+func judgeAdminBlockers(checks []prCheck, reviewDecision string, unresolvedThreads int) []string {
+	var blockers []string
+	var names []string
+	for _, check := range checks {
+		name := check.Name
+		if name == "" {
+			name = check.Context
+		}
+		names = append(names, name)
+	}
+	if _, err := waivedChecks(checks, names); err != nil {
+		blockers = append(blockers, err.Error())
+	}
+	if reviewDecision == "CHANGES_REQUESTED" {
+		blockers = append(blockers, "a review requested changes")
+	}
+	if unresolvedThreads > 0 {
+		blockers = append(blockers, fmt.Sprintf("%d unresolved review threads", unresolvedThreads))
+	}
+	return blockers
+}
+
+// loadAdminBlockers reads what judgeAdminBlockers needs from GitHub.
+func loadAdminBlockers(c model.Config, view mergeView) ([]string, error) {
+	output, err := ghOutput("pr", "view", view.URL, "--repo", c.Owner+"/"+c.Repository, "--json", "number,reviewDecision")
+	if err != nil {
+		return nil, err
+	}
+	var pull struct {
+		Number         int    `json:"number"`
+		ReviewDecision string `json:"reviewDecision"`
+	}
+	if err := json.Unmarshal(output, &pull); err != nil {
+		return nil, err
+	}
+	output, err = ghOutput("api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}",
+		"-F", "owner="+c.Owner, "-F", "name="+c.Repository, "-F", fmt.Sprintf("number=%d", pull.Number))
+	if err != nil {
+		return nil, err
+	}
+	var threads struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					ReviewThreads struct {
+						PageInfo struct {
+							HasNextPage bool `json:"hasNextPage"`
+						} `json:"pageInfo"`
+						Nodes []struct {
+							IsResolved bool `json:"isResolved"`
+						} `json:"nodes"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(output, &threads); err != nil {
+		return nil, err
+	}
+	found := threads.Data.Repository.PullRequest.ReviewThreads
+	if found.PageInfo.HasNextPage {
+		return nil, errors.New("more than 100 review threads")
+	}
+	unresolved := 0
+	for _, thread := range found.Nodes {
+		if !thread.IsResolved {
+			unresolved++
+		}
+	}
+	return judgeAdminBlockers(view.Checks, pull.ReviewDecision, unresolved), nil
 }
 
 // checkCleanAt refuses a tree the check would not really be checking.
@@ -237,8 +365,10 @@ func liveNoCIOps(c model.Config, w worktree, number int, branch, url string) noC
 			}
 			return prViolations(c, pull, func(n int) (liveWork, error) { return loadLiveWork(c, n) }, time.Now()), nil
 		},
-		check:  func(command string) (int, error) { return runLocalCheck(w.Top, command) },
-		record: func(head, value string) { recordLocalCheck(w, head, value) },
+		check:         func(command string) (int, error) { return runLocalCheck(w.Top, command) },
+		record:        func(head, value string) { recordLocalCheck(w, head, value) },
+		forget:        func(head string) { _ = os.Remove(localCheckRecord(w, head)) },
+		adminBlockers: func(view mergeView) ([]string, error) { return loadAdminBlockers(c, view) },
 		merge: func(view mergeView, admin bool) error {
 			if admin {
 				return mergePull(c, number, view, "--admin")
@@ -271,17 +401,17 @@ func recordLocalCheck(w worktree, head, value string) {
 	_ = os.WriteFile(localCheckRecord(w, head), []byte(value+"\n"), 0o644)
 }
 
-// noCIRerunEvidence is the CI field when `quipu done` runs again after a merge
-// without CI. A real run wins over having no record of the check. It returns ""
-// when the PR's own CI is the evidence.
-func noCIRerunEvidence(w worktree, head, passingRun string) string {
+// noCIRerunEvidence is the CI field when `quipu done` runs after a merge and was
+// given none: the record of the check, or else the passing run of a required
+// check, or else a plain statement that neither is known.
+func noCIRerunEvidence(w worktree, head, requiredRun string) string {
 	if raw, err := os.ReadFile(localCheckRecord(w, head)); err == nil {
 		if value := strings.TrimSpace(string(raw)); isNoCIEvidence(value) {
 			return value
 		}
 	}
-	if passingRun != "" {
-		return ""
+	if requiredRun != "" {
+		return requiredRun
 	}
 	return noCIEvidenceUnknown(head)
 }
@@ -320,10 +450,18 @@ func noCIDefaults(e *writer.Evidence) {
 // ruleset is the part of a repository ruleset that decides whether GitHub refuses
 // a merge without CI.
 type ruleset struct {
-	Name         string `json:"name"`
-	Enforcement  string `json:"enforcement"`
-	Target       string `json:"target"`
-	BypassActors []struct {
+	Name        string `json:"name"`
+	Enforcement string `json:"enforcement"`
+	Target      string `json:"target"`
+	Conditions  struct {
+		RefName struct {
+			Include []string `json:"include"`
+			Exclude []string `json:"exclude"`
+		} `json:"ref_name"`
+	} `json:"conditions"`
+	// CurrentUserCanBypass is what GitHub says when this token can't list the actors.
+	CurrentUserCanBypass string `json:"current_user_can_bypass"`
+	BypassActors         []struct {
 		ActorID   int    `json:"actor_id"`
 		ActorType string `json:"actor_type"`
 		Mode      string `json:"bypass_mode"`
@@ -339,12 +477,35 @@ type ruleset struct {
 }
 
 func (r ruleset) adminsBypass() bool {
+	if r.CurrentUserCanBypass == "always" || r.CurrentUserCanBypass == "pull_requests_only" {
+		return true
+	}
 	for _, actor := range r.BypassActors {
-		if actor.ActorType == "RepositoryRole" && actor.ActorID == adminRoleID && actor.Mode == "always" {
+		if actor.ActorType == "RepositoryRole" && actor.ActorID == adminRoleID && (actor.Mode == "always" || actor.Mode == "pull_request") {
 			return true
 		}
 	}
 	return false
+}
+
+// appliesTo reports whether this ruleset governs a branch.
+func (r ruleset) appliesTo(branch string) bool {
+	matches := func(patterns []string) bool {
+		for _, pattern := range patterns {
+			if pattern == "~ALL" || pattern == "~DEFAULT_BRANCH" {
+				return true
+			}
+			pattern = strings.TrimPrefix(pattern, "refs/heads/")
+			if matched, err := path.Match(strings.ReplaceAll(pattern, "**", "*"), branch); err == nil && matched {
+				return true
+			}
+		}
+		return false
+	}
+	if len(r.Conditions.RefName.Include) == 0 && len(r.Conditions.RefName.Exclude) == 0 {
+		return true
+	}
+	return matches(r.Conditions.RefName.Include) && !matches(r.Conditions.RefName.Exclude)
 }
 
 // requires names the checks in this ruleset that merge_without_ci may waive.
@@ -367,7 +528,7 @@ func (r ruleset) requires(required []string) []string {
 func judgeRulesets(c model.Config, rulesets []ruleset) []doctorCheck {
 	var checks []doctorCheck
 	for _, r := range rulesets {
-		if r.Enforcement != "active" || r.Target != "branch" {
+		if r.Enforcement != "active" || r.Target != "branch" || !r.appliesTo(c.DefaultBranch) {
 			continue
 		}
 		found := r.requires(requiredChecks(c))

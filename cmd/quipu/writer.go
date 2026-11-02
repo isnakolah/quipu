@@ -271,7 +271,7 @@ func validateEvidence(c model.Config, number int, branch, pr string, evidence *w
 		return err
 	}
 	if isNoCIEvidence(evidence.CIURL) {
-		return checkNoCIEvidence(c, *evidence, view.HeadRefOid)
+		return checkNoCIEvidence(c, *evidence, view)
 	}
 	return checkCIRun(c, evidence.CIURL, view)
 }
@@ -284,14 +284,16 @@ type prView struct {
 	BaseRefName string `json:"baseRefName"`
 	HeadRefName string `json:"headRefName"`
 	HeadRefOid  string `json:"headRefOid"`
+	MergedAt    string `json:"mergedAt"`
 	MergeCommit struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
+	Checks []prCheck `json:"statusCheckRollup"`
 }
 
 func viewPR(c model.Config, pr string) (prView, error) {
 	var view prView
-	output, err := ghOutput("pr", "view", pr, "--repo", c.Owner+"/"+c.Repository, "--json", "number,url,state,body,baseRefName,headRefName,headRefOid,mergeCommit")
+	output, err := ghOutput("pr", "view", pr, "--repo", c.Owner+"/"+c.Repository, "--json", "number,url,state,body,baseRefName,headRefName,headRefOid,mergedAt,mergeCommit,statusCheckRollup")
 	if err != nil {
 		return view, fmt.Errorf("read pull request: %w", err)
 	}

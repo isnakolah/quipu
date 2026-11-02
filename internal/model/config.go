@@ -287,6 +287,9 @@ func (c Config) Validate() error {
 	if c.MergeWithoutCI && strings.TrimSpace(c.LocalCheck) == "" {
 		return fmt.Errorf("merge_without_ci needs a local_check")
 	}
+	if c.MergeWithoutCI && c.MergeWait == "background" {
+		return fmt.Errorf("merge_without_ci and merge_wait: background disagree: one waits for the checks and the other doesn't; pick one")
+	}
 	if c.LocalCheck != "" && !c.MergeWithoutCI {
 		return fmt.Errorf("local_check needs merge_without_ci")
 	}

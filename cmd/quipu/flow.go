@@ -676,12 +676,12 @@ func doneCommand(args []string) error {
 		}
 		e.FinalSHA = pull.MergeCommit
 		if e.CIURL == "" && noCI {
-			// A rerun: the merge landed and the evidence did not reach the Writer.
+			// The merge landed and the evidence has not reached the Writer.
 			view, err := loadMergeView(c, pull.URL)
 			if err != nil {
 				return err
 			}
-			e.CIURL = noCIRerunEvidence(w, view.HeadRefOid, pull.CIURL)
+			e.CIURL = noCIRerunEvidence(w, view.HeadRefOid, requiredRunURL(c, view.Checks))
 		}
 		if e.CIURL == "" {
 			e.CIURL = pull.CIURL
