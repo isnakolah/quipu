@@ -441,6 +441,13 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		}
 	}
 	if state.Status == "Claimed" {
+		// A claim kept past its expiry by an open PR needs renewing before it
+		// can start.
+		if state.Holder == actor && !hasActiveLease(state.Holder, state.Expiry, time.Now()) {
+			if err := sendAndWait(c, number, actor, writer.Request{Action: "renew"}, wait); err != nil {
+				return flowResult{}, err
+			}
+		}
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, wait); err != nil {
 			return flowResult{}, err
 		}

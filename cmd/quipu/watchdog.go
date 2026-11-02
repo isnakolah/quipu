@@ -473,9 +473,14 @@ func (w *watch) reclaim(state *liveWork) (bool, error) {
 	if !reclaimed {
 		return false, nil
 	}
-	if keepsLease(w.openPR(state.Branch)) {
+	open, err := w.openPR(state.Branch)
+	if err != nil {
+		w.report.Warnings = append(w.report.Warnings, fmt.Sprintf("kept the expired lease on #%d: could not list PRs for %s: %v", w.number, state.Branch, err))
+	}
+	if keepsLease(open, err) {
 		w.report.Kept++
-		return false, nil
+		// A lapsed lease fails policy, so the PR's check has to be rerun.
+		return true, nil
 	}
 	w.report.Reclaimed++
 	if !w.apply {
@@ -502,17 +507,28 @@ func branchHasOpenPR(c model.Config, branch string) (bool, error) {
 	if branch == "" {
 		return false, nil
 	}
-	output, err := ghOutput("pr", "list", "--repo", c.Owner+"/"+c.Repository, "--head", branch, "--state", "open", "--json", "number", "--limit", "1")
+	output, err := ghOutput("pr", "list", "--repo", c.Owner+"/"+c.Repository, "--head", branch, "--base", c.DefaultBranch, "--state", "open", "--json", "isCrossRepository", "--limit", "100")
 	if err != nil {
 		return false, err
 	}
+	return hasOwnPR(output)
+}
+
+// hasOwnPR ignores PRs from forks: anyone can name a fork's branch the same, and
+// that must not keep a lease.
+func hasOwnPR(output []byte) (bool, error) {
 	var pulls []struct {
-		Number int `json:"number"`
+		IsCrossRepository bool `json:"isCrossRepository"`
 	}
 	if err := json.Unmarshal(output, &pulls); err != nil {
 		return false, err
 	}
-	return len(pulls) > 0, nil
+	for _, pull := range pulls {
+		if !pull.IsCrossRepository {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // recheckPolicy re-runs the policy check of open PRs from branch whose

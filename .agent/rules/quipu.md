@@ -192,7 +192,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `held-by` | the Issue's lease belongs to another worktree or agent | continue in the worktree that holds it (`quipu status --json` shows holder and branch), or take other work with `quipu start --next --json` |
 | `not-ready` | the Issue is not Ready, so it cannot be started | take Ready work with `quipu start --next --json`; only the owner makes work Ready |
 | `branch-elsewhere` | the work branch is checked out in another worktree | continue in that worktree, or remove it with `git worktree remove <path>` if nothing runs there |
-| `no-receipt` | the Writer did not answer before the wait ran out | the request stays queued, so take other work or rerun the same command later; it is safe. If it keeps happening, tell the owner what the message says about the Writer and its runner |
+| `no-receipt` | the Writer did not answer before the wait ran out | the request stays queued and still applies when the Writer next runs, so rerun the same command later instead of taking other work; it is safe. If it keeps happening, tell the owner what the message says about the Writer and its runner |
 | `rejected-stale` | the work changed while your request was in flight | rerun the same command |
 | `rejected-taken` | another agent claimed the work first | run `quipu start --next --json` for other work |
 | `rejected-blocked` | the work has an open blocker | take other work with `quipu start --next --json` |

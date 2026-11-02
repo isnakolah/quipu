@@ -35,11 +35,17 @@ type runnerFacts struct {
 }
 
 func listRunners(path string) ([]repoRunner, error) {
-	output, err := ghOutput("api", path)
+	output, err := ghOutput("api", "--paginate", "--slurp", path)
 	if err != nil {
 		return nil, err
 	}
-	var response struct {
+	return parseRunnerPages(output)
+}
+
+// parseRunnerPages reads every page, since a runner past the first would
+// otherwise look missing.
+func parseRunnerPages(output []byte) ([]repoRunner, error) {
+	var pages []struct {
 		Runners []struct {
 			Name   string `json:"name"`
 			Status string `json:"status"`
@@ -48,16 +54,18 @@ func listRunners(path string) ([]repoRunner, error) {
 			} `json:"labels"`
 		} `json:"runners"`
 	}
-	if err := json.Unmarshal(output, &response); err != nil {
+	if err := json.Unmarshal(output, &pages); err != nil {
 		return nil, err
 	}
-	runners := make([]repoRunner, 0, len(response.Runners))
-	for _, runner := range response.Runners {
-		labels := make([]string, 0, len(runner.Labels))
-		for _, label := range runner.Labels {
-			labels = append(labels, label.Name)
+	runners := []repoRunner{}
+	for _, page := range pages {
+		for _, runner := range page.Runners {
+			labels := make([]string, 0, len(runner.Labels))
+			for _, label := range runner.Labels {
+				labels = append(labels, label.Name)
+			}
+			runners = append(runners, repoRunner{Name: runner.Name, Online: runner.Status == "online", Labels: labels})
 		}
-		runners = append(runners, repoRunner{Name: runner.Name, Online: runner.Status == "online", Labels: labels})
 	}
 	return runners, nil
 }
@@ -94,7 +102,9 @@ const (
 	runnerUnknown
 )
 
-var hostedLabel = regexp.MustCompile(`(?i)^(ubuntu|macos|windows)-`)
+// hostedLabel matches GitHub's image names, such as ubuntu-latest, macos-15-xlarge
+// or windows-11-arm. A custom label like ubuntu-gpu belongs to a self-hosted runner.
+var hostedLabel = regexp.MustCompile(`(?i)^(ubuntu|macos|windows)-(latest|slim|[0-9][0-9.]*)(-[a-z0-9-]+)?$`)
 
 // hostedLabels reports whether labels ask for a GitHub-hosted runner, which the
 // runners API never lists.
@@ -242,7 +252,7 @@ func describeWriter(lastRun time.Time, lastErr error, labels []string, facts run
 	case lastRun.IsZero():
 		parts = append(parts, "it has never run successfully")
 	default:
-		parts = append(parts, "its last successful run started "+now.Sub(lastRun).Round(time.Minute).String()+" ago")
+		parts = append(parts, "its last successful run started "+now.Sub(lastRun).Round(time.Minute).String()+" ago; if that is recent, check the QUIPU_WRITER_TOKEN secret, since a scheduled run without it succeeds and does nothing")
 	}
 	_, detail := judgeRunners(labels, facts)
 	return strings.Join(parts, "; ") + "; its runner [" + strings.Join(labels, ", ") + "]: " + detail
@@ -303,17 +313,25 @@ func parseWorkflowJobs(raw []byte) ([]workflowJob, error) {
 
 // checkJob finds the job behind a required check. Its check name is the job's
 // name, or its ID when unnamed, with any matrix values in parentheses after it.
+// Jobs in several workflows may share a name; when their runners differ, which
+// one the check means is unknown, so the result is Computed.
 func checkJob(check string, jobs []workflowJob) (workflowJob, bool) {
+	var found workflowJob
+	matched := false
 	for _, job := range jobs {
 		name := job.Name
 		if name == "" {
 			name = job.ID
 		}
-		if check == name || check == job.ID || strings.HasPrefix(check, name+" (") {
-			return job, true
+		if check != name && !strings.HasPrefix(check, name+" (") {
+			continue
 		}
+		if matched && (job.Computed || strings.Join(job.Labels, "\n") != strings.Join(found.Labels, "\n")) {
+			return workflowJob{ID: job.ID, Name: job.Name, Computed: true}, true
+		}
+		found, matched = job, true
 	}
-	return workflowJob{}, false
+	return found, matched
 }
 
 // readWorkflowJobs reads the default branch's workflow files, or the worktree's
@@ -383,7 +401,7 @@ func judgeRunnerNeeds(c model.Config, jobs []workflowJob, facts func() runnerFac
 		case !found:
 			needs = append(needs, need{name: "runner: check " + check, note: "no workflow job has this name, so its runner is unknown"})
 		case job.Computed:
-			needs = append(needs, need{name: "runner: check " + check, note: "its runner comes from an expression or a runner group, so it is unknown"})
+			needs = append(needs, need{name: "runner: check " + check, note: "its runner comes from an expression, a runner group, or several workflows, so it is unknown"})
 		default:
 			needs = append(needs, need{name: "runner: check " + check, labels: job.Labels})
 		}
@@ -438,7 +456,7 @@ func ownerQueue(items []statusItem, agentsMerge bool, now time.Time) []ownerItem
 			reason = "blocked; decide how to unblock it"
 		case item.Status == "Claimed" || item.Status == "In progress":
 			if !hasActiveLease(item.LeaseHolder, item.LeaseExpires, now) {
-				reason = "lease expired; it stays with its holder while its PR is open. If the agent is gone, close the PR to release it"
+				reason = "lease expired; the holder can renew it with quipu start, and the Writer returns it to Ready unless its branch has an open PR. If the agent is gone, close the PR to release it"
 			}
 		}
 		if reason != "" {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/isnakolah/quipu/internal/model"
+	"github.com/isnakolah/quipu/internal/writer"
 )
 
 var callaRunners = runnerFacts{Runners: []repoRunner{
@@ -123,7 +124,7 @@ func TestDescribeWriter(t *testing.T) {
 	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 	labels := []string{"self-hosted", "old-box"}
 	text := describeWriter(now.Add(-3*time.Hour), nil, labels, callaRunners, now)
-	for _, want := range []string{"stays queued", "3h0m0s ago", "old-box is offline"} {
+	for _, want := range []string{"stays queued", "3h0m0s ago", "QUIPU_WRITER_TOKEN", "old-box is offline"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q: %s", want, text)
 		}
@@ -265,6 +266,100 @@ func TestReclaimKeepsWorkWithAnOpenPR(t *testing.T) {
 	state.Expiry = "2026-11-02T13:00:00Z"
 	if _, err := live.reclaim(state); err != nil || live.report.Reclaimed != 0 {
 		t.Fatalf("%v %+v", err, live.report)
+	}
+}
+
+func TestHostedLabelsAreOnlyGitHubImages(t *testing.T) {
+	for _, label := range []string{"ubuntu-latest", "ubuntu-24.04", "ubuntu-24.04-arm", "ubuntu-slim", "macos-15", "macos-15-xlarge", "windows-latest", "windows-11-arm", "Ubuntu-Latest"} {
+		if !hostedLabels([]string{label}) {
+			t.Errorf("%s is GitHub-hosted", label)
+		}
+	}
+	for _, label := range []string{"ubuntu-gpu", "macos-builder", "windows-box", "ubuntu", "self-hosted"} {
+		if hostedLabels([]string{label}) {
+			t.Errorf("%s is self-hosted", label)
+		}
+	}
+	gpu := runnerFacts{Runners: []repoRunner{{Name: "gpu-1", Online: false, Labels: []string{"self-hosted", "ubuntu-gpu"}}}}
+	if got, detail := judgeRunners([]string{"self-hosted", "ubuntu-gpu"}, gpu); got != runnerOffline {
+		t.Fatalf("an offline self-hosted ubuntu-gpu: %d %q", got, detail)
+	}
+}
+
+func TestParseRunnerPagesReadsEveryPage(t *testing.T) {
+	runners, err := parseRunnerPages([]byte(`[{"runners":[{"name":"a","status":"online","labels":[{"name":"x"}]}]},{"runners":[{"name":"b","status":"offline","labels":[{"name":"y"}]}]}]`))
+	if err != nil || len(runners) != 2 {
+		t.Fatalf("%v %+v", err, runners)
+	}
+	if !runners[0].Online || runners[1].Online || runners[1].Labels[0] != "y" {
+		t.Fatalf("%+v", runners)
+	}
+}
+
+func TestCheckJob(t *testing.T) {
+	linux := workflowJob{ID: "test", Labels: []string{"self-hosted", "linux"}}
+	nightly := workflowJob{ID: "test", Labels: []string{"self-hosted", "old-box"}}
+	named := workflowJob{ID: "unit", Name: "Unit", Labels: []string{"ubuntu-latest"}}
+	if _, found := checkJob("unit", []workflowJob{named}); found {
+		t.Error("GitHub reports a named job by its name, not its ID")
+	}
+	if job, found := checkJob("Unit (1)", []workflowJob{named}); !found || job.ID != "unit" {
+		t.Errorf("matrix check: %+v %v", job, found)
+	}
+	if job, found := checkJob("test", []workflowJob{linux, nightly}); !found || !job.Computed {
+		t.Errorf("two workflows disagree, so the runner is unknown: %+v", job)
+	}
+	if job, found := checkJob("test", []workflowJob{linux, linux}); !found || job.Computed || job.Labels[1] != "linux" {
+		t.Errorf("two workflows agree: %+v", job)
+	}
+}
+
+func TestHasOwnPRIgnoresForks(t *testing.T) {
+	for raw, want := range map[string]bool{
+		`[]`:                            false,
+		`[{"isCrossRepository":true}]`:  false,
+		`[{"isCrossRepository":false}]`: true,
+		`[{"isCrossRepository":true},{"isCrossRepository":false}]`: true,
+	} {
+		if got, err := hasOwnPR([]byte(raw)); err != nil || got != want {
+			t.Errorf("%s: %v %v", raw, got, err)
+		}
+	}
+}
+
+func TestKeptLeaseRechecksPolicyAndReportsAFailedLookup(t *testing.T) {
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	state := func() *liveWork {
+		return &liveWork{Status: "In progress", Holder: "a", Branch: "007/work", Expiry: "2026-11-02T11:00:00Z"}
+	}
+	open := &watch{now: now, number: 7, openPR: func(string) (bool, error) { return true, nil }}
+	if recheck, err := open.reclaim(state()); err != nil || !recheck {
+		t.Fatalf("a lapsed lease changes the PR's verdict, so policy is rechecked: %v %v", recheck, err)
+	}
+	if len(open.report.Warnings) != 0 {
+		t.Fatalf("an open PR is no warning: %v", open.report.Warnings)
+	}
+	down := &watch{now: now, number: 7, openPR: func(string) (bool, error) { return false, errors.New("gh down") }}
+	if _, err := down.reclaim(state()); err != nil {
+		t.Fatal(err)
+	}
+	if len(down.report.Warnings) != 1 || !strings.Contains(down.report.Warnings[0], "#7") || !strings.Contains(down.report.Warnings[0], "gh down") {
+		t.Fatalf("the cause must be reported: %v", down.report.Warnings)
+	}
+}
+
+func TestLapsedClaimRenewsBeforeStarting(t *testing.T) {
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	lapsed := writer.WorkState{Status: "Claimed", Lease: writer.Lease{Holder: "a", Branch: "007/work", Expires: now.Add(-time.Hour)}}
+	if _, err := writer.ApplyLifecycle(lapsed, writer.Request{Action: "start", Actor: "a"}, now); err == nil {
+		t.Fatal("start needs a live lease, which is why startIssue renews first")
+	}
+	renewed, err := writer.ApplyLifecycle(lapsed, writer.Request{Action: "renew", Actor: "a"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started, err := writer.ApplyLifecycle(renewed, writer.Request{Action: "start", Actor: "a"}, now); err != nil || started.Status != "In progress" {
+		t.Fatalf("%v %+v", err, started)
 	}
 }
 
