@@ -50,6 +50,20 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 		}
 		current.Status = "Evidence pending"
 		return current, nil
+	case "merge.queue":
+		if request.Evidence == nil || request.PR == "" || request.Head == "" {
+			return WorkState{}, fmt.Errorf("merge queue request requires evidence, pull request URL, and head")
+		}
+		if err := request.Evidence.Validate(); err != nil {
+			return WorkState{}, err
+		}
+		if err := sameHolder(current, request.Actor); err != nil {
+			return WorkState{}, err
+		}
+		if current.Status != "In review" {
+			return WorkState{}, fmt.Errorf("merge queue applies to work In review, not %q", current.Status)
+		}
+		return current, nil
 	case "status":
 		if request.Status == "" {
 			return WorkState{}, fmt.Errorf("status request requires status")

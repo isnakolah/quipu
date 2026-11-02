@@ -134,6 +134,14 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 			return rejectedReceipt(request, err)
 		}
 	}
+	if request.Action == "merge.queue" {
+		if !c.MergesInBackground() {
+			return rejectedReceipt(request, errors.New("merge.queue needs merge: agent and merge_wait: background on the default branch"))
+		}
+		if err := validateReviewPR(c, number, state.Branch, request.PR); err != nil {
+			return rejectedReceipt(request, err)
+		}
+	}
 	if request.Action == "import" && writer.LastState(receipts) != nil {
 		return rejectedReceipt(request, errors.New("import applies only to work that has not entered the flow"))
 	}
@@ -167,6 +175,10 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	}
 	if next.Status == "Done" {
 		receipt.Detail = "completion evidence verified; lifecycle state changed to Done and Issue closed"
+	}
+	if request.Action == "merge.queue" {
+		receipt.Detail = "merge queued; the Writer merges when the checks pass"
+		receipt.Merge = &writer.QueuedMerge{PR: request.PR, Head: request.Head, Evidence: *request.Evidence}
 	}
 	return receipt
 }

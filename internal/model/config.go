@@ -37,8 +37,22 @@ type Config struct {
 	Merge string `yaml:"merge,omitempty" json:"merge,omitempty"`
 	// CommitFormat "issue-prefix" requires `#NNN type(scope): summary`
 	// commit subjects with a `Refs: #N` footer.
-	CommitFormat string    `yaml:"commit_format,omitempty" json:"commit_format,omitempty"`
-	Workflows    Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
+	CommitFormat string `yaml:"commit_format,omitempty" json:"commit_format,omitempty"`
+	// IssuesBy "agents" lets agents create Stories, Tasks and Defects under an
+	// existing Epic. New Epics stay proposals.
+	IssuesBy string `yaml:"issues_by,omitempty" json:"issues_by,omitempty"`
+	// TriageBy "agents" lets agents triage quipu:needs-triage Issues and file
+	// Decisions and Gates, which they still never decide.
+	TriageBy string `yaml:"triage_by,omitempty" json:"triage_by,omitempty"`
+	// UpdateBehind "auto" makes `quipu done` merge the default branch into a
+	// PR that is behind it. Needs merge: agent.
+	UpdateBehind string `yaml:"update_behind,omitempty" json:"update_behind,omitempty"`
+	// MergeWait "background" hands a PR whose checks are still running to the
+	// Writer, which merges it once they pass. Needs merge: agent.
+	MergeWait string `yaml:"merge_wait,omitempty" json:"merge_wait,omitempty"`
+	// GuardReads "open" widens the commands the guard treats as read-only.
+	GuardReads string    `yaml:"guard_reads,omitempty" json:"guard_reads,omitempty"`
+	Workflows  Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
 }
 
 // Workflows shapes the generated GitHub Actions workflows.
@@ -154,10 +168,27 @@ func (c Config) AgentsMerge() bool { return c.Merge == "agent" }
 // AgentsMakeReady reports whether agents may run `quipu ready`.
 func (c Config) AgentsMakeReady() bool { return c.ReadyBy == "agents" }
 
+// AgentsCreateIssues reports whether agents may run `quipu issue create`.
+func (c Config) AgentsCreateIssues() bool { return c.IssuesBy == "agents" }
+
+// AgentsTriage reports whether agents may run `quipu triage`.
+func (c Config) AgentsTriage() bool { return c.TriageBy == "agents" }
+
+// UpdatesBehind reports whether `quipu done` brings a behind PR up to date.
+func (c Config) UpdatesBehind() bool { return c.AgentsMerge() && c.UpdateBehind == "auto" }
+
+// MergesInBackground reports whether the Writer merges PRs whose checks are
+// still running when `quipu done` runs.
+func (c Config) MergesInBackground() bool { return c.AgentsMerge() && c.MergeWait == "background" }
+
+// GuardReadsOpen reports whether the guard allows its wider read-only list.
+func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
+
 // WithoutRelaxations turns off every setting that relaxes enforcement, for a
 // config that cannot be trusted to have come from the default branch.
 func (c Config) WithoutRelaxations() Config {
 	c.ReadyBy, c.Merge, c.PolicyExemptAuthors = "", "", nil
+	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads = "", "", "", "", ""
 	return c
 }
 
@@ -214,6 +245,27 @@ func (c Config) Validate() error {
 	}
 	if c.CommitFormat != "" && c.CommitFormat != "issue-prefix" {
 		return fmt.Errorf("commit_format must be issue-prefix or unset")
+	}
+	if c.IssuesBy != "" && c.IssuesBy != "owner" && c.IssuesBy != "agents" {
+		return fmt.Errorf("issues_by must be owner or agents")
+	}
+	if c.TriageBy != "" && c.TriageBy != "owner" && c.TriageBy != "agents" {
+		return fmt.Errorf("triage_by must be owner or agents")
+	}
+	if c.UpdateBehind != "" && c.UpdateBehind != "off" && c.UpdateBehind != "auto" {
+		return fmt.Errorf("update_behind must be off or auto")
+	}
+	if c.UpdateBehind == "auto" && !c.AgentsMerge() {
+		return fmt.Errorf("update_behind: auto needs merge: agent")
+	}
+	if c.MergeWait != "" && c.MergeWait != "foreground" && c.MergeWait != "background" {
+		return fmt.Errorf("merge_wait must be foreground or background")
+	}
+	if c.MergeWait == "background" && !c.AgentsMerge() {
+		return fmt.Errorf("merge_wait: background needs merge: agent")
+	}
+	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {
+		return fmt.Errorf("guard_reads must be closed or open")
 	}
 	if err := c.Workflows.validate(); err != nil {
 		return err

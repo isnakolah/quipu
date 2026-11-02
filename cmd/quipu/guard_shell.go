@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/isnakolah/quipu/internal/model"
 	policycheck "github.com/isnakolah/quipu/internal/policy"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -217,6 +218,14 @@ var readOnlyCommands = setOf("ls", "cat", "head", "tail", "wc", "grep", "egrep",
 	"sha1sum", "sha256sum", "seq", "sleep", "less", "more", "man", "exit", "return", "set", "unset", "shopt",
 	"read", "wait", "jobs", "trap", "ps", "lsof", "tput", "colordiff", "bat", "fd", "uniq", ":")
 
+// openReadCommands are also read-only, and pass with guard_reads: open. Only
+// commands that cannot write qualify: interpreters such as awk, python or perl
+// can do anything, xxd and base64 can write a file, and macOS arch runs any
+// program, so they stay out.
+var openReadCommands = setOf("b2sum", "cal", "cksum", "expand", "getconf", "groups", "gzcat", "locale", "look",
+	"nm", "nproc", "otool", "paste", "pgrep", "rev", "sha224sum", "sha384sum", "sha512sum", "strings", "sum", "sw_vers",
+	"tac", "unexpand", "uptime", "who", "zcat")
+
 // fileArgCommands write to their path arguments, so each path is judged.
 var fileArgCommands = setOf("rm", "rmdir", "mv", "cp", "touch", "mkdir", "chmod", "chown", "ln", "tee",
 	"truncate", "install", "unlink", "rsync", "patch")
@@ -322,7 +331,7 @@ func (g *guard) call(args []shellArg, dir *string) error {
 	case "curl":
 		return g.curl(rest, *dir)
 	}
-	if readOnlyCommands[name] {
+	if readOnlyCommands[name] || (openReadCommands[name] && g.readsOpen(*dir)) {
 		return nil
 	}
 	if fileArgCommands[name] {
@@ -480,6 +489,8 @@ subcommand:
 		return nil
 	case sub == "config" && hasAnyFlag(rest, "--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin", "--show-scope"):
 		return nil
+	case openGitRead(sub, rest) && g.readsOpen(dir):
+		return nil
 	case sub == "branch":
 		return deny("branch-change", "git branch "+joinArgs(rest))
 	case gitRefWrites[sub]:
@@ -498,6 +509,34 @@ subcommand:
 	default:
 		return g.writeIn(dir)
 	}
+}
+
+// openGitRead recognizes the listing forms of git commands whose other forms
+// write, which pass with guard_reads: open.
+func openGitRead(sub string, rest []shellArg) bool {
+	var positional []string
+	var flags []shellArg
+	for _, arg := range rest {
+		if !arg.ok {
+			return false
+		}
+		if strings.HasPrefix(arg.s, "-") {
+			flags = append(flags, arg)
+		} else {
+			positional = append(positional, arg.s)
+		}
+	}
+	switch sub {
+	case "tag":
+		return len(positional) == 0 && len(flags) > 0 && gitListing(flags, "--sort", "--format", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case")
+	case "branch":
+		return hasFlag(flags, "--list") && gitListing(flags, "--list", "-a", "-r", "-v", "-vv", "--all", "--remotes", "--verbose", "--sort", "--format", "--color", "--no-color", "--contains", "--no-contains", "--merged", "--no-merged", "--ignore-case", "-i")
+	case "symbolic-ref":
+		return len(positional) == 1 && gitListing(flags, "--short", "-q", "--quiet")
+	case "notes":
+		return len(flags) == 0 && len(positional) > 0 && (positional[0] == "list" || positional[0] == "show")
+	}
+	return false
 }
 
 func isShortFlag(arg string, flag byte) bool {
@@ -835,6 +874,18 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 		return nil
 	case sub == "ready" && agentsMakeReady(dir):
 		return nil
+	case sub == "triage" && agentsTriage(dir):
+		return nil
+	case sub == "issue" && len(rest) > 1 && rest[1].s == "create":
+		c, err := enforcedConfigIn(dir)
+		if err != nil {
+			return deny("quipu-admin", "quipu issue create: "+err.Error())
+		}
+		problem := agentIssueProblem(c, rest[2:], func(number int) (string, error) { return openIssueKind(c, number) })
+		if problem != "" {
+			return deny("quipu-admin", "quipu issue create: "+problem)
+		}
+		return nil
 	case (sub == "writer" || sub == "journal" || sub == "protect" || sub == "hooks") && !hasFlag(rest, "--apply"):
 		return nil
 	default:
@@ -842,14 +893,32 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 	}
 }
 
-// agentsMakeReady reports whether dir's repository lets agents make work Ready.
-func agentsMakeReady(dir string) bool {
+// enforcedConfigIn reads the config in force for dir's repository.
+func enforcedConfigIn(dir string) (model.Config, error) {
 	w, err := openWorktree(existingDir(dir))
 	if err != nil {
-		return false
+		return model.Config{}, err
 	}
 	c, _, err := loadEnforcedConfig(w, false)
+	return c, err
+}
+
+// agentsMakeReady reports whether dir's repository lets agents make work Ready.
+func agentsMakeReady(dir string) bool {
+	c, err := enforcedConfigIn(dir)
 	return err == nil && c.AgentsMakeReady()
+}
+
+// agentsTriage reports whether dir's repository lets agents triage Issues.
+func agentsTriage(dir string) bool {
+	c, err := enforcedConfigIn(dir)
+	return err == nil && c.AgentsTriage()
+}
+
+// readsOpen reports whether dir's repository sets guard_reads: open.
+func (g *guard) readsOpen(dir string) bool {
+	c, err := enforcedConfigIn(dir)
+	return err == nil && c.GuardReadsOpen()
 }
 
 var goReadOnly = setOf("test", "vet", "build", "list", "version", "doc", "help", "bug")
