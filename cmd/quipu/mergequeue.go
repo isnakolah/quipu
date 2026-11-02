@@ -41,7 +41,9 @@ type mergeView struct {
 	IsDraft          bool   `json:"isDraft"`
 	MergeStateStatus string `json:"mergeStateStatus"`
 	HeadRefOid       string `json:"headRefOid"`
-	MergeCommit      *struct {
+	// BaseOID is the default branch's tip when the PR was compared with it.
+	BaseOID     string `json:"-"`
+	MergeCommit *struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
 	Checks []prCheck `json:"statusCheckRollup"`
@@ -54,6 +56,71 @@ func loadMergeView(c model.Config, url string) (mergeView, error) {
 		return view, err
 	}
 	return view, json.Unmarshal(output, &view)
+}
+
+// loadMergeState is the view a merge decision needs. GitHub reports BEHIND only
+// under a rule that requires branches to be up to date, and a repository without
+// one reports a stale PR as mergeable, so this asks git's own question. A PR that
+// can't be compared doesn't merge.
+func loadMergeState(c model.Config, url string) (mergeView, error) {
+	view, err := loadMergeView(c, url)
+	if err != nil || view.State != "OPEN" {
+		return view, err
+	}
+	output, err := ghOutput("api", fmt.Sprintf("repos/%s/%s/compare/%s...%s?per_page=1", c.Owner, c.Repository, c.DefaultBranch, view.HeadRefOid), "--jq", "{behind_by: .behind_by, base: .base_commit.sha}")
+	if err != nil {
+		return view, flowErr("merge-blocked", "could not tell whether %s is behind %s: %v", url, c.DefaultBranch, err)
+	}
+	var compared struct {
+		BehindBy int    `json:"behind_by"`
+		Base     string `json:"base"`
+	}
+	if err := json.Unmarshal(output, &compared); err != nil {
+		return view, flowErr("merge-blocked", "could not tell whether %s is behind %s: %v", url, c.DefaultBranch, err)
+	}
+	view.BaseOID, view.MergeStateStatus = compared.Base, behindState(view.MergeStateStatus, compared.BehindBy)
+	return view, nil
+}
+
+// behindState merges GitHub's state with what the compare found. A conflict stays
+// a conflict, and a BEHIND the compare disproves is GitHub still catching up.
+func behindState(state string, behindBy int) string {
+	switch {
+	case state == "DIRTY":
+		return state
+	case behindBy > 0:
+		return "BEHIND"
+	case state == "BEHIND":
+		return "UNKNOWN"
+	}
+	return state
+}
+
+// firstParent is the default branch's tip just before a merge commit.
+func firstParent(c model.Config, sha string) (string, error) {
+	output, err := ghOutput("api", fmt.Sprintf("repos/%s/%s/commits/%s", c.Owner, c.Repository, sha), "--jq", ".parents[0].sha")
+	return strings.TrimSpace(string(output)), err
+}
+
+// baseRaceNote speaks up when the default branch moved between the last look at
+// it and the merge. GitHub has no way to pin a merge to its base, so a merge from
+// outside Quipu in that moment is reported, not prevented.
+func baseRaceNote(tested, parent string) string {
+	if tested == "" || parent == "" || tested == parent {
+		return ""
+	}
+	return fmt.Sprintf("the default branch moved from %s to %s just before the merge, so this exact combination was not tested", tested, parent)
+}
+
+// addRisk puts a note in the evidence's risks.
+func addRisk(e *writer.Evidence, note string) {
+	switch {
+	case note == "":
+	case e.Risks == "" || e.Risks == "None":
+		e.Risks = note
+	default:
+		e.Risks += "; " + note
+	}
 }
 
 func requiredChecks(c model.Config) []string {
@@ -134,7 +201,7 @@ func mergeDefaultIn(w worktree, branch, defaultBranch string) (string, error) {
 
 // queueMerge hands the PR and its evidence to the Writer and frees this
 // worktree. It does not wait: the request applies when the Writer next runs.
-func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head string, e writer.Evidence, why error, respond func(flowResult) error) error {
+func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head, cleanup string, e writer.Evidence, why error, respond func(flowResult) error) error {
 	// The Writer checks this too, but by then this agent has moved on.
 	if err := validateReviewPR(c, number, branch, url); err != nil {
 		return flowErr("rejected", "PR %s cannot be queued: %v", url, err)
@@ -149,7 +216,7 @@ func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head
 	if _, err := postRequest(c, number, actor, writer.Request{Action: "merge.queue", PR: url, Head: head, Evidence: &e}); err != nil {
 		return err
 	}
-	w.removeLease(number)
+	warnings := w.release(number, cleanup)
 	var coded *flowError
 	reason, owner := why.Error(), ""
 	if errors.As(why, &coded) {
@@ -158,7 +225,7 @@ func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head
 			owner = " Tell the owner what this names: it cannot merge until a runner takes the check."
 		}
 	}
-	return respond(flowResult{Issue: number, Status: "In review", PR: url, Next: fmt.Sprintf("Queued (%s). The Writer merges %s when its checks pass and closes #%d, or returns #%d to Ready with the reason.%s Do not wait: take other work with quipu start --next --json, and look again later with quipu status --json.", reason, url, number, number, owner)})
+	return respond(flowResult{Issue: number, Status: "In review", PR: url, Warnings: warnings, Next: fmt.Sprintf("Queued (%s). The Writer merges %s when its checks pass and closes #%d, or returns #%d to Ready with the reason.%s Do not wait: take other work with quipu start --next --json, and look again later with quipu status --json.", reason, url, number, number, owner)})
 }
 
 type queueStep int
@@ -225,6 +292,7 @@ type mergeOps struct {
 	view   func(url string) (mergeView, error)
 	merge  func(number int, view mergeView) error
 	update func(url string) error
+	parent func(sha string) (string, error)
 	state  func(number int) (liveWork, error)
 	move   func(itemID string, next writer.WorkState) error
 	apply  func(number int, request writer.Request, receipts []writer.Receipt) writer.Receipt
@@ -232,8 +300,9 @@ type mergeOps struct {
 
 func liveMergeOps(c model.Config) mergeOps {
 	return mergeOps{
-		view:  func(url string) (mergeView, error) { return loadMergeView(c, url) },
-		merge: func(number int, view mergeView) error { return mergePull(c, number, view) },
+		view:   func(url string) (mergeView, error) { return loadMergeState(c, url) },
+		parent: func(sha string) (string, error) { return firstParent(c, sha) },
+		merge:  func(number int, view mergeView) error { return mergePull(c, number, view) },
 		update: func(url string) error {
 			_, err := ghOutput("pr", "update-branch", url, "--repo", c.Owner+"/"+c.Repository)
 			return err
@@ -276,6 +345,7 @@ func (w *watch) queuedMerge(state *liveWork) (bool, error) {
 		return true, w.adoptUpdatedHead(queued, view)
 	}
 	age := w.now.Sub(queued.At)
+	race := ""
 	step, reason := decideQueuedMerge(view, queued.Merge.Head, requiredChecks(w.c), w.c.UpdatesBehind(), age)
 	switch step {
 	case queueWait:
@@ -287,6 +357,7 @@ func (w *watch) queuedMerge(state *liveWork) (bool, error) {
 	case queueUpdate:
 		return true, w.updateQueued(state, queued)
 	case queueMergeNow:
+		tested := view.BaseOID
 		mergeErr := w.ops.merge(w.number, view)
 		if mergeErr == nil {
 			w.report.MergesDone++
@@ -308,8 +379,15 @@ func (w *watch) queuedMerge(state *liveWork) (bool, error) {
 			w.report.Warnings = append(w.report.Warnings, fmt.Sprintf("merge #%d: %v; the next pass tries again", w.number, mergeErr))
 			return false, nil
 		}
+		if view.MergeCommit != nil {
+			if parent, err := w.ops.parent(view.MergeCommit.OID); err != nil {
+				w.report.Warnings = append(w.report.Warnings, fmt.Sprintf("read the merge of #%d: %v", w.number, err))
+			} else {
+				race = baseRaceNote(tested, parent)
+			}
+		}
 	}
-	return true, w.recordQueued(state, queued, view)
+	return true, w.recordQueued(state, queued, view, race)
 }
 
 // endQueue ends a queued merge without moving the work.
@@ -351,7 +429,7 @@ func (w *watch) adoptUpdatedHead(queued writer.Receipt, view mergeView) error {
 // recordQueued records the merged PR's evidence through the same checks as
 // evidence.submit, then closes the work. Rejected evidence ends the queue, and
 // the holder records it with quipu done.
-func (w *watch) recordQueued(state *liveWork, queued writer.Receipt, view mergeView) error {
+func (w *watch) recordQueued(state *liveWork, queued writer.Receipt, view mergeView, race string) error {
 	fingerprint, err := fingerprintLiveWork(*state)
 	if err != nil {
 		return err
@@ -361,6 +439,7 @@ func (w *watch) recordQueued(state *liveWork, queued writer.Receipt, view mergeV
 		evidence.FinalSHA = view.MergeCommit.OID
 	}
 	evidence.CIURL = queuedCIURL(w.c, evidence.CIURL, view.Checks)
+	addRisk(&evidence, race)
 	request := writer.Request{ID: "merge-evidence-" + queued.RequestID, Action: "evidence.submit", IssueID: state.IssueID, Actor: state.Holder, ExpectedFingerprint: fingerprint, PR: queued.Merge.PR, Evidence: &evidence}
 	receipt := w.ops.apply(w.number, request, w.receipts)
 	if err := w.post(publishEvidenceJournal(w.c, w.number, request, receipt)); err != nil {

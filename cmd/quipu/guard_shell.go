@@ -592,8 +592,10 @@ func (g *guard) gitWorktree(rest []shellArg, dir string) error {
 			}
 			target, err := openWorktree(g.resolve(dir, arg.s))
 			if err == nil {
-				if _, err := target.readLease(); err == nil {
-					return deny("worktree-busy", target.Top)
+				if lease, err := target.readLease(); err == nil {
+					if err := g.checkRemovable(target, lease); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -873,6 +875,8 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 	case sub == "work" && len(rest) > 1 && rest[1].s == "list":
 		return nil
 	case sub == "runner" && len(rest) > 1 && (rest[1].s == "status" || rest[1].s == "setup"):
+		return nil
+	case sub == "worktree" && len(rest) > 1 && rest[1].s == "remove":
 		return nil
 	case sub == "ready" && agentsMakeReady(dir):
 		return nil

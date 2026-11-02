@@ -39,7 +39,7 @@ var guardRules = []guardRule{
 	{"branch-change", "the work branch is chosen by quipu start", "run `quipu start N --json`; restore files with `git restore <file>` or `git checkout -- <file>`"},
 	{"git-refs", "tags, remotes, ref edits, and git config are owner-only", "none needed for the flow; ask the owner if you think it is"},
 	{"worktree-add", "work worktrees are created by Quipu so each gets its own identity and lease", "run `quipu start --next --worktree --json`"},
-	{"worktree-busy", "that worktree still holds a lease", "finish it with `quipu done N`, then remove the worktree"},
+	{"worktree-busy", "that worktree still holds a live lease, or GitHub could not say that it doesn't", "finish it with `quipu done N`, then run `quipu worktree remove N --json`"},
 	{"push-target", "agents push only their leased branch to origin", "run `git push -u origin <leased branch>`"},
 	{"force-push", "force pushes rewrite shared history", "use `git push --force-with-lease origin <leased branch>`"},
 	{"no-verify", "git hooks must run", "rerun without --no-verify (or -n)"},
@@ -111,6 +111,8 @@ type guard struct {
 	// an agent may then change no other worktree.
 	sessionLeased bool
 	verified      map[string]leaseContext
+	// live reads an Issue's state from GitHub.
+	live func(c model.Config, number int) (liveWork, error)
 }
 
 func newGuard(cwd string, now time.Time) *guard {
@@ -120,7 +122,7 @@ func newGuard(cwd string, now time.Time) *guard {
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
 	}
-	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}}
+	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}, live: loadLiveWork}
 	if w, err := openWorktree(cwd); err == nil {
 		g.session = w
 		if hasConfig(w.Top) {
@@ -343,7 +345,7 @@ func (g *guard) writeIn(dir string) error {
 // verifyLive checks the lease against GitHub and caches the result in the
 // lease file so the next edits within leaseVerifyTTL stay off the API.
 func (g *guard) verifyLive(c model.Config, w worktree, lease leaseContext) error {
-	state, err := loadLiveWork(c, lease.Issue)
+	state, err := g.live(c, lease.Issue)
 	if err != nil {
 		return deny("lease-inactive", "could not verify #"+fmt.Sprint(lease.Issue)+": "+err.Error())
 	}
@@ -372,6 +374,33 @@ func (g *guard) leaseIn(dir string) (leaseContext, worktree, bool) {
 	}
 	lease, ok := g.verified[w.Top]
 	return lease, w, ok
+}
+
+// checkRemovable lets a worktree go unless its lease is really live. The file
+// alone proves nothing: a request can finish after `quipu done` stopped waiting,
+// and a lease can lapse with no one there. So this always asks GitHub, whatever the
+// cache says, and clears a file that no longer means anything. No answer, no removal.
+func (g *guard) checkRemovable(target worktree, lease leaseContext) error {
+	c, err := loadConfigAt(target.Top)
+	if errors.Is(err, os.ErrNotExist) {
+		published, governed := target.publishedConfig()
+		if !governed {
+			return nil
+		}
+		c, err = published, nil
+	}
+	if err != nil {
+		return deny("worktree-busy", target.Top+": "+err.Error())
+	}
+	state, err := g.live(c, lease.Issue)
+	if err != nil && !errors.Is(err, errNotInProject) {
+		return deny("worktree-busy", fmt.Sprintf("%s: could not read #%d: %v", target.Top, lease.Issue, err))
+	}
+	if leaseStillHeld(lease, state) {
+		return deny("worktree-busy", fmt.Sprintf("%s holds #%d, which is %s", target.Top, lease.Issue, state.Status))
+	}
+	target.removeLease(lease.Issue)
+	return nil
 }
 
 func setOf(items ...string) map[string]bool {

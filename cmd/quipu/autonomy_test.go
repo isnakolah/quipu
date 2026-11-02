@@ -351,6 +351,7 @@ type queueFixture struct {
 	view     mergeView
 	merges   int
 	updates  int
+	parent   string
 	moved    *writer.WorkState
 	requests []writer.Request
 	mu       sync.Mutex
@@ -387,6 +388,7 @@ func newQueueFixture(t *testing.T, c model.Config, view mergeView) *queueFixture
 			return nil
 		},
 		update: func(string) error { f.updates++; f.view.HeadRefOid = "updated"; return nil },
+		parent: func(string) (string, error) { return f.parent, nil },
 		state:  func(int) (liveWork, error) { return *f.state, nil },
 		move:   func(_ string, next writer.WorkState) error { f.moved = &next; return nil },
 		apply: func(_ int, request writer.Request, _ []writer.Receipt) writer.Receipt {

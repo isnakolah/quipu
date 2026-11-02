@@ -13,6 +13,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -93,13 +95,51 @@ func writerReconcileCommand(args []string) error {
 			}
 		}
 	}
+	// GitHub can lag in listing an Issue a comment just updated. A pass over every
+	// Issue has no need for this: a window is what can miss one.
+	listRequests := func(since time.Time) ([]int, error) { return issuesWithRequests(c, since) }
+	if window > 0 {
+		missed, err := listRequests(now.Add(-window))
+		if err != nil {
+			return err
+		}
+		numbers = appendNew(numbers, missed...)
+		numbers = appendNew(numbers, eventIssue(os.Getenv("GITHUB_EVENT_PATH")))
+	}
 	var total issueReport
 	failures := []string{}
+	pass := func(numbers []int) {
+		reconcileNumbers(c, numbers, *apply, trust, now, &total, &failures)
+	}
+	pass(numbers)
+	if window > 0 {
+		rescanned, err := rescanRequests(time.Since(now), time.Sleep, listRequests, now)
+		if err != nil {
+			failures = append(failures, "rescan: "+err.Error())
+		}
+		pass(rescanned)
+		numbers = appendNew(numbers, rescanned...)
+	}
+	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed, "leases_kept_for_open_pr": total.Kept,
+		"merges_queued": total.MergesQueued, "merges_done": total.MergesDone,
+		"issues_reopened": total.Reopened, "drift_restored": total.Restored, "issues_triaged": total.Triaged,
+		"policy_rechecked": total.Rechecked, "warnings": append([]string{}, total.Warnings...), "errors": failures, "apply": *apply}
+	if err := printValue(result, *asJSON); err != nil {
+		return err
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("reconcile failed for %d Issue(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// reconcileNumbers runs one pass over these Issues.
+func reconcileNumbers(c model.Config, numbers []int, apply bool, trust writer.Trust, now time.Time, total *issueReport, failures *[]string) {
 	for _, number := range numbers {
 		// One broken Issue must not stop the pass for every other Issue.
-		report, err := reconcileIssue(c, number, *apply, trust, now)
+		report, err := reconcileIssue(c, number, apply, trust, now)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("#%d: %v", number, err))
+			*failures = append(*failures, fmt.Sprintf("#%d: %v", number, err))
 		}
 		total.Receipted += report.Receipted
 		total.Reclaimed += report.Reclaimed
@@ -114,17 +154,112 @@ func writerReconcileCommand(args []string) error {
 			total.Warnings = append(total.Warnings, fmt.Sprintf("#%d: %s", number, warning))
 		}
 	}
-	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed, "leases_kept_for_open_pr": total.Kept,
-		"merges_queued": total.MergesQueued, "merges_done": total.MergesDone,
-		"issues_reopened": total.Reopened, "drift_restored": total.Restored, "issues_triaged": total.Triaged,
-		"policy_rechecked": total.Rechecked, "warnings": append([]string{}, total.Warnings...), "errors": failures, "apply": *apply}
-	if err := printValue(result, *asJSON); err != nil {
-		return err
+}
+
+// appendNew adds the numbers not already present, and ignores 0.
+func appendNew(numbers []int, more ...int) []int {
+	for _, number := range more {
+		if number > 0 && !slices.Contains(numbers, number) {
+			numbers = append(numbers, number)
+		}
 	}
-	if len(failures) > 0 {
-		return fmt.Errorf("reconcile failed for %d Issue(s): %s", len(failures), strings.Join(failures, "; "))
+	return numbers
+}
+
+// issueComment is what finding requests reads from the repository's comments.
+type issueComment struct {
+	Body     string `json:"body"`
+	IssueURL string `json:"issue_url"`
+	HTMLURL  string `json:"html_url"`
+}
+
+// requestIssues names the Issues with a request that has no receipt yet, among
+// comments GitHub lists in order. A comment on a pull request is never one.
+func requestIssues(comments []issueComment) []int {
+	bodies := map[int][]string{}
+	var order []int
+	for _, comment := range comments {
+		if strings.Contains(comment.HTMLURL, "/pull/") {
+			continue
+		}
+		number, err := issueNumberFromURL(comment.IssueURL)
+		if err != nil {
+			continue
+		}
+		if _, seen := bodies[number]; !seen {
+			order = append(order, number)
+		}
+		bodies[number] = append(bodies[number], comment.Body)
 	}
-	return nil
+	var numbers []int
+	for _, number := range order {
+		if len(writer.Unanswered(bodies[number])) > 0 {
+			numbers = append(numbers, number)
+		}
+	}
+	return numbers
+}
+
+// issuesWithRequests reads the repository's comments directly, since a comment
+// lands here whether or not the Issue's own updated time has caught up.
+func issuesWithRequests(c model.Config, since time.Time) ([]int, error) {
+	path := fmt.Sprintf("repos/%s/%s/issues/comments?per_page=100&since=%s", c.Owner, c.Repository, since.UTC().Format(time.RFC3339))
+	output, err := ghOutput("api", "--paginate", "--slurp", path)
+	if err != nil {
+		return nil, err
+	}
+	return parseRequestIssues(output)
+}
+
+func parseRequestIssues(output []byte) ([]int, error) {
+	var pages [][]issueComment
+	if err := json.Unmarshal(output, &pages); err != nil {
+		return nil, err
+	}
+	var comments []issueComment
+	for _, page := range pages {
+		comments = append(comments, page...)
+	}
+	return requestIssues(comments), nil
+}
+
+// eventIssue is the Issue whose event started this run, from the payload Actions
+// writes, or 0. An agent's request reaches the Writer this way even when no list
+// shows it yet. A comment on a pull request carries a pull_request key.
+func eventIssue(path string) int {
+	if path == "" {
+		return 0
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var event struct {
+		Issue struct {
+			Number      int             `json:"number"`
+			PullRequest json.RawMessage `json:"pull_request"`
+		} `json:"issue"`
+	}
+	if json.Unmarshal(raw, &event) != nil || len(event.Issue.PullRequest) > 0 {
+		return 0
+	}
+	return event.Issue.Number
+}
+
+const (
+	// rescanAfter is how long after a pass began it looks again. GitHub's lag is
+	// seconds, and a request sent during the pass arrives after its first list.
+	rescanAfter = 15 * time.Second
+	// rescanReach is how far before the pass that look goes.
+	rescanReach = 2 * time.Minute
+)
+
+// rescanRequests finds requests the pass couldn't see, once.
+func rescanRequests(elapsed time.Duration, sleep func(time.Duration), list func(time.Time) ([]int, error), began time.Time) ([]int, error) {
+	if wait := rescanAfter - elapsed; wait > 0 {
+		sleep(wait)
+	}
+	return list(began.Add(-rescanReach))
 }
 
 // reconcileIssuesPath lists the Issues a reconcile pass scans. With since,

@@ -2,6 +2,7 @@ package writer
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -147,6 +148,68 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 	default:
 		return WorkState{}, fmt.Errorf("unsupported lifecycle action %q", request.Action)
 	}
+}
+
+// AlreadyApplied reports whether the work already is what the request asks for,
+// so a rerun can succeed without changing anything. It never holds when another
+// agent has the work: a request is only ever repeated by the one who sent it.
+func AlreadyApplied(current WorkState, request Request, receipts []Receipt, now time.Time) bool {
+	holder := current.Lease.Holder
+	byHolder := request.Actor != "" && holder == request.Actor
+	active := current.Status == "Claimed" || current.Status == "In progress" || current.Status == "In review" || current.Status == "Evidence pending"
+	switch request.Action {
+	case "claim":
+		return active && byHolder && (request.Branch == "" || request.Branch == current.Lease.Branch)
+	case "start":
+		return byHolder && (current.Status == "In progress" || current.Status == "In review" || current.Status == "Evidence pending")
+	case "renew":
+		expires, err := requestExpiry(request.LeaseExpiresAt, now)
+		return err == nil && active && byHolder && !current.Lease.Expires.Before(expires.Add(-renewSlack))
+	case "pr.link":
+		return byHolder && (current.Status == "In review" || current.Status == "Evidence pending" || current.Status == "Done")
+	case "evidence.submit":
+		return byHolder && (current.Status == "Evidence pending" || current.Status == "Done") && evidenceRecorded(receipts, request.Evidence)
+	case "merge.queue":
+		queued, ok := LatestQueuedMerge(receipts)
+		return ok && byHolder && current.Status == "In review" && queued.Merge.PR == request.PR && queued.Merge.Head == request.Head
+	case "status":
+		return request.Status != "" && request.Status != "Claimed" && current.Status == request.Status && (holder == "" || byHolder)
+	case "release", "resume":
+		return current.Status == "Ready" && holder == ""
+	case "block":
+		return current.Status == "Blocked" && holder == ""
+	case "import":
+		return request.Import != nil && importRecorded(receipts, *request.Import)
+	}
+	return false
+}
+
+// renewSlack is how much of a just-renewed lease may have passed for a repeated
+// renew to count as the same one.
+const renewSlack = 10 * time.Minute
+
+// evidenceRecorded reports whether this claim already has this evidence.
+func evidenceRecorded(receipts []Receipt, evidence *Evidence) bool {
+	if evidence == nil {
+		return false
+	}
+	since := CycleStart(receipts)
+	for _, r := range receipts {
+		if r.Result == "accepted" && r.Evidence != nil && r.Evidence.FinalSHA == evidence.FinalSHA && !r.At.Before(since) {
+			return true
+		}
+	}
+	return false
+}
+
+func importRecorded(receipts []Receipt, record Import) bool {
+	prefix := fmt.Sprintf("imported %s as %s", record.Key, record.Status)
+	for _, r := range receipts {
+		if r.Result == "accepted" && strings.HasPrefix(r.Detail, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // importedStates maps a manifest status to the state the Writer records.

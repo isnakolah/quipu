@@ -48,6 +48,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` | PR merged: record evidence and close | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
+| `quipu worktree remove N --json` | to free a finished worktree, by Issue number or path | `status: "Removed"`, `worktree`, `warnings`, `next` |
 | `quipu guide` | to read this handbook | this text |
 | `quipu runner status --json` | a check won't start, or work seems stuck | each runner's state and labels, what is queued for it, when the Writer last ran |
 | `quipu runner setup` | the owner asks how to set a runner up | the steps, printed for the owner |
@@ -84,7 +85,7 @@ switch branches, never edit outside <worktree>.
 ```
 
 - `quipu done N` works from any checkout and finds the worktree holding #N.
-- After Done, remove a worktree with `git worktree remove <path>` once nothing runs in it.
+- After Done, remove a worktree with `quipu worktree remove <path> --json` once nothing runs in it. The agent that held it or a dispatcher may do this; it also deletes the merged local branch. Work that is not Done keeps anything found only in that worktree.
 - If `start` says the branch is checked out in another worktree, continue there.
 
 ## Pull requests
@@ -105,7 +106,7 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
-**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
 
 **When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
 
@@ -176,7 +177,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `branch-change` | the work branch is chosen by quipu start | run `quipu start N --json`; restore files with `git restore <file>` or `git checkout -- <file>` |
 | `git-refs` | tags, remotes, ref edits, and git config are owner-only | none needed for the flow; ask the owner if you think it is |
 | `worktree-add` | work worktrees are created by Quipu so each gets its own identity and lease | run `quipu start --next --worktree --json` |
-| `worktree-busy` | that worktree still holds a lease | finish it with `quipu done N`, then remove the worktree |
+| `worktree-busy` | that worktree still holds a live lease, or GitHub could not say that it doesn't | finish it with `quipu done N`, then run `quipu worktree remove N --json` |
 | `push-target` | agents push only their leased branch to origin | run `git push -u origin <leased branch>` |
 | `force-push` | force pushes rewrite shared history | use `git push --force-with-lease origin <leased branch>` |
 | `no-verify` | git hooks must run | rerun without --no-verify (or -n) |
@@ -195,7 +196,10 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 |---|---|---|
 | `held-by` | the Issue's lease belongs to another worktree or agent | continue in the worktree that holds it (`quipu status --json` shows holder and branch), or take other work with `quipu start --next --json` |
 | `not-ready` | the Issue is not Ready, so it cannot be started | take Ready work with `quipu start --next --json`; only the owner makes work Ready |
-| `branch-elsewhere` | the work branch is checked out in another worktree | continue in that worktree, or remove it with `git worktree remove <path>` if nothing runs there |
+| `branch-elsewhere` | the work branch is checked out in another worktree | continue in that worktree, or remove it with `quipu worktree remove <path> --json` if nothing runs there |
+| `worktree-held` | that worktree still holds a live lease | finish it with `quipu done N --json` first, or take other work |
+| `worktree-dirty` | that worktree has changes or commits found nowhere else, and its Issue is not Done | commit and push them, or `git restore` them from inside it, then rerun the same command |
+| `worktree-missing` | no linked worktree of this clone matches | check `git worktree list`; the main checkout is never removed |
 | `no-receipt` | the Writer did not answer before the wait ran out | the request stays queued and still applies when the Writer next runs, so rerun the same command later instead of taking other work; it is safe. If it keeps happening, tell the owner what the message says about the Writer and its runner |
 | `rejected-stale` | the work changed while your request was in flight | rerun the same command |
 | `rejected-taken` | another agent claimed the work first | run `quipu start --next --json` for other work |

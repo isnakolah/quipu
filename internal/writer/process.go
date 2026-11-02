@@ -57,6 +57,27 @@ func Pending(comments []gh.Comment, trust Trust) ([]PendingRequest, []Receipt) {
 	return pending, rejected
 }
 
+// Unanswered returns the IDs of requests with no receipt among these bodies. It
+// only says where to look: a request still has to pass Pending, with its trust
+// checks, before anything applies it.
+func Unanswered(bodies []string) []string {
+	answered := make(map[string]bool)
+	for _, body := range bodies {
+		if HasReceiptMarker(body) {
+			for _, id := range receiptRequestIDs(body) {
+				answered[id] = true
+			}
+		}
+	}
+	var ids []string
+	for _, body := range bodies {
+		if id := requestID(body); IsRequest(body) && !answered[id] {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // ActorMatchesLogin reports whether a request actor may be posted by login:
 // either the login itself or a provider/login[/session] agent identity.
 func ActorMatchesLogin(actor, login string) bool { return actorMatches(actor, login) }

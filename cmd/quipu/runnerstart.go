@@ -84,16 +84,7 @@ func enforcedRunnerStart(w worktree) string {
 }
 
 // runnerStamp is the stamp shared by every worktree of the clone.
-func runnerStamp(w worktree) (string, error) {
-	dir, err := w.git("rev-parse", "--git-common-dir")
-	if err != nil {
-		return "", err
-	}
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(w.Top, dir)
-	}
-	return filepath.Join(dir, "quipu-runner-start"), nil
-}
+func runnerStamp(w worktree) (string, error) { return w.commonPath("quipu-runner-start") }
 
 // claimRunnerStart lets one agent in the clone start the runner per
 // runnerStartEvery. The lock is what makes it one when several start at once.
