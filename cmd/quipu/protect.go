@@ -251,6 +251,7 @@ func doctorChecks() []doctorCheck {
 	}
 	checks = append(checks, githubChecks(c)...)
 	checks = append(checks, runnerChecks(c, here)...)
+	checks = append(checks, runnerConfigChecks(c, pathQuipuVersion())...)
 	enforced, _, err := loadEnforcedConfig(here, true)
 	if err != nil {
 		enforced = c.WithoutRelaxations()

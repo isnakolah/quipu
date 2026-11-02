@@ -72,7 +72,7 @@ When a workflow listed in `workflows.defects_from` (default `[CI]`) fails on the
 
 Set `defects_from: []` to turn this off.
 
-It runs on every Issue comment and Issue event, on PR events, every five minutes, and on demand with `gh workflow run quipu-writer.yml`. Event-triggered runs scan every Issue updated since the last successful Writer run began (`--since-last-run`), so nothing is lost when Actions drops queued runs (it keeps one per concurrency group) or a self-hosted runner sleeps for hours; scheduled runs scan every Issue. All reads page past 100 Issues.
+It runs on every Issue comment and Issue event, on PR events, every five minutes, on demand with `gh workflow run quipu-writer.yml`, and, once its workflow is regenerated with `merge_wait: background` on, when `Quipu policy` or a required check's workflow finishes, so a queued merge doesn't wait for the schedule. Event-triggered runs scan every Issue updated since the last successful Writer run began (`--since-last-run`), so nothing is lost when Actions drops queued runs (it keeps one per concurrency group) or a self-hosted runner sleeps for hours; scheduled runs scan every Issue. All reads page past 100 Issues.
 
 ## Configuration
 
@@ -86,7 +86,15 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 - `commit_format`: unset or `issue-prefix` (`#NNN type(scope): summary`, footer `Refs: #N`, merge commits from git exempt). Enforced by `policy` for every PR commit and the PR title, and by `quipu verify-commit FILE` in a `commit-msg` hook.
 - `merge_without_ci`, `local_check`, and `merge_bypass_rulesets`: merge without CI, off by default, config only and read from the default branch. `quipu doctor` fails when a ruleset requires the waived checks and the bypass is off or not in place. See the [owner guide](owner-guide.md#options).
 - `issues_by`, `triage_by`, `update_behind`, `merge_wait`, and `guard_reads`: the autonomy flags, all off by default and read from the default branch. The [owner guide](owner-guide.md#options) says what each one gives up. `quipu guide` adds a section for each flag on, and with every flag off it renders the handbook unchanged.
-- `workflows`: runners, pinned Quipu version, schedule, and PR trigger for the generated workflows.
+- `workflows`: runners, pinned Quipu version, schedule, and PR trigger for the generated workflows. `workflows.runner_start` is a command that starts a runner; only the default branch's copy runs. The [owner guide](owner-guide.md#runners-and-workflows) says what it runs and where.
+
+## Runners
+
+`quipu start` and `quipu done` check the runners before posting a request. For one that is missing or offline they run `workflows.runner_start` once, without waiting for it, and report in a `runner` field and on stderr. A stamp in the clone's git directory limits this to once every ten minutes across its worktrees. If runner state can't be read, nothing runs: unknown is not down.
+
+`quipu status --json` adds `pull_requests`: each active PR's check results and what to do next. It looks once and never waits, so an agent can finish other work first. `quipu runner status --json` reports the runners themselves, and `quipu runner setup` prints the steps to set one up. Neither changes anything.
+
+`scripts/runner-proof.sh` proves the whole path on a disposable repository and a real runner: stopped, work queued, started on demand, merged by the Writer. It must run on the host of that runner.
 
 ## Bootstrap and adoption
 

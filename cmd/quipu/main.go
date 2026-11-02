@@ -51,6 +51,8 @@ func run(args []string) error {
 		return doneCommand(args[1:])
 	case "triage":
 		return triageCommand(args[1:])
+	case "runner":
+		return runnerCommand(args[1:])
 	case "propose":
 		return proposeCommand(args[1:])
 	case "config":
@@ -422,7 +424,7 @@ Owner:
   hooks      install the agent guard hooks in this repository (--apply)
 
 Setup and advanced:
-  init|adopt|import|verify-commit|doctor|guide|config|context|validate|issue|triage|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
+  init|adopt|import|verify-commit|doctor|guide|config|context|validate|runner|issue|triage|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")

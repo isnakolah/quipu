@@ -37,13 +37,15 @@ quipu done N --json --criteria "..." --commands "..." --documentation "..." --ri
 
 Then go back to `quipu status --json`. If `start --next` returns `"status": "Idle"`, there is no Ready work: say so and stop. If it returns `"status": "Busy"`, other agents won every race: run it again.
 
+**Never wait on a runner or on checks.** Take other work, then look once with `quipu status --json`: `pull_requests` gives each active PR's check results and `next`. When a runner the repository needs is down, `quipu start` and `quipu done` say so in a `runner` field and on stderr, and start it themselves if the owner set a command for that. Carry on either way.
+
 Use the repository's default branch for `--base` (`main` here unless `quipu status` says otherwise).
 
 ## Commands you may run
 
 | Command | When | What you get back |
 |---|---|---|
-| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention`, `owner_queue` (what only the owner can move; leave it and take other work) |
+| `quipu status --json` | any time | `goals`, `in_progress`, `in_review`, `verifying`, `blocked`, `ready`, `backlog`, `attention`, `owner_queue` (what only the owner can move; leave it and take other work), `pull_requests` (each active PR's check results and what to do next) |
 | `quipu start --next --json` | to take work | `issue`, `status`, `branch`, `holder`, `lease_expires`, `next` |
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
@@ -52,6 +54,8 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
 | `quipu guide` | to read this handbook | this text |
+| `quipu runner status --json` | a check won't start, or work seems stuck | each runner's state and labels, what is queued for it, when the Writer last ran |
+| `quipu runner setup` | the owner asks how to set a runner up | the steps, printed for the owner |
 | `quipu doctor --json` | something seems misconfigured | a list of checks with fixes |
 | `quipu config --json` | to see what applies in this repository | each effective setting and where it came from |
 | `quipu context`, `quipu validate`, `quipu version` | inspecting | read-only reports |
@@ -209,7 +213,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `pr-closed` | the PR was closed without merging | open a new PR from the same branch with `Refs #N`, then rerun `quipu done N --json` |
 | `pr-merged-early` | the PR merged before `quipu done` moved the work to review | tell the owner; they recover it with `quipu pr link` and `quipu evidence submit` |
 | `evidence-missing` | recording evidence after merge needs every evidence field | rerun `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` (add `--ci-url URL` if checks have not passed) |
-| `checks-pending` | with `merge: agent`, a required check on the PR has not finished | wait for them with `gh pr checks <PR> --watch --required`, then rerun the same `quipu done N --json ...` |
+| `checks-pending` | with `merge: agent`, a required check on the PR has not finished | take other work, look once with `quipu status --json`, and when they have finished rerun the same `quipu done N --json ...` |
 | `checks-no-runner` | with `merge: agent`, a required check is queued and no online runner has its labels, so it cannot start | do not poll; take other work with `quipu start --next --json` and tell the owner what the message names. The owner starts that runner, registers one with those labels, changes the job's `runs-on`, or takes the check out of `required_checks`. Then rerun the same `quipu done N --json ...` |
 | `checks-failing` | with `merge: agent`, a required check on the PR failed or never ran | fix the cause, push to the work branch, then rerun the same `quipu done N --json ...` |
 | `merge-blocked` | GitHub cannot merge the PR: it is a draft, behind the default branch, conflicting, or refused by a rule | update the branch (`git fetch origin && git merge origin/<default>`), resolve conflicts, push, then rerun the same `quipu done N --json ...` |

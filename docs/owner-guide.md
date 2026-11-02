@@ -72,12 +72,19 @@ workflows:
   schedule: "*/15 * * * *"          # Writer cron; "off" to rely on events only
   writer_on_pull_request: false     # skip Writer runs on PR events
   defects_from: [CI]                # failed default-branch runs become Ready P0 Defects; [] for off
+  runner_start: "ssh box 'cd actions-runner && ./svc.sh start'"  # starts a runner that is down; unset by default
 required_checks: [test]             # CI checks main requires besides policy
 ```
 
 - A runner that already has `quipu` on its `PATH` uses it and skips installing Go and Quipu. Keep it at `quipu_version`.
 - Without the schedule, expired leases are reclaimed and PR policy rechecked only when an Issue event or a manual run (`gh workflow run quipu-writer.yml`) wakes the Writer.
 - Self-hosted runners: register one under the repository's **Settings → Actions → Runners** with the labels you list, and keep it online. `policy` runs on `pull_request_target`, which checks out only the default branch, so a PR's code never runs on your runner through Quipu's workflows.
+- `quipu runner setup` prints the steps for the runners your config needs: the registration with the right labels, the service, and `quipu` at the right version on the runner's `PATH`. `quipu doctor` checks the labels, whether each runner is online, and this machine's `PATH` copy. It cannot see another machine's service, or a runner's own `PATH`.
+- `quipu runner status --json` shows each runner's state and labels, what is queued for it, and when the Writer last succeeded.
+
+**What `workflows.runner_start` runs, and where.** It is one line, run with `sh -c` from the home directory, on the machine of the agent running `quipu start` or `quipu done`, as that agent's user. It does not run from the repository, so a script it calls must live outside it, or an agent's branch could change what runs. It must work from every machine your agents use, and needs its own way to reach the runner's host, such as an SSH key. Quipu runs it when a runner a generated or required job needs is missing or offline, because an autoscaled runner registers only once it starts. Output goes to `quipu-runner-start.log` in the worktree's git directory. Quipu waits two seconds to catch a fast failure, then carries on while the command keeps running in its own session, and runs it at most once every ten minutes per clone. A failure is reported to each agent during those ten minutes.
+
+Only the default branch's copy runs, and it is never a command-line flag, so a PR or a worktree edit cannot make an agent run a command through it. If it is unset or fails, `quipu start` and `quipu done` say so, name your options, and carry on.
 
 ## Day to day
 
@@ -111,7 +118,7 @@ Set these in `quipu.yml` at the repository root through a reviewed PR (the file 
 | `merge_bypass_rulesets: true` | off | With `merge_without_ci` on, `quipu done` retries with the admin bypass when GitHub refuses a merge whose checks it waived, and `quipu protect` adds that bypass to the ruleset. It doesn't retry when any check failed, a review requested changes, or a review thread is unresolved, and the receipt says when the bypass was used. **You give up** GitHub enforcing those checks for agents, who share your login, so a raw merge would not be stopped by GitHub: only the guard denies it. With this off, GitHub's refusal is `merge-blocked`, and `quipu doctor` fails while a ruleset requires the waived checks. |
 | `guard_reads: open` | `closed` | The guard allows more commands it can prove read-only without a lease, such as `git tag --sort`, `git branch --list`, and `nproc`. **You give up** little: it adds only commands that cannot write. Interpreters such as `python`, `perl`, and `awk` stay denied. |
 | `required_checks: [build, unit]` | `[test]` | The CI checks `quipu protect` requires on the default branch, besides `policy`. |
-| `workflows` | hosted runners, every five minutes, Defects from `CI` | Runners, pinned Quipu version, schedule, PR trigger, and which failed default-branch workflows become Ready P0 Defects; see [Runners and workflows](#runners-and-workflows) and [operations](operations.md#defects-from-failed-runs). |
+| `workflows` | hosted runners, every five minutes, Defects from `CI` | Runners, pinned Quipu version, schedule, PR trigger, the command that starts a runner, and which failed default-branch workflows become Ready P0 Defects; see [Runners and workflows](#runners-and-workflows) and [operations](operations.md#defects-from-failed-runs). |
 
 `quipu start --next` never picks Epics, Decisions, or Gates: you decide those.
 
@@ -125,6 +132,7 @@ Set these in `quipu.yml` at the repository root through a reviewed PR (the file 
 |---|---|
 | Requests get no receipt | The Writer is not running. The agent's `no-receipt` error says when it last ran and whether its runner is offline. Requests stay queued, so nothing needs resending. Check the Quipu Writer workflow, its runner, and the `QUIPU_WRITER_TOKEN` secret, then `gh workflow run quipu-writer.yml`. |
 | `quipu done` reports `checks-no-runner` | A required check is queued and no online runner has its labels; the error names them. Start that runner, register one with those labels, change the job's `runs-on`, or take the check out of `required_checks`. `quipu doctor` reports the same problem before any PR hits it. |
+| `quipu start` or `quipu done` reports a runner down | Its `runner` field says what was tried. Set `workflows.runner_start`, or fix it using `quipu-runner-start.log`. Agents carry on meanwhile; `quipu status` lists the PRs waiting on it. |
 | An agent died holding work | Its lease expires within two hours and the work returns to Ready on its own. A new agent in the same worktree resumes it with `quipu start N`. If its branch has an open PR, the work stays with that holder, so CI or Writer downtime can't take it away; `quipu status` lists it as waiting on you. If the agent is really gone, close the PR and the next Writer pass returns the work to Ready. |
 | A PR merged before `quipu done` moved it to review | From the worktree holding the lease, get the ID and fingerprint with `quipu context --issue-number N --json`, then run `quipu pr link` and `quipu evidence submit` with `--apply`. |
 | The guard blocks something legitimate | Run the command yourself in a terminal; humans are not guarded. If agents need it routinely, open an Issue against Quipu. |

@@ -54,6 +54,8 @@ type statusReport struct {
 	Backlog    int          `json:"backlog"`
 	Attention  []string     `json:"attention"`
 	OwnerQueue []ownerItem  `json:"owner_queue"`
+	// PullRequests is each active PR with its check results and what to do next.
+	PullRequests []pullReport `json:"pull_requests"`
 }
 
 func statusCommand(args []string) error {
@@ -72,6 +74,16 @@ func statusCommand(args []string) error {
 	}
 	report := buildStatusReport(c.Owner+"/"+c.Repository, items, time.Now())
 	report.OwnerQueue = ownerQueue(items, c.AgentsMerge(), time.Now())
+	actor := ""
+	if here, err := currentWorktree(); err == nil {
+		actor, _ = resolveActor(here, "", 0)
+	}
+	report.PullRequests = loadPullReports(c, items, actor)
+	titles := map[int]string{}
+	for _, item := range items {
+		titles[item.Number] = item.Title
+	}
+	report.OwnerQueue, report.Attention = addPullsToQueues(report.OwnerQueue, report.Attention, report.PullRequests, titles)
 	if *asJSON {
 		return printValue(report, true)
 	}
@@ -186,7 +198,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 // buildStatusReport groups open Issues into the columns a team reads at
 // standup and lists anything that needs a human decision.
 func buildStatusReport(repository string, items []statusItem, now time.Time) statusReport {
-	report := statusReport{Repository: repository, Goals: []statusItem{}, InProgress: []statusItem{}, InReview: []statusItem{}, Verifying: []statusItem{}, Blocked: []statusItem{}, Ready: []statusItem{}, Attention: []string{}, OwnerQueue: []ownerItem{}}
+	report := statusReport{Repository: repository, Goals: []statusItem{}, InProgress: []statusItem{}, InReview: []statusItem{}, Verifying: []statusItem{}, Blocked: []statusItem{}, Ready: []statusItem{}, Attention: []string{}, OwnerQueue: []ownerItem{}, PullRequests: []pullReport{}}
 	sort.Slice(items, func(i, j int) bool { return items[i].Number < items[j].Number })
 	for _, item := range items {
 		if strings.EqualFold(item.Kind, "Epic") {
@@ -272,6 +284,12 @@ func renderStatus(report statusReport, now time.Time) string {
 			fmt.Fprintf(&b, "  ! %s\n", line)
 		}
 	}
+	if len(report.PullRequests) > 0 {
+		fmt.Fprintf(&b, "\nPull requests (%d)\n", len(report.PullRequests))
+		for _, pull := range report.PullRequests {
+			fmt.Fprintf(&b, "  #%d %s: %s\n", pull.Issue, pull.PR, pull.Next)
+		}
+	}
 	if len(report.OwnerQueue) > 0 {
 		// Grouped by reason: a backlog of triage would otherwise fill the screen.
 		fmt.Fprintf(&b, "\nWaiting on the owner (%d)\n", len(report.OwnerQueue))
@@ -340,12 +358,18 @@ func startCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Before any request: the Writer that answers it may be on that runner.
+	note := ensureRunner(c, here)
+	respond := func(result flowResult) error {
+		result.Runner = note
+		return printFlowResult(result, *asJSON)
+	}
 	if !*next {
 		result, err := startIssue(c, here, number, o)
 		if err != nil {
 			return err
 		}
-		return printFlowResult(result, *asJSON)
+		return respond(result)
 	}
 	candidates, err := loadWorkCandidates(c)
 	if err != nil {
@@ -362,7 +386,7 @@ func startCommand(args []string) error {
 		}
 		result, err := startIssue(c, here, item.Number, o)
 		if err == nil {
-			return printFlowResult(result, *asJSON)
+			return respond(result)
 		}
 		if !errors.Is(err, errRejected) {
 			return err
@@ -371,9 +395,9 @@ func startCommand(args []string) error {
 		fmt.Fprintf(os.Stderr, "#%d taken (%v); trying next\n", item.Number, err)
 	}
 	if lost > 0 {
-		return printFlowResult(flowResult{Status: "Busy", Next: fmt.Sprintf("Other agents took the top %d Ready items first. Rerun quipu start --next --json.", lost)}, *asJSON)
+		return respond(flowResult{Status: "Busy", Next: fmt.Sprintf("Other agents took the top %d Ready items first. Rerun quipu start --next --json.", lost)})
 	}
-	return printFlowResult(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Report that and stop; the owner makes work Ready. quipu status --json shows the board."}, *asJSON)
+	return respond(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Report that and stop; the owner makes work Ready. quipu status --json shows the board."})
 }
 
 // nextWork orders pick-up candidates by priority, then Issue number.
@@ -497,7 +521,9 @@ type flowResult struct {
 	LeaseExpires string `json:"lease_expires,omitempty"`
 	PR           string `json:"pr,omitempty"`
 	Worktree     string `json:"worktree,omitempty"`
-	Next         string `json:"next"`
+	// Runner reports a needed runner that was down and what was done about it.
+	Runner string `json:"runner,omitempty"`
+	Next   string `json:"next"`
 }
 
 func printFlowResult(result flowResult, asJSON bool) error {
@@ -590,6 +616,12 @@ func doneCommand(args []string) error {
 	if state.Status == "Done" {
 		return printFlowResult(flowResult{Issue: number, Status: "Done", Next: "Pick the next task: quipu start --next"}, *asJSON)
 	}
+	// Before any request: the Writer that answers it may be on that runner.
+	note := ensureRunner(c, here)
+	respond := func(result flowResult) error {
+		result.Runner = note
+		return printFlowResult(result, *asJSON)
+	}
 	var pull pullRequest
 	if state.Status == "Claimed" || state.Status == "In progress" || state.Status == "In review" {
 		if pull, err = findPullRequest(c, *prFlag, state.Branch); err != nil {
@@ -627,7 +659,7 @@ func doneCommand(args []string) error {
 			return flowErr("pr-closed", "PR %s was closed without merging", pull.URL)
 		}
 		if pull.State != "MERGED" && !c.AgentsMerge() {
-			return printFlowResult(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("The owner reviews and merges %s; never merge it yourself. Address review comments by pushing to %s (rerun quipu start %d first if the guard reports the lease). After the merge, run: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number, number)}, *asJSON)
+			return respond(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("The owner reviews and merges %s; never merge it yourself. Address review comments by pushing to %s (rerun quipu start %d first if the guard reports the lease). After the merge, run: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number, number)})
 		}
 		if pull.State != "MERGED" {
 			// merge: agent. Collect the evidence first, so a merged PR never
@@ -657,7 +689,7 @@ func doneCommand(args []string) error {
 				}
 			}
 			if checksStillRunning(err) && c.MergesInBackground() {
-				return queueMerge(c, w, number, actor, state.Branch, pull.URL, head, e, err, *asJSON)
+				return queueMerge(c, w, number, actor, state.Branch, pull.URL, head, e, err, respond)
 			}
 			if err != nil {
 				return err
@@ -719,7 +751,7 @@ func doneCommand(args []string) error {
 		result.Worktree = w.Top
 		result.Next = fmt.Sprintf("Closed. When nothing runs in it, remove the worktree: git worktree remove %s. Pick the next task: quipu start --next", w.Top)
 	}
-	return printFlowResult(result, *asJSON)
+	return respond(result)
 }
 
 // ---- quipu propose / quipu ready ----
@@ -833,12 +865,8 @@ func findPullRequest(c model.Config, explicit, branch string) (pullRequest, erro
 		if branch == "" {
 			return pullRequest{}, flowErr("pr-missing", "the work has no branch; pass --pr URL")
 		}
-		output, err := ghOutput("pr", "list", "--repo", c.Owner+"/"+c.Repository, "--head", branch, "--state", "all", "--json", "url,state", "--limit", "5")
+		pulls, err := branchPulls(c, branch)
 		if err != nil {
-			return pullRequest{}, err
-		}
-		var pulls []struct{ URL, State string }
-		if err := json.Unmarshal(output, &pulls); err != nil {
 			return pullRequest{}, err
 		}
 		target = pickPullRequest(pulls)

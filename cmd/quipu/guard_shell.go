@@ -872,6 +872,8 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 	switch sub := rest[0].s; {
 	case sub == "work" && len(rest) > 1 && rest[1].s == "list":
 		return nil
+	case sub == "runner" && len(rest) > 1 && (rest[1].s == "status" || rest[1].s == "setup"):
+		return nil
 	case sub == "ready" && agentsMakeReady(dir):
 		return nil
 	case sub == "triage" && agentsTriage(dir):

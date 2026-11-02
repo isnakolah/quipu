@@ -178,6 +178,7 @@ var optionDefaults = map[string]any{
 	"workflows.schedule":               model.DefaultSchedule,
 	"workflows.writer_on_pull_request": true,
 	"workflows.defects_from":           []string{"CI"},
+	"workflows.runner_start":           "none",
 }
 
 // configValues flattens a config to its set keys, with workflows one level deep.

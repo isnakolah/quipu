@@ -26,6 +26,8 @@ Lifecycle: `Backlog → Ready → Claimed → In progress → In review → Evid
 
 With `merge_without_ci`, the client merges on its own check and tells the Writer so. Trust stays where it was: the Writer still posts every receipt, and it accepts that evidence only when its own read of the default branch's config allows it. The receipt records a client's report, not a verified run.
 
+Agents never wait on a runner. `quipu start` and `quipu done` may start one with the default branch's `workflows.runner_start`, on the agent's machine and without blocking; this changes nothing on GitHub, so the Writer stays the only mutator. Check results reach agents by reading: `quipu status` reports them when asked, and nothing polls. With `merge_wait: background`, the Writer wakes when the checks' workflows finish.
+
 ## Enforcement
 
 - **Locally, for agents:** `quipu guard` denies everything off the flow (see [operations](operations.md#the-guard)).
