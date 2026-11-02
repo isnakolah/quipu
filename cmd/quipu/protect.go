@@ -234,6 +234,9 @@ func doctorChecks() []doctorCheck {
 		add("config", "fail", err.Error(), "quipu init or quipu adopt")
 		return checks
 	}
+	if c.LimitsMachine() {
+		checks = append(checks, machineDoctorCheck())
+	}
 	add("config", "ok", c.Owner+"/"+c.Repository, "")
 	for _, name := range []string{"QUIPU_LEASE_ISSUE", "QUIPU_LEASE_HOLDER", "QUIPU_LEASE_BRANCH", "QUIPU_BOOTSTRAP_ADMIN"} {
 		if os.Getenv(name) != "" {

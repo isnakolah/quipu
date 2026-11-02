@@ -95,6 +95,7 @@ func (p *localPull) ops() noCIOps {
 		update:     func() (string, error) { return mergeDefaultIn(p.agent, "001/a", "main") },
 		pause:      func() {},
 		lock:       p.agent.mergeLock,
+		hold:       func() (func(), error) { return func() {}, nil },
 		head:       func() (string, error) { return p.agent.git("rev-parse", "HEAD") },
 		dirty:      func() (string, error) { return p.agent.git("status", "--porcelain") },
 		violations: func() ([]string, error) { return nil, nil },

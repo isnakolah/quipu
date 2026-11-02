@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -63,6 +64,8 @@ type Config struct {
 	// it there after the last step that needs the build, so a repository's
 	// agents never have to order it around local_check.
 	Cleanup string `yaml:"cleanup,omitempty" json:"cleanup,omitempty"`
+	// Limits caps what agents may start on this machine. Unset, nothing is capped.
+	Limits Limits `yaml:"limits,omitempty" json:"limits,omitempty"`
 	// GuardReads "open" widens the commands the guard treats as read-only.
 	GuardReads string    `yaml:"guard_reads,omitempty" json:"guard_reads,omitempty"`
 	Workflows  Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
@@ -209,6 +212,64 @@ func (c Config) MergesWithoutCI() bool { return c.AgentsMerge() && c.MergeWithou
 // BypassesRulesets reports whether a merge without CI may use the admin bypass.
 func (c Config) BypassesRulesets() bool { return c.MergesWithoutCI() && c.MergeBypassRulesets }
 
+// Limits caps work across every repository and worktree on one machine. Each
+// repository's own numbers apply to claims in that repository.
+type Limits struct {
+	// BuildSlots is how many worktrees may build at once. 0 is no limit.
+	BuildSlots int `yaml:"build_slots,omitempty" json:"build_slots,omitempty"`
+	// BuildAreas are the areas whose work counts as a build. Empty means all.
+	BuildAreas []string `yaml:"build_areas,omitempty" json:"build_areas,omitempty"`
+	// MinFreeDiskGB stops new claims when the disk falls under it. 0 is no floor.
+	MinFreeDiskGB int `yaml:"min_free_disk_gb,omitempty" json:"min_free_disk_gb,omitempty"`
+	// SlotIdleMinutes is how long a slot lasts without its agent making a tool
+	// call. Empty means DefaultSlotIdleMinutes.
+	SlotIdleMinutes int `yaml:"slot_idle_minutes,omitempty" json:"slot_idle_minutes,omitempty"`
+}
+
+// DefaultSlotIdleMinutes outlasts an agent thinking, and most single builds.
+const DefaultSlotIdleMinutes = 45
+
+// LimitsBuilds reports whether build slots are capped.
+func (c Config) LimitsBuilds() bool { return c.Limits.BuildSlots > 0 }
+
+// LimitsMachine reports whether anything is capped on this machine.
+func (c Config) LimitsMachine() bool { return c.LimitsBuilds() || c.Limits.MinFreeDiskGB > 0 }
+
+// CountsAsBuild reports whether work in this area takes a build slot. Work with no
+// area does, since nothing says it doesn't. The Project titles its area values, so
+// "app" in the config is "App" on the board.
+func (c Config) CountsAsBuild(area string) bool {
+	if len(c.Limits.BuildAreas) == 0 || area == "" {
+		return true
+	}
+	return slices.ContainsFunc(c.Limits.BuildAreas, func(build string) bool { return strings.EqualFold(build, area) })
+}
+
+// SlotIdleMinutes is how long a quiet agent keeps its slot.
+func (c Config) SlotIdleMinutes() int {
+	if c.Limits.SlotIdleMinutes > 0 {
+		return c.Limits.SlotIdleMinutes
+	}
+	return DefaultSlotIdleMinutes
+}
+
+// ValidateLimits checks the limits section.
+func (c Config) ValidateLimits() error {
+	l := c.Limits
+	if l.BuildSlots < 0 || l.MinFreeDiskGB < 0 || l.SlotIdleMinutes < 0 {
+		return fmt.Errorf("limits must not be negative")
+	}
+	if l.BuildSlots == 0 && (len(l.BuildAreas) > 0 || l.SlotIdleMinutes > 0) {
+		return fmt.Errorf("limits.build_areas and limits.slot_idle_minutes need limits.build_slots")
+	}
+	for _, area := range l.BuildAreas {
+		if !slices.Contains(c.Areas, area) {
+			return fmt.Errorf("limits.build_areas names %q, which is not in areas", area)
+		}
+	}
+	return nil
+}
+
 // CleansUp reports whether Quipu frees a worktree's disk when it is finished.
 func (c Config) CleansUp() bool { return c.Cleanup != "" }
 
@@ -318,6 +379,9 @@ func (c Config) Validate() error {
 	}
 	if strings.ContainsAny(c.Cleanup, "\n\r") {
 		return fmt.Errorf("cleanup must be one line")
+	}
+	if err := c.ValidateLimits(); err != nil {
+		return err
 	}
 	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {
 		return fmt.Errorf("guard_reads must be closed or open")

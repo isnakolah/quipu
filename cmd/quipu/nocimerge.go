@@ -152,6 +152,7 @@ type noCIOps struct {
 	update        func() (string, error)
 	pause         func()
 	lock          func() (func(), error)
+	hold          func() (func(), error)
 	head          func() (string, error)
 	dirty         func() (string, error)
 	violations    func() ([]string, error)
@@ -255,7 +256,12 @@ func mergeWithoutCIOnce(c model.Config, bypass bool, e writer.Evidence, ops noCI
 	if len(violations) > 0 {
 		return "", flowErr("policy-rules", "PR %s breaks the policy rules, which merge_without_ci never waives: %s", view.URL, strings.Join(violations, "; "))
 	}
+	release, err := ops.hold()
+	if err != nil {
+		return "", err
+	}
 	exit, err := ops.check(c.LocalCheck)
+	release()
 	if err != nil {
 		return "", flowErr("local-check-failed", "local_check could not run: %v", err)
 	}
@@ -414,8 +420,22 @@ func liveNoCIOps(c model.Config, w worktree, number int, branch, url string, tes
 		update: func() (string, error) { return mergeDefaultIn(w, branch, c.DefaultBranch) },
 		pause:  func() { time.Sleep(3 * time.Second) },
 		lock:   w.mergeLock,
-		head:   func() (string, error) { return w.git("rev-parse", "HEAD") },
-		dirty:  func() (string, error) { return w.git("status", "--porcelain") },
+		hold: func() (func(), error) {
+			m, err := openMachine()
+			if err != nil {
+				if c.LimitsBuilds() {
+					return nil, flowErr("machine-busy", "local_check did not run: could not read this machine's slots: %v", err)
+				}
+				return func() {}, nil
+			}
+			hold, err := m.holdCheck(c, w, number, time.Now())
+			if err != nil {
+				return nil, err
+			}
+			return hold.drop, nil
+		},
+		head:  func() (string, error) { return w.git("rev-parse", "HEAD") },
+		dirty: func() (string, error) { return w.git("status", "--porcelain") },
 		violations: func() ([]string, error) {
 			pull, err := loadPullFacts(c, url)
 			if err != nil {
