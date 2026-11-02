@@ -89,7 +89,7 @@ required_checks: [test]             # CI checks main requires besides policy
 
 **Changing Quipu's own rules.** A PR that touches `quipu.yml`, `.github/quipu/`, `.github/workflows/`, `.claude/settings.json`, `.codex/`, or the plugin hooks fails `policy` until you add the `quipu:owner-approved` label. Agents cannot add labels.
 
-**Watching.** `quipu status` shows the board and anything needing attention. `quipu validate` lists every rule violation in the live data; the Writer also writes it to each run's summary.
+**Watching.** `quipu status` shows the board, anything needing attention, and what is waiting on you and why (`owner_queue` with `--json`): PRs to review, Decisions and Gates, Issues to triage, blocked work, and work whose lease expired. Agents leave those and take other work. It does not list proposals, which have no state to tell an open one from a decided one. `quipu validate` lists every rule violation in the live data; the Writer also writes it to each run's summary.
 
 ## Options
 
@@ -112,8 +112,9 @@ Set these in `quipu.yml` at the repository root through a reviewed PR (the file 
 
 | Problem | Fix |
 |---|---|
-| Requests get no receipt | The Writer is not running. Check the Quipu Writer workflow and the `QUIPU_WRITER_TOKEN` secret, then `gh workflow run quipu-writer.yml`. |
-| An agent died holding work | Its lease expires within two hours and the work returns to Ready on its own. A new agent in the same worktree resumes it with `quipu start N`. |
+| Requests get no receipt | The Writer is not running. The agent's `no-receipt` error says when it last ran and whether its runner is offline. Requests stay queued, so nothing needs resending. Check the Quipu Writer workflow, its runner, and the `QUIPU_WRITER_TOKEN` secret, then `gh workflow run quipu-writer.yml`. |
+| `quipu done` reports `checks-no-runner` | A required check is queued and no online runner has its labels; the error names them. Start that runner, register one with those labels, change the job's `runs-on`, or take the check out of `required_checks`. `quipu doctor` reports the same problem before any PR hits it. |
+| An agent died holding work | Its lease expires within two hours and the work returns to Ready on its own. A new agent in the same worktree resumes it with `quipu start N`. If its branch has an open PR, the work stays with that holder, so CI or Writer downtime can't take it away; `quipu status` lists it as waiting on you. If the agent is really gone, close the PR and the next Writer pass returns the work to Ready. |
 | A PR merged before `quipu done` moved it to review | From the worktree holding the lease, get the ID and fingerprint with `quipu context --issue-number N --json`, then run `quipu pr link` and `quipu evidence submit` with `--apply`. |
 | The guard blocks something legitimate | Run the command yourself in a terminal; humans are not guarded. If agents need it routinely, open an Issue against Quipu. |
 | `quipu doctor` fails | Each failure prints its fix. |

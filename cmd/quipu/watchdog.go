@@ -34,6 +34,7 @@ type issueReport struct {
 	Pending   []string
 	Receipted int
 	Reclaimed int
+	Kept      int
 	Reopened  int
 	Restored  int
 	Triaged   int
@@ -99,6 +100,7 @@ func writerReconcileCommand(args []string) error {
 		}
 		total.Receipted += report.Receipted
 		total.Reclaimed += report.Reclaimed
+		total.Kept += report.Kept
 		total.Reopened += report.Reopened
 		total.Restored += report.Restored
 		total.Triaged += report.Triaged
@@ -107,7 +109,7 @@ func writerReconcileCommand(args []string) error {
 			total.Warnings = append(total.Warnings, fmt.Sprintf("#%d: %s", number, warning))
 		}
 	}
-	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed,
+	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed, "leases_kept_for_open_pr": total.Kept,
 		"issues_reopened": total.Reopened, "drift_restored": total.Restored, "issues_triaged": total.Triaged,
 		"policy_rechecked": total.Rechecked, "warnings": append([]string{}, total.Warnings...), "errors": failures, "apply": *apply}
 	if err := printValue(result, *asJSON); err != nil {
@@ -178,10 +180,12 @@ type watch struct {
 	comments []github.Comment
 	receipts []writer.Receipt
 	report   issueReport
+	openPR   func(branch string) (bool, error)
 }
 
 func reconcileIssue(c model.Config, number int, apply bool, trust writer.Trust, now time.Time) (issueReport, error) {
-	w := &watch{c: c, number: number, apply: apply, now: now, trust: trust, ctx: context.Background(), client: github.NewClient(), poster: receiptClient()}
+	w := &watch{c: c, number: number, apply: apply, now: now, trust: trust, ctx: context.Background(), client: github.NewClient(), poster: receiptClient(),
+		openPR: func(branch string) (bool, error) { return branchHasOpenPR(c, branch) }}
 	err := w.run()
 	return w.report, err
 }
@@ -469,6 +473,15 @@ func (w *watch) reclaim(state *liveWork) (bool, error) {
 	if !reclaimed {
 		return false, nil
 	}
+	open, err := w.openPR(state.Branch)
+	if err != nil {
+		w.report.Warnings = append(w.report.Warnings, fmt.Sprintf("kept the expired lease on #%d: could not list PRs for %s: %v", w.number, state.Branch, err))
+	}
+	if keepsLease(open, err) {
+		w.report.Kept++
+		// A lapsed lease fails policy, so the PR's check has to be rerun.
+		return true, nil
+	}
 	w.report.Reclaimed++
 	if !w.apply {
 		return false, nil
@@ -482,6 +495,40 @@ func (w *watch) reclaim(state *liveWork) (bool, error) {
 		return true, nil
 	}
 	return true, w.post(writer.Receipt{RequestID: requestID, Result: "accepted", Detail: "expired lease cleared; Issue returned to Ready", At: w.now.UTC(), State: writer.StateOf(next)})
+}
+
+// keepsLease decides whether expired work stays with its holder. An open PR
+// means the work exists and CI or the Writer may be what held it up, so the
+// holder can still renew; closing the PR releases work a dead agent left. A
+// failed lookup keeps the lease too: the next pass can still reclaim it.
+func keepsLease(open bool, err error) bool { return open || err != nil }
+
+func branchHasOpenPR(c model.Config, branch string) (bool, error) {
+	if branch == "" {
+		return false, nil
+	}
+	output, err := ghOutput("pr", "list", "--repo", c.Owner+"/"+c.Repository, "--head", branch, "--base", c.DefaultBranch, "--state", "open", "--json", "isCrossRepository", "--limit", "100")
+	if err != nil {
+		return false, err
+	}
+	return hasOwnPR(output)
+}
+
+// hasOwnPR ignores PRs from forks: anyone can name a fork's branch the same, and
+// that must not keep a lease.
+func hasOwnPR(output []byte) (bool, error) {
+	var pulls []struct {
+		IsCrossRepository bool `json:"isCrossRepository"`
+	}
+	if err := json.Unmarshal(output, &pulls); err != nil {
+		return false, err
+	}
+	for _, pull := range pulls {
+		if !pull.IsCrossRepository {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // recheckPolicy re-runs the policy check of open PRs from branch whose

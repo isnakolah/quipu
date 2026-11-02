@@ -41,6 +41,7 @@ type statusItem struct {
 	OpenBlockers   int    `json:"open_blockers,omitempty"`
 	ChildTotal     int    `json:"child_total,omitempty"`
 	ChildCompleted int    `json:"child_completed,omitempty"`
+	NeedsTriage    bool   `json:"-"`
 }
 
 type statusReport struct {
@@ -53,6 +54,7 @@ type statusReport struct {
 	Ready      []statusItem `json:"ready"`
 	Backlog    int          `json:"backlog"`
 	Attention  []string     `json:"attention"`
+	OwnerQueue []ownerItem  `json:"owner_queue"`
 }
 
 func statusCommand(args []string) error {
@@ -70,6 +72,7 @@ func statusCommand(args []string) error {
 		return err
 	}
 	report := buildStatusReport(c.Owner+"/"+c.Repository, items, time.Now())
+	report.OwnerQueue = ownerQueue(items, c.AgentsMerge(), time.Now())
 	if *asJSON {
 		return printValue(report, true)
 	}
@@ -151,6 +154,9 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 			if strings.HasPrefix(label.Name, "kind:") {
 				item.Kind = titleCase(strings.TrimPrefix(label.Name, "kind:"))
 			}
+			if label.Name == triageLabel {
+				item.NeedsTriage = true
+			}
 		}
 		for _, projectItem := range node.ProjectItems.Nodes {
 			if projectItem.Project.ID != c.Project.ID {
@@ -181,7 +187,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 // buildStatusReport groups open Issues into the columns a team reads at
 // standup and lists anything that needs a human decision.
 func buildStatusReport(repository string, items []statusItem, now time.Time) statusReport {
-	report := statusReport{Repository: repository, Goals: []statusItem{}, InProgress: []statusItem{}, InReview: []statusItem{}, Verifying: []statusItem{}, Blocked: []statusItem{}, Ready: []statusItem{}, Attention: []string{}}
+	report := statusReport{Repository: repository, Goals: []statusItem{}, InProgress: []statusItem{}, InReview: []statusItem{}, Verifying: []statusItem{}, Blocked: []statusItem{}, Ready: []statusItem{}, Attention: []string{}, OwnerQueue: []ownerItem{}}
 	sort.Slice(items, func(i, j int) bool { return items[i].Number < items[j].Number })
 	for _, item := range items {
 		if strings.EqualFold(item.Kind, "Epic") {
@@ -195,7 +201,7 @@ func buildStatusReport(repository string, items []statusItem, now time.Time) sta
 		case "Claimed", "In progress":
 			report.InProgress = append(report.InProgress, item)
 			if !hasActiveLease(item.LeaseHolder, item.LeaseExpires, now) {
-				report.Attention = append(report.Attention, fmt.Sprintf("#%d lease expired; Writer will return it to Ready", item.Number))
+				report.Attention = append(report.Attention, fmt.Sprintf("#%d lease expired; Writer will return it to Ready unless its PR is open", item.Number))
 			}
 		case "In review":
 			report.InReview = append(report.InReview, item)
@@ -265,6 +271,21 @@ func renderStatus(report statusReport, now time.Time) string {
 		fmt.Fprintf(&b, "\nNeeds attention\n")
 		for _, line := range report.Attention {
 			fmt.Fprintf(&b, "  ! %s\n", line)
+		}
+	}
+	if len(report.OwnerQueue) > 0 {
+		// Grouped by reason: a backlog of triage would otherwise fill the screen.
+		fmt.Fprintf(&b, "\nWaiting on the owner (%d)\n", len(report.OwnerQueue))
+		var reasons []string
+		numbers := map[string][]string{}
+		for _, item := range report.OwnerQueue {
+			if _, seen := numbers[item.Reason]; !seen {
+				reasons = append(reasons, item.Reason)
+			}
+			numbers[item.Reason] = append(numbers[item.Reason], fmt.Sprintf("#%d", item.Number))
+		}
+		for _, reason := range reasons {
+			fmt.Fprintf(&b, "  %s: %s\n", reason, strings.Join(numbers[reason], " "))
 		}
 	}
 	return b.String()
@@ -420,6 +441,13 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		}
 	}
 	if state.Status == "Claimed" {
+		// A claim kept past its expiry by an open PR needs renewing before it
+		// can start.
+		if state.Holder == actor && !hasActiveLease(state.Holder, state.Expiry, time.Now()) {
+			if err := sendAndWait(c, number, actor, writer.Request{Action: "renew"}, wait); err != nil {
+				return flowResult{}, err
+			}
+		}
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, wait); err != nil {
 			return flowResult{}, err
 		}
@@ -574,6 +602,13 @@ func doneCommand(args []string) error {
 		}
 		if pull.State != "OPEN" {
 			return flowErr("pr-closed", "PR %s is %s", pull.URL, pull.State)
+		}
+		// A holder whose lease lapsed while the Writer or CI was down keeps its
+		// claim on the open PR, and needs a live lease to move it to review.
+		if state.Holder == actor && !hasActiveLease(state.Holder, state.Expiry, time.Now()) {
+			if err := sendAndWait(c, number, actor, writer.Request{Action: "renew"}, *wait); err != nil {
+				return err
+			}
 		}
 		if state.Status == "Claimed" {
 			if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, *wait); err != nil {
@@ -886,8 +921,9 @@ func mergeWhenGreen(c model.Config, number int, url string) (string, error) {
 	if err := json.Unmarshal(output, &view); err != nil {
 		return "", err
 	}
-	if err := mergeGate(view.Checks, append(append([]string{}, c.Checks()...), "policy")); err != nil {
-		return "", err
+	required := append(append([]string{}, c.Checks()...), "policy")
+	if err := mergeGate(view.Checks, required); err != nil {
+		return "", explainPendingChecks(c, err, view.Checks, required)
 	}
 	if view.IsDraft || view.MergeStateStatus == "BEHIND" || view.MergeStateStatus == "DIRTY" {
 		return "", flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", url, view.IsDraft, view.MergeStateStatus)
@@ -1107,7 +1143,7 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 			return nil
 		}
 		if time.Now().After(deadline) {
-			e := flowErr("no-receipt", "#%d %s request %s has no Writer receipt after %s", number, r.Action, r.ID, wait)
+			e := flowErr("no-receipt", "#%d %s request %s has no Writer receipt after %s: %s", number, r.Action, r.ID, wait, writerDiagnosis(c, time.Now()))
 			e.cause = errNoReceipt
 			return e
 		}
