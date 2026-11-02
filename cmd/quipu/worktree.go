@@ -127,10 +127,55 @@ func (w worktree) writeLease(lease leaseContext) error {
 	return os.Rename(tmp, path)
 }
 
-func (w worktree) removeLease(number int) {
-	if lease, err := w.readLease(); err == nil && lease.Issue == number {
-		_ = os.Remove(filepath.Join(w.GitDir, leaseFileName))
+// removeLease forgets this worktree's lease on Issue number, and reports whether
+// it had one.
+func (w worktree) removeLease(number int) bool {
+	lease, err := w.readLease()
+	if err != nil || lease.Issue != number {
+		return false
 	}
+	_ = os.Remove(filepath.Join(w.GitDir, leaseFileName))
+	return true
+}
+
+// release frees this worktree once its work on Issue number has left it, and runs
+// the repository's cleanup there. A second call finds nothing to do. What cleanup
+// couldn't do is a warning: the work itself is finished.
+func (w worktree) release(number int, cleanup string) []string {
+	if !w.removeLease(number) || cleanup == "" || !w.linked() {
+		return nil
+	}
+	return runCleanup(w.Top, cleanup)
+}
+
+// commonPath names a file shared by every worktree of the clone.
+func (w worktree) commonPath(name string) (string, error) {
+	dir, err := w.git("rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(w.Top, dir)
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// mergeLock serializes the last look before a merge and the merge itself across
+// this clone's worktrees. Closing the file releases it, as does the process dying.
+func (w worktree) mergeLock() (func(), error) {
+	path, err := w.commonPath("quipu-merge.lock")
+	if err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile(lock); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return func() { lock.Close() }, nil
 }
 
 // holding returns the worktree of this repository whose lease is for Issue
@@ -209,8 +254,20 @@ func (w worktree) switchBranch(branch, base string) error {
 		_, err := w.git("switch", branch)
 		return err
 	}
-	_, err := w.git("switch", "-c", branch, w.baseRef(base))
+	_, err := w.git("switch", "-c", branch, w.startPoint(branch, base))
 	return err
+}
+
+// startPoint is where a branch missing from this clone starts: its copy on origin
+// if there is one, since the work may already be there, and otherwise the default
+// branch.
+func (w worktree) startPoint(branch, base string) string {
+	if _, err := w.git("fetch", "--quiet", "origin", branch); err == nil {
+		if _, err := w.git("rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
+			return "origin/" + branch
+		}
+	}
+	return w.baseRef(base)
 }
 
 // dispatchPath is where `start --worktree` puts the worktree for Issue N:
@@ -240,7 +297,7 @@ func (w worktree) addWorktree(path, branch, base string) (worktree, bool, bool, 
 	createdBranch := !w.hasBranch(branch)
 	args := []string{"worktree", "add", path, branch}
 	if createdBranch {
-		args = []string{"worktree", "add", "-b", branch, path, w.baseRef(base)}
+		args = []string{"worktree", "add", "-b", branch, path, w.startPoint(branch, base)}
 	}
 	if _, err := w.git(args...); err != nil {
 		return worktree{}, false, false, err

@@ -523,7 +523,9 @@ type flowResult struct {
 	Worktree     string `json:"worktree,omitempty"`
 	// Runner reports a needed runner that was down and what was done about it.
 	Runner string `json:"runner,omitempty"`
-	Next   string `json:"next"`
+	// Warnings are things that went wrong without stopping the command.
+	Warnings []string `json:"warnings,omitempty"`
+	Next     string   `json:"next"`
 }
 
 func printFlowResult(result flowResult, asJSON bool) error {
@@ -545,6 +547,9 @@ func printFlowResult(result flowResult, asJSON bool) error {
 			line += " in " + result.Worktree
 		}
 		fmt.Println(line)
+	}
+	for _, warning := range result.Warnings {
+		fmt.Println("Warning: " + warning)
 	}
 	fmt.Println("Next: " + result.Next)
 	return nil
@@ -602,6 +607,7 @@ func doneCommand(args []string) error {
 		return err
 	}
 	noCI, bypass := noCISettings(c, source)
+	cleanup := enforcedCleanup(c, source)
 	// A dispatcher may finish work from another checkout, so act as the
 	// worktree that holds this Issue's lease when there is one.
 	w := here.holding(number)
@@ -613,8 +619,14 @@ func doneCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	// A rerun can find the work finished, by its own earlier request or by the
+	// Writer, and the worktree is still free to go.
+	var warnings []string
+	if terminalIssueStatus(state.Status) {
+		warnings = w.release(number, cleanup)
+	}
 	if state.Status == "Done" {
-		return printFlowResult(flowResult{Issue: number, Status: "Done", Next: "Pick the next task: quipu start --next"}, *asJSON)
+		return printFlowResult(doneResult(w, number, "", warnings), *asJSON)
 	}
 	// Before any request: the Writer that answers it may be on that runner.
 	note := ensureRunner(c, here)
@@ -674,13 +686,13 @@ func doneCommand(args []string) error {
 			if err := promptMissingEvidence(&e, os.Stdin, os.Stderr); err != nil {
 				return err
 			}
-			var ciURL, local string
+			var ciURL, local, testedBase string
 			var err error
 			if noCI {
-				local, err = mergeWithoutCI(c, bypass, e, liveNoCIOps(c, w, number, state.Branch, pull.URL))
+				local, err = mergeWithoutCI(c, bypass, e, liveNoCIOps(c, w, number, state.Branch, pull.URL, &testedBase))
 			}
 			if local == "" && err == nil {
-				ciURL, err = mergeWhenGreen(c, number, pull.URL)
+				ciURL, testedBase, err = mergeWhenGreen(c, w, number, pull.URL)
 			}
 			head := ""
 			if errors.Is(err, errPRBehind) && c.UpdatesBehind() {
@@ -689,7 +701,7 @@ func doneCommand(args []string) error {
 				}
 			}
 			if checksStillRunning(err) && c.MergesInBackground() {
-				return queueMerge(c, w, number, actor, state.Branch, pull.URL, head, e, err, respond)
+				return queueMerge(c, w, number, actor, state.Branch, pull.URL, head, cleanup, e, err, respond)
 			}
 			if err != nil {
 				return err
@@ -704,6 +716,12 @@ func doneCommand(args []string) error {
 				e.CIURL = local
 			} else if e.CIURL == pendingMerge {
 				e.CIURL = ciURL
+			}
+			if parent, err := firstParent(c, pull.MergeCommit); err != nil {
+				warnings = append(warnings, fmt.Sprintf("could not read merge commit %s to confirm it was tested: %v", pull.MergeCommit, err))
+			} else if race := baseRaceNote(testedBase, parent); race != "" {
+				addRisk(&e, race)
+				warnings = append(warnings, race)
 			}
 		}
 		e.FinalSHA = pull.MergeCommit
@@ -744,14 +762,18 @@ func doneCommand(args []string) error {
 	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: "Done"}, *wait); err != nil {
 		return err
 	}
-	w.removeLease(number)
-	result := flowResult{Issue: number, Status: "Done", PR: pull.URL, Next: "Closed. Pick the next task: quipu start --next"}
+	return respond(doneResult(w, number, pull.URL, append(warnings, w.release(number, cleanup)...)))
+}
+
+// doneResult is what finished work reports, however it got there.
+func doneResult(w worktree, number int, pr string, warnings []string) flowResult {
+	result := flowResult{Issue: number, Status: "Done", PR: pr, Warnings: warnings, Next: "Closed. Pick the next task: quipu start --next"}
 	if w.linked() {
 		// Never delete the worktree an agent may still be running in.
 		result.Worktree = w.Top
-		result.Next = fmt.Sprintf("Closed. When nothing runs in it, remove the worktree: git worktree remove %s. Pick the next task: quipu start --next", w.Top)
+		result.Next = fmt.Sprintf("Closed. When nothing runs in it, remove the worktree: quipu worktree remove %s. Pick the next task: quipu start --next", w.Top)
 	}
-	return respond(result)
+	return result
 }
 
 // ---- quipu propose / quipu ready ----
@@ -1006,27 +1028,34 @@ func containsAny(values []string, wanted ...string) bool {
 
 // mergeWhenGreen merges the PR with a merge commit, pinned to the head the
 // checks ran on, when the repository lets agents merge. It returns the run
-// URL of the first required check, for the evidence.
-func mergeWhenGreen(c model.Config, number int, url string) (string, error) {
-	view, err := loadMergeView(c, url)
+// URL of the first required check, for the evidence, and the default branch's
+// tip as it stood.
+func mergeWhenGreen(c model.Config, w worktree, number int, url string) (string, string, error) {
+	// From this look to the merge, no other agent on this clone can merge.
+	unlock, err := w.mergeLock()
 	if err != nil {
-		return "", err
+		return "", "", err
+	}
+	defer unlock()
+	view, err := loadMergeState(c, url)
+	if err != nil {
+		return "", "", err
 	}
 	required := requiredChecks(c)
 	if err := mergeGate(view.Checks, required); err != nil {
-		return "", explainPendingChecks(c, err, view.Checks, required)
+		return "", "", explainPendingChecks(c, err, view.Checks, required)
 	}
 	if view.IsDraft || view.MergeStateStatus == "BEHIND" || view.MergeStateStatus == "DIRTY" {
 		e := flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", url, view.IsDraft, view.MergeStateStatus)
 		if !view.IsDraft && view.MergeStateStatus == "BEHIND" {
 			e.cause = errPRBehind
 		}
-		return "", e
+		return "", "", e
 	}
 	if err := mergePull(c, number, view); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return requiredRunURL(c, view.Checks), nil
+	return requiredRunURL(c, view.Checks), view.BaseOID, nil
 }
 
 // passingCIURL returns a successful check run URL only when no check failed,
@@ -1189,6 +1218,11 @@ func postRequest(c model.Config, number int, actor string, r writer.Request) (st
 	if err != nil {
 		return "", err
 	}
+	return postRequestOn(c, number, actor, r, state)
+}
+
+// postRequestOn is postRequest against state already read.
+func postRequestOn(c model.Config, number int, actor string, r writer.Request, state liveWork) (string, error) {
 	fingerprint, err := fingerprintLiveWork(state)
 	if err != nil {
 		return "", err
@@ -1203,12 +1237,21 @@ func postRequest(c model.Config, number int, actor string, r writer.Request) (st
 }
 
 func sendAndWait(c model.Config, number int, actor string, r writer.Request, wait time.Duration) error {
-	id, err := postRequest(c, number, actor, r)
+	state, err := loadLiveWork(c, number)
+	if err != nil {
+		return err
+	}
+	client := github.NewClient()
+	r.Actor = actor
+	if requestApplied(c, client, number, state, r) {
+		fmt.Fprintf(os.Stderr, "#%d %s already applied; nothing to do\n", number, r.Action)
+		return nil
+	}
+	id, err := postRequestOn(c, number, actor, r, state)
 	if err != nil {
 		return err
 	}
 	r.ID = id
-	client := github.NewClient()
 	fmt.Fprintf(os.Stderr, "#%d %s requested; waiting for Writer...\n", number, r.Action)
 	deadline := time.Now().Add(wait)
 	for {
@@ -1218,6 +1261,10 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 		}
 		if receipt, ok := receiptFor(receiptTrust(c).Receipts(comments), r.ID); ok {
 			if receipt.Result != "accepted" {
+				// An earlier copy of this request may be what made this one stale.
+				if state, err := loadLiveWork(c, number); err == nil && requestApplied(c, client, number, state, r) {
+					return nil
+				}
 				e := flowErr(rejectionCode(receipt.Detail), "#%d %s rejected by the Writer: %s", number, r.Action, receipt.Detail)
 				e.cause = errRejected
 				return e
@@ -1231,6 +1278,20 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
+
+// requestApplied reports whether the work already is what r asks for. Only the
+// actions that depend on earlier evidence or a queued merge read the comments.
+func requestApplied(c model.Config, client *github.Client, number int, state liveWork, r writer.Request) bool {
+	var receipts []writer.Receipt
+	if r.Action == "evidence.submit" || r.Action == "merge.queue" {
+		comments, err := client.ListComments(context.Background(), c.Owner, c.Repository, number)
+		if err != nil {
+			return false
+		}
+		receipts = receiptTrust(c).Receipts(comments)
+	}
+	return writer.AlreadyApplied(workStateOf(state), r, receipts, time.Now())
 }
 
 // receiptFor finds the receipt for requestID among trusted receipts.

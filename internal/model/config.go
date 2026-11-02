@@ -59,6 +59,10 @@ type Config struct {
 	// MergeBypassRulesets lets a merge without CI use the admin bypass when a
 	// ruleset requires the waived checks. Needs merge_without_ci.
 	MergeBypassRulesets bool `yaml:"merge_bypass_rulesets,omitempty" json:"merge_bypass_rulesets,omitempty"`
+	// Cleanup is a shell command that frees a linked worktree's disk. Quipu runs
+	// it there after the last step that needs the build, so a repository's
+	// agents never have to order it around local_check.
+	Cleanup string `yaml:"cleanup,omitempty" json:"cleanup,omitempty"`
 	// GuardReads "open" widens the commands the guard treats as read-only.
 	GuardReads string    `yaml:"guard_reads,omitempty" json:"guard_reads,omitempty"`
 	Workflows  Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
@@ -205,6 +209,9 @@ func (c Config) MergesWithoutCI() bool { return c.AgentsMerge() && c.MergeWithou
 // BypassesRulesets reports whether a merge without CI may use the admin bypass.
 func (c Config) BypassesRulesets() bool { return c.MergesWithoutCI() && c.MergeBypassRulesets }
 
+// CleansUp reports whether Quipu frees a worktree's disk when it is finished.
+func (c Config) CleansUp() bool { return c.Cleanup != "" }
+
 // GuardReadsOpen reports whether the guard allows its wider read-only list.
 func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 
@@ -214,6 +221,7 @@ func (c Config) WithoutRelaxations() Config {
 	c.ReadyBy, c.Merge, c.PolicyExemptAuthors = "", "", nil
 	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads = "", "", "", "", ""
 	c.MergeWithoutCI, c.LocalCheck, c.MergeBypassRulesets = false, "", false
+	c.Cleanup = ""
 	c.Workflows.RunnerStart = ""
 	return c
 }
@@ -307,6 +315,9 @@ func (c Config) Validate() error {
 	}
 	if c.MergeBypassRulesets && !c.MergeWithoutCI {
 		return fmt.Errorf("merge_bypass_rulesets needs merge_without_ci")
+	}
+	if strings.ContainsAny(c.Cleanup, "\n\r") {
+		return fmt.Errorf("cleanup must be one line")
 	}
 	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {
 		return fmt.Errorf("guard_reads must be closed or open")

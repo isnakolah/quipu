@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"github.com/isnakolah/quipu/internal/model"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,10 @@ func guardCode(t *testing.T, cwd, tool string, input map[string]any) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = newGuard(cwd, time.Now().UTC()).check(hookInput{ToolName: tool, Cwd: cwd, ToolInput: raw})
+	g := newGuard(cwd, time.Now().UTC())
+	// Tests never reach GitHub. No answer means what it means in production.
+	g.live = func(model.Config, int) (liveWork, error) { return liveWork{}, errors.New("no network in tests") }
+	err = g.check(hookInput{ToolName: tool, Cwd: cwd, ToolInput: raw})
 	if err == nil {
 		return ""
 	}

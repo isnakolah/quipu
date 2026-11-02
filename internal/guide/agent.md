@@ -48,6 +48,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` | PR merged: record evidence and close | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
+| `quipu worktree remove N --json` | to free a finished worktree, by Issue number or path | `status: "Removed"`, `worktree`, `warnings`, `next` |
 | `quipu guide` | to read this handbook | this text |
 | `quipu runner status --json` | a check won't start, or work seems stuck | each runner's state and labels, what is queued for it, when the Writer last ran |
 | `quipu runner setup` | the owner asks how to set a runner up | the steps, printed for the owner |
@@ -84,7 +85,7 @@ switch branches, never edit outside <worktree>.
 ```
 
 - `quipu done N` works from any checkout and finds the worktree holding #N.
-- After Done, remove a worktree with `git worktree remove <path>` once nothing runs in it.
+- After Done, remove a worktree with `quipu worktree remove <path> --json` once nothing runs in it. The agent that held it or a dispatcher may do this; it also deletes the merged local branch. Work that is not Done keeps anything found only in that worktree.
 - If `start` says the branch is checked out in another worktree, continue there.
 
 ## Pull requests
@@ -105,7 +106,7 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
-**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
 
 **When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
 

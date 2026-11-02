@@ -50,7 +50,7 @@ quipu start --next --worktree --json       # returns "worktree": "../quipu-workt
 # launch an agent in that directory; it resumes the lease. Repeat per agent.
 ```
 
-`quipu done N` works from any checkout and finds the worktree holding the lease. Remove a finished worktree with `git worktree remove <path>` when nothing runs in it. If `start` says a branch is checked out in another worktree, continue there.
+`quipu done N` works from any checkout and finds the worktree holding the lease. Remove a finished worktree with `quipu worktree remove <path>` when nothing runs in it, from that worktree or a dispatcher's checkout. If `start` says a branch is checked out in another worktree, continue there.
 
 Under load the Writer drains every request posted in the last 30 minutes on each run, so requests from many agents are not lost when GitHub Actions cancels queued runs.
 

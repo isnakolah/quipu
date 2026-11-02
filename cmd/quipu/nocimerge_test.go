@@ -33,14 +33,21 @@ type fakeNoCI struct {
 	ran        []string
 	merges     []bool
 	updates    int
+	locks      int
 	recorded   string
 }
 
 func (f *fakeNoCI) ops() noCIOps {
 	return noCIOps{
-		view:   func() (mergeView, error) { return f.view, nil },
-		update: func() error { f.updates++; f.view.HeadRefOid, f.head = "updated", "updated"; return nil },
-		head:   func() (string, error) { return f.head, nil },
+		view: func() (mergeView, error) { return f.view, nil },
+		update: func() (string, error) {
+			f.updates++
+			f.view.HeadRefOid, f.head, f.view.MergeStateStatus = "updated", "updated", "BLOCKED"
+			return "updated", nil
+		},
+		pause: func() {},
+		lock:  func() (func(), error) { f.locks++; return func() {}, nil },
+		head:  func() (string, error) { return f.head, nil },
 		dirty: func() (string, error) {
 			if len(f.ran) > 0 {
 				return f.dirtyAfter, nil
@@ -219,8 +226,12 @@ func TestBehindFollowsUpdateBehind(t *testing.T) {
 	c.UpdateBehind = "auto"
 	f := pendingPull()
 	f.view.MergeStateStatus = "BEHIND"
-	if _, err := mergeWithoutCI(c, false, localEvidence, f.ops()); flowCode(err) != "checks-pending" || f.updates != 1 || len(f.ran) != 0 || len(f.merges) != 0 {
-		t.Fatalf("it updates and asks for a rerun, so the check runs on the new head: %v, updates %d, ran %v", err, f.updates, f.ran)
+	value, err := mergeWithoutCI(c, false, localEvidence, f.ops())
+	if err != nil || f.updates != 1 || len(f.ran) != 1 || len(f.merges) != 1 {
+		t.Fatalf("it updates, checks the new head, and merges in one call: %v, updates %d, ran %v, merges %v", err, f.updates, f.ran, f.merges)
+	}
+	if !strings.Contains(value, "at updated;") {
+		t.Fatalf("the evidence must name the head that was checked: %s", value)
 	}
 
 	dirty := pendingPull()

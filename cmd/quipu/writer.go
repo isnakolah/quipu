@@ -105,6 +105,9 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if state.IssueID != request.IssueID {
 		return rejectedReceipt(request, errors.New("request Issue ID does not match target Issue"))
 	}
+	if receipt, applied := alreadyAppliedReceipt(state, request, receipts, time.Now()); applied {
+		return receipt
+	}
 	actual, err := writer.RequireFreshFingerprint(request.ExpectedFingerprint, liveWorkFingerprint(state))
 	if err != nil {
 		return writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "rejected", Detail: err.Error(), At: time.Now().UTC()}
@@ -145,11 +148,7 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if request.Action == "import" && writer.LastState(receipts) != nil {
 		return rejectedReceipt(request, errors.New("import applies only to work that has not entered the flow"))
 	}
-	current := writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Branch: state.Branch}}
-	if state.Expiry != "" {
-		current.Lease.Expires, _ = time.Parse(time.RFC3339, state.Expiry)
-	}
-	next, err := writer.ApplyLifecycle(current, request, time.Now())
+	next, err := writer.ApplyLifecycle(workStateOf(state), request, time.Now())
 	if err != nil {
 		return rejectedReceipt(request, err)
 	}
@@ -181,6 +180,29 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 		receipt.Merge = &writer.QueuedMerge{PR: request.PR, Head: request.Head, Evidence: *request.Evidence}
 	}
 	return receipt
+}
+
+// workStateOf is the lifecycle view of live work.
+func workStateOf(state liveWork) writer.WorkState {
+	current := writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Branch: state.Branch}}
+	if state.Expiry != "" {
+		current.Lease.Expires, _ = time.Parse(time.RFC3339, state.Expiry)
+	}
+	return current
+}
+
+// alreadyAppliedReceipt accepts a request whose work already matches, before the
+// fingerprint check that would call it stale. It carries no state snapshot, so
+// the last receipt that changed anything stays the record of what should be.
+func alreadyAppliedReceipt(state liveWork, request writer.Request, receipts []writer.Receipt, now time.Time) (writer.Receipt, bool) {
+	if !writer.AlreadyApplied(workStateOf(state), request, receipts, now) {
+		return writer.Receipt{}, false
+	}
+	fingerprint, err := fingerprintLiveWork(state)
+	if err != nil {
+		fingerprint = request.ExpectedFingerprint
+	}
+	return writer.Receipt{RequestID: request.ID, Fingerprint: fingerprint, Result: "accepted", Detail: "already applied; work stays " + state.Status + ", nothing changed", At: now.UTC()}, true
 }
 
 // importReceipt records an imported Issue's history. Done carries the

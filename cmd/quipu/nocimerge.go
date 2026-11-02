@@ -149,7 +149,9 @@ func waivedChecks(checks []prCheck, required []string) ([]string, error) {
 // noCIOps are the outside effects of a merge without CI.
 type noCIOps struct {
 	view          func() (mergeView, error)
-	update        func() error
+	update        func() (string, error)
+	pause         func()
+	lock          func() (func(), error)
 	head          func() (string, error)
 	dirty         func() (string, error)
 	violations    func() ([]string, error)
@@ -168,16 +170,56 @@ func blockedState(view mergeView) error {
 	return nil
 }
 
-// mergeWithoutCI merges with required checks waived. It returns "" and no error
-// when no check is waived, so the ordinary merge applies, and otherwise the CI
-// field for the evidence.
+// noCIAttempts is how many times one `quipu done` tests against a moving base.
+const noCIAttempts = 3
+
+// errBaseMoved marks a check that passed against a default branch that has since
+// moved, so what passed is no longer what would merge.
+var errBaseMoved = errors.New("the default branch moved during local_check")
+
+// mergeWithoutCI merges with required checks waived, having tested exactly what
+// merges. It returns "" and no error when no check is waived, so the ordinary
+// merge applies, and otherwise the CI field for the evidence.
 func mergeWithoutCI(c model.Config, bypass bool, e writer.Evidence, ops noCIOps) (string, error) {
+	for range noCIAttempts {
+		value, err := mergeWithoutCIOnce(c, bypass, e, ops)
+		if !errors.Is(err, errBaseMoved) {
+			return value, err
+		}
+	}
+	return "", flowErr("base-moved", "%s moved during each of %d runs of local_check, so nothing merged", c.DefaultBranch, noCIAttempts)
+}
+
+// noCIHeadPolls is how many times an update waits for GitHub to show its push.
+const noCIHeadPolls = 10
+
+// updateBranch brings a behind PR up to date and waits to see the new head, since
+// the check must run on what GitHub would merge.
+func updateBranch(c model.Config, view mergeView, ops noCIOps) (mergeView, error) {
+	head, err := ops.update()
+	if err != nil {
+		return view, err
+	}
+	for range noCIHeadPolls {
+		if view, err = ops.view(); err != nil {
+			return view, err
+		}
+		if view.HeadRefOid == head {
+			return view, nil
+		}
+		ops.pause()
+	}
+	return view, flowErr("checks-pending", "updated %s with %s, and GitHub does not show it yet; rerun quipu done to check and merge it", view.URL, c.DefaultBranch)
+}
+
+func mergeWithoutCIOnce(c model.Config, bypass bool, e writer.Evidence, ops noCIOps) (string, error) {
 	view, err := ops.view()
 	if err != nil {
 		return "", err
 	}
 	required := requiredChecks(c)
-	if mergeGate(view.Checks, required) == nil {
+	behind := view.MergeStateStatus == "BEHIND" && !view.IsDraft && c.UpdatesBehind()
+	if !behind && mergeGate(view.Checks, required) == nil {
 		return "", nil
 	}
 	if _, err := waivedChecks(view.Checks, required); err != nil {
@@ -189,12 +231,19 @@ func mergeWithoutCI(c model.Config, bypass bool, e writer.Evidence, ops noCIOps)
 	if err := checkCleanAt(ops, view.HeadRefOid); err != nil {
 		return "", err
 	}
-	if view.MergeStateStatus == "BEHIND" && !view.IsDraft && c.UpdatesBehind() {
-		if err := ops.update(); err != nil {
+	if behind {
+		if view, err = updateBranch(c, view, ops); err != nil {
 			return "", err
 		}
-		// GitHub can lag behind the push, and the check must run on the new head.
-		return "", flowErr("checks-pending", "updated %s with %s; rerun quipu done to check and merge it", view.URL, c.DefaultBranch)
+		if view.MergeStateStatus == "BEHIND" {
+			return "", errBaseMoved
+		}
+		if mergeGate(view.Checks, required) == nil {
+			return "", nil
+		}
+		if _, err := waivedChecks(view.Checks, required); err != nil {
+			return "", err
+		}
 	}
 	if err := blockedState(view); err != nil {
 		return "", err
@@ -218,11 +267,20 @@ func mergeWithoutCI(c model.Config, bypass bool, e writer.Evidence, ops noCIOps)
 		return "", err
 	}
 	head := view.HeadRefOid
+	// From the last look to the merge, no other agent on this clone can merge.
+	unlock, err := ops.lock()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if view, err = ops.view(); err != nil {
 		return "", err
 	}
 	if view.HeadRefOid != head {
 		return "", flowErr("worktree-unclean", "PR %s moved to %s while local_check ran on %s; rerun quipu done", view.URL, view.HeadRefOid, head)
+	}
+	if view.MergeStateStatus == "BEHIND" && c.UpdatesBehind() {
+		return "", errBaseMoved
 	}
 	if err := blockedState(view); err != nil {
 		return "", err
@@ -349,15 +407,15 @@ func checkCleanAt(ops noCIOps, head string) error {
 }
 
 // liveNoCIOps is noCIOps against this worktree and GitHub.
-func liveNoCIOps(c model.Config, w worktree, number int, branch, url string) noCIOps {
+// tested receives the default branch's tip at the moment of the merge.
+func liveNoCIOps(c model.Config, w worktree, number int, branch, url string, tested *string) noCIOps {
 	return noCIOps{
-		view: func() (mergeView, error) { return loadMergeView(c, url) },
-		update: func() error {
-			_, err := mergeDefaultIn(w, branch, c.DefaultBranch)
-			return err
-		},
-		head:  func() (string, error) { return w.git("rev-parse", "HEAD") },
-		dirty: func() (string, error) { return w.git("status", "--porcelain") },
+		view:   func() (mergeView, error) { return loadMergeState(c, url) },
+		update: func() (string, error) { return mergeDefaultIn(w, branch, c.DefaultBranch) },
+		pause:  func() { time.Sleep(3 * time.Second) },
+		lock:   w.mergeLock,
+		head:   func() (string, error) { return w.git("rev-parse", "HEAD") },
+		dirty:  func() (string, error) { return w.git("status", "--porcelain") },
 		violations: func() ([]string, error) {
 			pull, err := loadPullFacts(c, url)
 			if err != nil {
@@ -370,6 +428,7 @@ func liveNoCIOps(c model.Config, w worktree, number int, branch, url string) noC
 		forget:        func(head string) { _ = os.Remove(localCheckRecord(w, head)) },
 		adminBlockers: func(view mergeView) ([]string, error) { return loadAdminBlockers(c, view) },
 		merge: func(view mergeView, admin bool) error {
+			*tested = view.BaseOID
 			if admin {
 				return mergePull(c, number, view, "--admin")
 			}
