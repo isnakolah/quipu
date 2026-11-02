@@ -47,6 +47,7 @@ func (f *fakeNoCI) ops() noCIOps {
 		},
 		pause: func() {},
 		lock:  func() (func(), error) { f.locks++; return func() {}, nil },
+		hold:  func() (func(), error) { return func() {}, nil },
 		head:  func() (string, error) { return f.head, nil },
 		dirty: func() (string, error) {
 			if len(f.ran) > 0 {

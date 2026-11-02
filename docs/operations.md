@@ -90,6 +90,7 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 - `commit_format`: unset or `issue-prefix` (`#NNN type(scope): summary`, footer `Refs: #N`, merge commits from git exempt). Enforced by `policy` for every PR commit and the PR title, and by `quipu verify-commit FILE` in a `commit-msg` hook.
 - `merge_without_ci`, `local_check`, and `merge_bypass_rulesets`: merge without CI, off by default, config only and read from the default branch. `quipu doctor` fails when a ruleset requires the waived checks and the bypass is off or not in place. See the [owner guide](owner-guide.md#options).
 - `cleanup`: a shell command, run once in a linked worktree when its Issue reaches Done or `quipu worktree remove` takes it away. Read only from the default branch. See the [owner guide](owner-guide.md#options).
+- `limits`: `build_slots`, `build_areas`, `min_free_disk_gb`, and `slot_idle_minutes`. Slots live in `~/.quipu/machine/slots` (`QUIPU_STATE_DIR` moves them), one file each, guarded by a short lock that's never held across the network. A reservation is taken before the claim is posted and becomes a slot of work once the lease is written. A reservation or running check holds a file lock the kernel frees when its process dies, so a reused PID can't keep a slot; a slot of work needs its lease and worktree and the guard's touch. If the state can't be read, new claims in build areas are turned down and work already held carries on. Read from the default branch, and kept when a config can't be trusted, since they only tighten. See the [owner guide](owner-guide.md#options).
 - `issues_by`, `triage_by`, `update_behind`, `merge_wait`, and `guard_reads`: the autonomy flags, all off by default and read from the default branch. The [owner guide](owner-guide.md#options) says what each one gives up. `quipu guide` adds a section for each flag on, and with every flag off it renders the handbook unchanged.
 - `workflows`: runners, pinned Quipu version, schedule, and PR trigger for the generated workflows. `workflows.runner_start` is a command that starts a runner; only the default branch's copy runs. The [owner guide](owner-guide.md#runners-and-workflows) says what it runs and where.
 
@@ -100,6 +101,8 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 `quipu status --json` adds `pull_requests`: each active PR's check results and what to do next. It looks once and never waits, so an agent can finish other work first. `quipu runner status --json` reports the runners themselves, and `quipu runner setup` prints the steps to set one up. Neither changes anything.
 
 `scripts/behind-proof.sh` proves on a disposable, unprotected repository that a behind PR doesn't merge, that a semantic conflict between two PRs stops at `local_check`, that a repeated `quipu done` succeeds, and that a finished worktree can be removed.
+
+`scripts/limits-proof.sh` proves `quipu start` against real claims: a second build on a full machine is `Busy` and stays Ready, `--next` takes work that needs no slot, and moving work to review frees its slot.
 
 `scripts/runner-proof.sh` proves the whole path on a disposable repository and a real runner: stopped, work queued, started on demand, merged by the Writer. It must run on the host of that runner.
 

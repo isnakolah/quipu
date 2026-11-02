@@ -46,6 +46,7 @@ var flagRules = []flagRule{
 	{model.Config.MergesInBackground, "- **`merge_wait: background`:** when your evidence is complete and only checks are still running, `quipu done` returns at once and frees this worktree. The Writer holds your evidence and merges when the checks pass. If one fails, the Issue returns to Ready with its branch, and the receipt says why. So do not wait: take other work. Pushing to the branch again takes it out of the queue; rerun `quipu done` to queue it again.\n"},
 	{model.Config.MergesWithoutCI, "- **`merge_without_ci`:** when required checks are pending, skipped, never ran, or were cancelled before starting, `quipu done` merges anyway, once this worktree is clean and at the PR's head, the policy rules pass, and `local_check` exits 0. Run it with `--boundary local`, never `CI`. A check that ran and failed still blocks. The evidence records that the merge skipped CI. If the merge lands and the Writer does not answer, rerun the same command.\n"},
 	{model.Config.CleansUp, "- **`cleanup`:** do not run this repository's cleanup yourself. Quipu runs it in your worktree after the last step that needs the build, including when `quipu worktree remove` takes the worktree away. If it fails, the result's `warnings` says so, and the work still counts as finished.\n"},
+	{model.Config.LimitsMachine, "- **`limits`:** this machine caps how much runs at once, across every repository on it. `quipu start` may return `\"status\": \"Busy\"` with a `reason` and claim nothing: finish any work you hold, and when none is left, report the reason and stop. Don't poll. Work you already hold always resumes, and `--next` first offers Ready work that needs no build slot. A long `local_check` holds a slot too, and stops with `machine-busy` when none is free. Your slot lasts while you make tool calls, and frees itself when you go quiet or your lease ends.\n"},
 	{model.Config.GuardReadsOpen, "- **`guard_reads: open`:** the guard also treats more read-only commands as reads, such as `git tag --sort`. Interpreters stay denied, and so does everything else in the handbook.\n"},
 }
 
@@ -76,6 +77,7 @@ func renderGuideFor(c model.Config) string {
 // flagErrorOn says which flag can cause each of flagErrors.
 var flagErrorOn = map[string]func(model.Config) bool{
 	"merge-conflict":     model.Config.UpdatesBehind,
+	"machine-busy":       model.Config.LimitsBuilds,
 	"base-moved":         model.Config.UpdatesBehind,
 	"local-check-failed": model.Config.MergesWithoutCI,
 	"worktree-unclean":   model.Config.MergesWithoutCI,

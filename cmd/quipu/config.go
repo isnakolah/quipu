@@ -173,6 +173,7 @@ var optionDefaults = map[string]any{
 	"local_check":                      "none",
 	"merge_bypass_rulesets":            false,
 	"cleanup":                          "none",
+	"limits":                           "none",
 	"guard_reads":                      "closed",
 	"workflows.runs_on":                map[string][]string{"default": {"ubuntu-latest"}},
 	"workflows.quipu_version":          "main",

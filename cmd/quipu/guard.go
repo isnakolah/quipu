@@ -98,7 +98,12 @@ func guardCommand(args []string) error {
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		return fmt.Errorf("read hook input: %w", err)
 	}
-	return newGuard(input.Cwd, time.Now().UTC()).check(input)
+	g := newGuard(input.Cwd, time.Now().UTC())
+	// Any tool call shows this worktree's agent is still there.
+	if m, err := openMachine(); err == nil && g.session.GitDir != "" {
+		m.touchWork(g.session.GitDir, g.now)
+	}
+	return g.check(input)
 }
 
 // guard judges one tool call. It caches per-worktree verdicts so a compound

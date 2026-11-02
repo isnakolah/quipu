@@ -56,6 +56,8 @@ type statusReport struct {
 	OwnerQueue []ownerItem  `json:"owner_queue"`
 	// PullRequests is each active PR with its check results and what to do next.
 	PullRequests []pullReport `json:"pull_requests"`
+	// Machine is this computer's slots and disk, when limits are set.
+	Machine *machineReport `json:"machine,omitempty"`
 }
 
 func statusCommand(args []string) error {
@@ -84,6 +86,9 @@ func statusCommand(args []string) error {
 		titles[item.Number] = item.Title
 	}
 	report.OwnerQueue, report.Attention = addPullsToQueues(report.OwnerQueue, report.Attention, report.PullRequests, titles)
+	if here, err := currentWorktree(); err == nil {
+		report.Machine = loadMachineReport(enforcedLimits(c, here, false), here.Top, time.Now())
+	}
 	if *asJSON {
 		return printValue(report, true)
 	}
@@ -305,6 +310,7 @@ func renderStatus(report statusReport, now time.Time) string {
 			fmt.Fprintf(&b, "  %s: %s\n", reason, strings.Join(numbers[reason], " "))
 		}
 	}
+	b.WriteString(renderMachine(report.Machine))
 	return b.String()
 }
 
@@ -358,6 +364,7 @@ func startCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	c = enforcedLimits(c, here, true)
 	// Before any request: the Writer that answers it may be on that runner.
 	note := ensureRunner(c, here)
 	respond := func(result flowResult) error {
@@ -377,6 +384,12 @@ func startCommand(args []string) error {
 	}
 	ready := nextWork(candidates, time.Now())
 	o.Branch = ""
+	// With no slot free, work outside the build areas can still start.
+	found := len(ready) > 0
+	ready, short := openClaimGate(c, here, o.Worktree, time.Now()).outsideBuilds(ready)
+	if found && len(ready) == 0 {
+		return respond(busyResult(0, short))
+	}
 	// Several agents may race for the same top item; the Writer accepts one
 	// claim and rejects the rest, so a rejected claim moves on to the next.
 	lost := 0
@@ -385,6 +398,11 @@ func startCommand(args []string) error {
 			break
 		}
 		result, err := startIssue(c, here, item.Number, o)
+		if err == nil && result.Status == "Busy" {
+			// Another session took the last slot since the look above.
+			short = result.Reason
+			continue
+		}
 		if err == nil {
 			return respond(result)
 		}
@@ -393,6 +411,9 @@ func startCommand(args []string) error {
 		}
 		lost++
 		fmt.Fprintf(os.Stderr, "#%d taken (%v); trying next\n", item.Number, err)
+	}
+	if lost == 0 && short != "" && found {
+		return respond(busyResult(0, short))
 	}
 	if lost > 0 {
 		return respond(flowResult{Status: "Busy", Next: fmt.Sprintf("Other agents took the top %d Ready items first. Rerun quipu start --next --json.", lost)})
@@ -414,6 +435,14 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 	state, err := loadLiveWork(c, number)
 	if err != nil {
 		return flowResult{}, err
+	}
+	// Only a new claim can be turned down: work already held always resumes.
+	if state.Status == "Ready" {
+		hold, reason := openClaimGate(c, here, o.Worktree, time.Now()).enter(number, state.Area)
+		if reason != "" {
+			return busyResult(number, reason), nil
+		}
+		defer hold.drop()
 	}
 	branch := o.Branch
 	switch {
@@ -499,7 +528,7 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 	if err := w.writeLease(lease); err != nil {
 		return flowResult{}, err
 	}
-	result = flowResult{Issue: number, Status: state.Status, Branch: state.Branch, Holder: state.Holder, LeaseExpires: state.Expiry}
+	result = flowResult{Issue: number, Status: state.Status, Branch: state.Branch, Holder: state.Holder, LeaseExpires: state.Expiry, Warnings: recordWorkSlot(c, w, number, state.Area, time.Now())}
 	result.Next = fmt.Sprintf("Implement #%d on %s. Push and open a PR whose body says \"Refs #%d\", then run: quipu done %d. Rerun quipu start %d to renew the lease on long work.", number, state.Branch, number, number, number)
 	if state.Status == "In review" {
 		result.Next = fmt.Sprintf("Address review on %s, then run: quipu done %d", state.Branch, number)
@@ -523,6 +552,8 @@ type flowResult struct {
 	Worktree     string `json:"worktree,omitempty"`
 	// Runner reports a needed runner that was down and what was done about it.
 	Runner string `json:"runner,omitempty"`
+	// Reason says why a Busy result claimed nothing, when the machine is short.
+	Reason string `json:"reason,omitempty"`
 	// Warnings are things that went wrong without stopping the command.
 	Warnings []string `json:"warnings,omitempty"`
 	Next     string   `json:"next"`
@@ -547,6 +578,9 @@ func printFlowResult(result flowResult, asJSON bool) error {
 			line += " in " + result.Worktree
 		}
 		fmt.Println(line)
+	}
+	if result.Reason != "" {
+		fmt.Println("Reason: " + result.Reason)
 	}
 	for _, warning := range result.Warnings {
 		fmt.Println("Warning: " + warning)
@@ -608,6 +642,9 @@ func doneCommand(args []string) error {
 	}
 	noCI, bypass := noCISettings(c, source)
 	cleanup := enforcedCleanup(c, source)
+	if !machineEnforced {
+		c.Limits = model.Limits{}
+	}
 	// A dispatcher may finish work from another checkout, so act as the
 	// worktree that holds this Issue's lease when there is one.
 	w := here.holding(number)
@@ -671,6 +708,8 @@ func doneCommand(args []string) error {
 			return flowErr("pr-closed", "PR %s was closed without merging", pull.URL)
 		}
 		if pull.State != "MERGED" && !c.AgentsMerge() {
+			// Waiting on a person takes no build. Review work resumes with quipu start.
+			freeWorkSlot(c, w)
 			return respond(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("The owner reviews and merges %s; never merge it yourself. Address review comments by pushing to %s (rerun quipu start %d first if the guard reports the lease). After the merge, run: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number, number)})
 		}
 		if pull.State != "MERGED" {
