@@ -274,10 +274,13 @@ type workflowJob struct {
 	ID, Name string
 	Labels   []string
 	Computed bool
+	// Workflow is the name of the workflow the job is in.
+	Workflow string
 }
 
 func parseWorkflowJobs(raw []byte) ([]workflowJob, error) {
 	var file struct {
+		Name string `yaml:"name"`
 		Jobs map[string]struct {
 			Name   string    `yaml:"name"`
 			RunsOn yaml.Node `yaml:"runs-on"`
@@ -288,7 +291,7 @@ func parseWorkflowJobs(raw []byte) ([]workflowJob, error) {
 	}
 	jobs := make([]workflowJob, 0, len(file.Jobs))
 	for id, job := range file.Jobs {
-		parsed := workflowJob{ID: id, Name: job.Name}
+		parsed := workflowJob{ID: id, Name: job.Name, Workflow: file.Name}
 		node := &job.RunsOn
 		switch node.Kind {
 		case yaml.ScalarNode:
@@ -327,7 +330,7 @@ func checkJob(check string, jobs []workflowJob) (workflowJob, bool) {
 			continue
 		}
 		if matched && (job.Computed || strings.Join(job.Labels, "\n") != strings.Join(found.Labels, "\n")) {
-			return workflowJob{ID: job.ID, Name: job.Name, Computed: true}, true
+			return workflowJob{ID: job.ID, Name: job.Name, Computed: true, Workflow: job.Workflow}, true
 		}
 		found, matched = job, true
 	}
@@ -375,15 +378,19 @@ func runnerCheck(name string, labels []string, facts runnerFacts) doctorCheck {
 	return doctorCheck{name, "fail", detail, runnerFix}
 }
 
-// judgeRunnerNeeds compares what the config and required checks ask for with
-// the runners. The labels of a required check usually live only in the
-// repository's own workflow file, so the config alone cannot show them.
-func judgeRunnerNeeds(c model.Config, jobs []workflowJob, facts func() runnerFacts) []doctorCheck {
-	type need struct {
-		name   string
-		labels []string
-		note   string
-	}
+// runnerNeed is one runner the repository depends on. Note says why its labels
+// cannot be read.
+type runnerNeed struct {
+	name   string
+	labels []string
+	note   string
+}
+
+// runnerNeeds lists what the config and required checks ask for. The labels of a
+// required check usually live only in the repository's own workflow file, so the
+// config alone cannot show them.
+func runnerNeeds(c model.Config, jobs []workflowJob) []runnerNeed {
+	type need = runnerNeed
 	needs := []need{{name: "runner: Writer", labels: c.Workflows.Runner("writer")}, {name: "runner: policy", labels: c.Workflows.Runner("policy")}}
 	var configured []string
 	for job := range c.Workflows.RunsOn {
@@ -406,6 +413,12 @@ func judgeRunnerNeeds(c model.Config, jobs []workflowJob, facts func() runnerFac
 			needs = append(needs, need{name: "runner: check " + check, labels: job.Labels})
 		}
 	}
+	return needs
+}
+
+// judgeRunnerNeeds compares what the repository needs with the runners.
+func judgeRunnerNeeds(c model.Config, jobs []workflowJob, facts func() runnerFacts) []doctorCheck {
+	needs := runnerNeeds(c, jobs)
 	checks := make([]doctorCheck, 0, len(needs))
 	for _, item := range needs {
 		if item.note != "" {

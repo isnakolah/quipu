@@ -210,7 +210,11 @@ func provision(top string, c model.Config, replace bool) ([]string, []string, er
 	if err := note(writeConfig(top, c)); err != nil {
 		return changes, nil, err
 	}
-	files, err := bootstrap.Install(top, workflowOptions(c), replace)
+	options := workflowOptions(c)
+	if c.MergesInBackground() {
+		options.WakeOn = wakeWorkflows(c, jobsUnder(top))
+	}
+	files, err := bootstrap.Install(top, options, replace)
 	if err := note(files.Written, err); err != nil {
 		return changes, files.Kept, err
 	}
@@ -218,6 +222,37 @@ func provision(top string, c model.Config, replace bool) ([]string, []string, er
 		return changes, files.Kept, err
 	}
 	return changes, files.Kept, note(syncGuides(top, true))
+}
+
+// wakeWorkflows names the workflows whose finish lets a queued merge go ahead: the
+// ones behind the required checks and policy. A check with no workflow yet is in
+// the generated CI, which this same step writes.
+func wakeWorkflows(c model.Config, jobs []workflowJob) []string {
+	names := []string{"Quipu policy"}
+	for _, check := range c.Checks() {
+		name := "CI"
+		if job, found := checkJob(check, jobs); found && job.Workflow != "" {
+			name = job.Workflow
+		}
+		if !contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// jobsUnder reads the jobs of the workflow files in a checkout.
+func jobsUnder(top string) []workflowJob {
+	var jobs []workflowJob
+	paths, _ := filepath.Glob(filepath.Join(top, ".github", "workflows", "*.y*ml"))
+	for _, path := range paths {
+		if raw, err := os.ReadFile(path); err == nil {
+			if parsed, err := parseWorkflowJobs(raw); err == nil {
+				jobs = append(jobs, parsed...)
+			}
+		}
+	}
+	return jobs
 }
 
 func workflowOptions(c model.Config) bootstrap.Options {

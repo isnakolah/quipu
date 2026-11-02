@@ -72,6 +72,10 @@ type Workflows struct {
 	// DefectsFrom names the workflows whose failed runs on the default
 	// branch become Ready P0 Defects. Unset means [CI]; [] turns it off.
 	DefectsFrom *[]string `yaml:"defects_from,omitempty" json:"defects_from,omitempty"`
+	// RunnerStart is a shell command that starts the repository's runner. When a
+	// needed runner is down, `quipu start` and `quipu done` run it from the agent's
+	// machine without waiting. Only the default branch's copy ever runs.
+	RunnerStart string `yaml:"runner_start,omitempty" json:"runner_start,omitempty"`
 }
 
 // DefectWorkflows returns the workflows the Writer files Defects for.
@@ -156,6 +160,9 @@ func (w Workflows) validate() error {
 			return fmt.Errorf("workflows.defects_from: invalid workflow name %q", name)
 		}
 	}
+	if strings.ContainsAny(w.RunnerStart, "\n\r") {
+		return fmt.Errorf("workflows.runner_start must be one line; put anything longer in a script")
+	}
 	if w.Schedule != "" && w.Schedule != "off" && !cronSchedule.MatchString(w.Schedule) {
 		return fmt.Errorf("workflows.schedule must be a five-field cron expression or off, not %q", w.Schedule)
 	}
@@ -189,6 +196,7 @@ func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 func (c Config) WithoutRelaxations() Config {
 	c.ReadyBy, c.Merge, c.PolicyExemptAuthors = "", "", nil
 	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads = "", "", "", "", ""
+	c.Workflows.RunnerStart = ""
 	return c
 }
 

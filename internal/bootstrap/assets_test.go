@@ -122,6 +122,51 @@ func TestRenderFollowsWorkflowOptions(t *testing.T) {
 	}
 }
 
+func TestWriterWakesWhenChecksFinishOnlyWhenAsked(t *testing.T) {
+	o := options()
+	o.DefectsFrom = []string{"CI"}
+	before, err := Render(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.WakeOn = []string{"Quipu policy", "CI"}
+	after, err := Render(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := after[".github/workflows/quipu-writer.yml"]
+	var parsed struct {
+		On struct {
+			WorkflowRun struct {
+				Workflows []string `yaml:"workflows"`
+			} `yaml:"workflow_run"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			If string `yaml:"if"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(writer), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parsed.On.WorkflowRun.Workflows, []string{"CI", "Quipu policy"}) {
+		t.Fatalf("each workflow once: %v", parsed.On.WorkflowRun.Workflows)
+	}
+	if !strings.Contains(parsed.Jobs["writer"].If, "head_repository.full_name == github.repository") {
+		t.Fatalf("a run from a fork must not wake it: %s", parsed.Jobs["writer"].If)
+	}
+	if !strings.Contains(writer, "# Checks finished: a queued merge may be able to go ahead.\n              quipu writer reconcile --apply --json ;;") {
+		t.Fatalf("a finished check does not reconcile:\n%s", writer)
+	}
+	if text := before[".github/workflows/quipu-writer.yml"]; strings.Contains(text, "head_repository") || strings.Contains(text, "Checks finished") {
+		t.Fatalf("with the flag off the workflow stays as it was:\n%s", text)
+	}
+	for name, content := range before {
+		if name != ".github/workflows/quipu-writer.yml" && after[name] != content {
+			t.Fatalf("%s changed", name)
+		}
+	}
+}
+
 func TestWriterWatchesDefectWorkflows(t *testing.T) {
 	o := options()
 	o.DefectsFrom = []string{"CI", "Source install proof"}

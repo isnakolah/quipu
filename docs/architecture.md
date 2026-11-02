@@ -24,6 +24,8 @@ The Writer is the only mutator of lifecycle state. It accepts unedited, hash-ver
 
 Lifecycle: `Backlog → Ready → Claimed → In progress → In review → Evidence pending → Done`, with Blocked, Cancelled, and Archived. A lease lasts two hours.
 
+Agents never wait on a runner. `quipu start` and `quipu done` may start one with the default branch's `workflows.runner_start`, on the agent's machine and without blocking; this changes nothing on GitHub, so the Writer stays the only mutator. Check results reach agents by reading: `quipu status` reports them when asked, and nothing polls. With `merge_wait: background`, the Writer wakes when the checks' workflows finish.
+
 ## Enforcement
 
 - **Locally, for agents:** `quipu guard` denies everything off the flow (see [operations](operations.md#the-guard)).
