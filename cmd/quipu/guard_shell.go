@@ -35,7 +35,7 @@ func (g *guard) shell(command, dir string) error {
 // Quipu has something to protect.
 func (g *guard) unparsable(dir, detail string) error {
 	if w, err := openWorktree(existingDir(dir)); err == nil {
-		if _, err := os.Stat(filepath.Join(w.Top, configPath)); err == nil {
+		if hasConfig(w.Top) {
 			return deny("unparsable", detail)
 		}
 	}
@@ -820,7 +820,7 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 
 // ---- quipu, go, curl ----
 
-var quipuAgentCommands = setOf("status", "start", "done", "doctor", "context", "validate", "guide", "version",
+var quipuAgentCommands = setOf("status", "start", "done", "doctor", "config", "context", "validate", "guide", "version",
 	"help", "-h", "--help", "propose", "guard", "policy", "verify-commit")
 
 func (g *guard) quipu(rest []shellArg, dir string) error {
@@ -848,7 +848,7 @@ func agentsMakeReady(dir string) bool {
 	if err != nil {
 		return false
 	}
-	c, err := loadConfigAt(w.Top)
+	c, _, err := loadEnforcedConfig(w, false)
 	return err == nil && c.AgentsMakeReady()
 }
 

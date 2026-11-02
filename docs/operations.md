@@ -73,7 +73,7 @@ It runs on every Issue comment and Issue event, on PR events, every five minutes
 
 ## Configuration
 
-`.github/quipu/config.yaml` holds stable identifiers and policy, never status, leases, or tokens:
+`quipu.yml` at the repository root holds stable identifiers and policy, never status, leases, or tokens. Repositories adopted earlier keep working from `.github/quipu/config.yaml`; having both files is an error, and an unknown key fails validation. `quipu config --json` shows each effective value, where it came from, and any keys where the worktree's copy differs from the default branch's:
 
 - `authorized_actors`: GitHub logins allowed to post Writer requests. Change it through a reviewed PR.
 - `receipts_trusted_before`: the cutover time before which receipts from the Writer token are trusted. Set once when receipts moved to the workflow token.

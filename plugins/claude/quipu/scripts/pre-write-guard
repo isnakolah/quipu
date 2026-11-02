@@ -16,7 +16,7 @@ for path in "$(field cwd)" "$(field file_path)" "$(field notebook_path)"; do
   [ -d "$path" ] || path=$(dirname -- "$path")
   while [ -n "$path" ] && [ ! -d "$path" ]; do path=$(dirname -- "$path"); done
   top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || continue
-  if [ -f "$top/.github/quipu/config.yaml" ]; then
+  if [ -f "$top/quipu.yml" ] || [ -f "$top/.github/quipu/config.yaml" ]; then
     printf '%s\n' 'QUIPU DENIED [quipu-missing]: quipu is not installed, so no call in this Quipu repository can be checked. Do instead: ask the owner to install quipu (docs/source-install.md).' >&2
     exit 2
   fi

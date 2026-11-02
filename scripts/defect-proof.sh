@@ -45,7 +45,7 @@ gh repo clone "$owner/$repo" "$work/repo" -- -q
 cd "$work/repo"
 project_number=$(gh project create --owner "$owner" --title "$repo" --format json --jq .number)
 "$quipu" adopt --owner "$owner" --repo "$repo" --project-number "$project_number" --apply --json --quipu-version "$pin" --areas app,infra >/dev/null
-printf '%s\n' 'receipts_trusted_before: "2100-01-01T00:00:00Z"' >>.github/quipu/config.yaml
+printf '%s\n' 'receipts_trusted_before: "2100-01-01T00:00:00Z"' >>quipu.yml
 rm .github/workflows/quipu-writer.yml .github/workflows/quipu-policy.yml
 cat >.github/workflows/ci.yml <<'YAML'
 name: CI

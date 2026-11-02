@@ -26,7 +26,7 @@ const claudePointer = "# Claude Code\n\nThis repository runs on Quipu; its agent
 
 const skillFrontmatter = `---
 name: quipu
-description: Work in a Quipu repository. Take GitHub Issues with quipu start, open PRs that say Refs #N, finish with quipu done, and follow the guard. Use whenever the repository has .github/quipu/config.yaml or the user mentions Quipu.
+description: Work in a Quipu repository. Take GitHub Issues with quipu start, open PRs that say Refs #N, finish with quipu done, and follow the guard. Use whenever the repository has quipu.yml or .github/quipu/config.yaml, or the user mentions Quipu.
 ---
 
 `

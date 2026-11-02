@@ -2,6 +2,8 @@
 
 GitHub holds every durable fact. Issues and their native parent and blocker links are the work graph. Project fields are the workflow state. Pull requests are the code review. Writer receipts are the history of every change and its evidence. The repository config holds only stable identifiers and policy.
 
+The config is `quipu.yml` at the repository root, or `.github/quipu/config.yaml` in repositories adopted earlier; having both is an error. Settings that relax enforcement are read from origin's default branch, whose name comes from git, not from the config. A worktree's copy cannot turn one on, and the Writer and `policy` only ever check out the default branch. With an origin but no readable copy on its default branch, every relaxing setting is off.
+
 Local state is a mirror, never authority:
 
 - `<git-dir>/quipu-agent-id`: the worktree's agent identity, so the lease holder is `provider/login/worktree-id`.

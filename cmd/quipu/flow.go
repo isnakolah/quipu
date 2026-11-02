@@ -563,7 +563,9 @@ func doneCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := loadConfig()
+	// `merge: agent` and required_checks decide whether this merges, so they
+	// come from the default branch.
+	c, _, err := loadEnforcedConfig(here, true)
 	if err != nil {
 		return err
 	}

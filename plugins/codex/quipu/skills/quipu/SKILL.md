@@ -1,6 +1,6 @@
 ---
 name: quipu
-description: Work in a Quipu repository. Take GitHub Issues with quipu start, open PRs that say Refs #N, finish with quipu done, and follow the guard. Use whenever the repository has .github/quipu/config.yaml or the user mentions Quipu.
+description: Work in a Quipu repository. Take GitHub Issues with quipu start, open PRs that say Refs #N, finish with quipu done, and follow the guard. Use whenever the repository has quipu.yml or .github/quipu/config.yaml, or the user mentions Quipu.
 ---
 
 # Quipu agent handbook
@@ -53,6 +53,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
 | `quipu guide` | to read this handbook | this text |
 | `quipu doctor --json` | something seems misconfigured | a list of checks with fixes |
+| `quipu config --json` | to see what applies in this repository | each effective setting and where it came from |
 | `quipu context`, `quipu validate`, `quipu version` | inspecting | read-only reports |
 
 Reading is always allowed: `git status/log/diff/show`, `gh issue|pr|run view/list`, `gh api` GET requests, `ls`, `cat`, `grep`, `rg`, `go test`, and the like.
@@ -97,7 +98,7 @@ The required `policy` check fails the PR unless all of these hold. It lists ever
 - The base is the default branch.
 - The Issue is open, a Story, Task, Defect, or Contract, has a parent and a valid work contract, has no sub-issues, and has no open blockers.
 - The Issue is In progress or In review, leased to you on this branch, and the PR author matches the lease holder's login.
-- The PR changes none of Quipu's enforcement files (`.github/quipu/`, `.github/workflows/`, `.claude/settings.json`, `.codex/`, plugin hooks) unless the owner added the `quipu:owner-approved` label. You cannot add labels.
+- The PR changes none of Quipu's enforcement files (`quipu.yml`, `.github/quipu/`, `.github/workflows/`, `.claude/settings.json`, `.codex/`, plugin hooks) unless the owner added the `quipu:owner-approved` label. You cannot add labels.
 
 The check re-runs by itself when the work under it changes, for example when your lease is renewed.
 
@@ -232,6 +233,6 @@ Even past the guard, GitHub keeps the flow intact. The Writer runs every few min
 - Create, switch, rename, or delete branches, tags, or worktrees by hand.
 - Push anything but your leased branch, force-push without `--force-with-lease`, or skip hooks with `--no-verify`.
 - Merge, approve, or close a PR or Issue, or add labels.
-- Edit the board, `.git/`, `.github/quipu/`, workflows, or agent hooks.
+- Edit the board, `.git/`, `quipu.yml`, `.github/quipu/`, workflows, or agent hooks.
 - Create Issues or Epics, or approve your own work.
 - Keep local plans or task lists; GitHub is the only record.
