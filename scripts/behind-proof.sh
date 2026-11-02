@@ -21,6 +21,10 @@ writer_pid=""
 cleanup() {
   status=$?
   [ -z "$writer_pid" ] || kill "$writer_pid" 2>/dev/null || true
+  if [ "$status" -ne 0 ] && [ -f "$work/writer.log" ]; then
+    printf '%s\n' "last of the Writer's output:" >&2
+    tail -20 "$work/writer.log" >&2
+  fi
   if [ -n "$project_number" ]; then
     gh project delete "$project_number" --owner "$owner" >/dev/null 2>&1 || true
   fi
@@ -98,7 +102,7 @@ story_body='      <!-- work:v1 -->
 story() { gh api "repos/$owner/$repo/issues?state=all" --jq ".[] | select(.body // \"\" | contains(\"key=STORY-$1 -->\")) | .number"; }
 a=$(story A) b=$(story B) c=$(story C) d=$(story D)
 
-( while :; do "$quipu" writer reconcile --apply >/dev/null 2>&1 || true; sleep 3; done ) &
+( while :; do "$quipu" writer reconcile --apply >>"$work/writer.log" 2>&1 || true; sleep 3; done ) &
 writer_pid=$!
 ready() { [ "$("$quipu" context --issue-number "$1" --json | jq -r .status)" = Ready ]; }
 for number in "$a" "$b" "$c" "$d"; do wait_for 180 "#$number Ready" ready "$number"; done
