@@ -6,12 +6,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/isnakolah/quipu/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
-// repoConfig is this repository's own config, a valid body for fixtures.
+// repoConfig is a valid body for fixtures: this repository's own config with
+// the optional settings cleared, so tests can add them without duplicate keys
+// whatever this repository has chosen to turn on.
 func repoConfig(t *testing.T) []byte {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", configPath))
+	c, err := loadConfigAt(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = c.WithoutRelaxations()
+	c.Workflows = model.Workflows{}
+	raw, err := yaml.Marshal(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +106,7 @@ func TestConfigPathPrecedence(t *testing.T) {
 
 func TestConfigRejectsUnknownKeys(t *testing.T) {
 	config := repoConfig(t)
-	if _, err := decodeConfig(config); err != nil {
+	if _, err := loadConfigAt(filepath.Join("..", "..")); err != nil {
 		t.Fatalf("this repository's config must stay valid: %v", err)
 	}
 	for _, typo := range []string{"mergee: agent\n", "workflows:\n  schedual: off\n"} {
