@@ -50,6 +50,15 @@ type Config struct {
 	// MergeWait "background" hands a PR whose checks are still running to the
 	// Writer, which merges it once they pass. Needs merge: agent.
 	MergeWait string `yaml:"merge_wait,omitempty" json:"merge_wait,omitempty"`
+	// MergeWithoutCI lets `quipu done` merge while required checks have not run,
+	// once LocalCheck and the policy rules pass in the worktree. A check that ran
+	// and failed still blocks. Needs merge: agent and a LocalCheck.
+	MergeWithoutCI bool `yaml:"merge_without_ci,omitempty" json:"merge_without_ci,omitempty"`
+	// LocalCheck is the shell command merge_without_ci runs on the PR's head.
+	LocalCheck string `yaml:"local_check,omitempty" json:"local_check,omitempty"`
+	// MergeBypassRulesets lets a merge without CI use the admin bypass when a
+	// ruleset requires the waived checks. Needs merge_without_ci.
+	MergeBypassRulesets bool `yaml:"merge_bypass_rulesets,omitempty" json:"merge_bypass_rulesets,omitempty"`
 	// GuardReads "open" widens the commands the guard treats as read-only.
 	GuardReads string    `yaml:"guard_reads,omitempty" json:"guard_reads,omitempty"`
 	Workflows  Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
@@ -181,6 +190,13 @@ func (c Config) UpdatesBehind() bool { return c.AgentsMerge() && c.UpdateBehind 
 // still running when `quipu done` runs.
 func (c Config) MergesInBackground() bool { return c.AgentsMerge() && c.MergeWait == "background" }
 
+// MergesWithoutCI reports whether `quipu done` may waive required checks that
+// have not run.
+func (c Config) MergesWithoutCI() bool { return c.AgentsMerge() && c.MergeWithoutCI }
+
+// BypassesRulesets reports whether a merge without CI may use the admin bypass.
+func (c Config) BypassesRulesets() bool { return c.MergesWithoutCI() && c.MergeBypassRulesets }
+
 // GuardReadsOpen reports whether the guard allows its wider read-only list.
 func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 
@@ -189,6 +205,7 @@ func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 func (c Config) WithoutRelaxations() Config {
 	c.ReadyBy, c.Merge, c.PolicyExemptAuthors = "", "", nil
 	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads = "", "", "", "", ""
+	c.MergeWithoutCI, c.LocalCheck, c.MergeBypassRulesets = false, "", false
 	return c
 }
 
@@ -263,6 +280,21 @@ func (c Config) Validate() error {
 	}
 	if c.MergeWait == "background" && !c.AgentsMerge() {
 		return fmt.Errorf("merge_wait: background needs merge: agent")
+	}
+	if c.MergeWithoutCI && !c.AgentsMerge() {
+		return fmt.Errorf("merge_without_ci needs merge: agent")
+	}
+	if c.MergeWithoutCI && strings.TrimSpace(c.LocalCheck) == "" {
+		return fmt.Errorf("merge_without_ci needs a local_check")
+	}
+	if c.LocalCheck != "" && !c.MergeWithoutCI {
+		return fmt.Errorf("local_check needs merge_without_ci")
+	}
+	if strings.ContainsAny(c.LocalCheck, "\n\r") {
+		return fmt.Errorf("local_check must be one line")
+	}
+	if c.MergeBypassRulesets && !c.MergeWithoutCI {
+		return fmt.Errorf("merge_bypass_rulesets needs merge_without_ci")
 	}
 	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {
 		return fmt.Errorf("guard_reads must be closed or open")

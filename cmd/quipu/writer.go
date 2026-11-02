@@ -270,6 +270,9 @@ func validateEvidence(c model.Config, number int, branch, pr string, evidence *w
 	if err := checkPRWork(c, number, branch, view); err != nil {
 		return err
 	}
+	if isNoCIEvidence(evidence.CIURL) {
+		return checkNoCIEvidence(c, *evidence, view.HeadRefOid)
+	}
 	return checkCIRun(c, evidence.CIURL, view)
 }
 

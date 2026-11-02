@@ -24,6 +24,8 @@ The Writer is the only mutator of lifecycle state. It accepts unedited, hash-ver
 
 Lifecycle: `Backlog → Ready → Claimed → In progress → In review → Evidence pending → Done`, with Blocked, Cancelled, and Archived. A lease lasts two hours.
 
+With `merge_without_ci`, the client merges on its own check and tells the Writer so. Trust stays where it was: the Writer still posts every receipt, and it accepts that evidence only when its own read of the default branch's config allows it. The receipt records a client's report, not a verified run.
+
 ## Enforcement
 
 - **Locally, for agents:** `quipu guard` denies everything off the flow (see [operations](operations.md#the-guard)).

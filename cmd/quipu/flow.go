@@ -558,8 +558,8 @@ func doneCommand(args []string) error {
 	fs.StringVar(&e.Documentation, "documentation", "", "documentation changes; None: reason")
 	fs.StringVar(&e.Risks, "risks", "", "known residual risks; None")
 	fs.StringVar(&e.Boundary, "boundary", "", "local|CI|target host|provider|staging|production|release")
-	fs.StringVar(&e.Environments, "environments", "GitHub Actions CI", "verified environments")
-	fs.StringVar(&e.Artifacts, "artifacts", "None: CI run linked", "artifact, screenshot, or log URLs; None: reason")
+	fs.StringVar(&e.Environments, "environments", defaultEnvironments, "verified environments")
+	fs.StringVar(&e.Artifacts, "artifacts", defaultArtifacts, "artifact, screenshot, or log URLs; None: reason")
 	fs.StringVar(&e.CIURL, "ci-url", "", "CI run URL; read from the PR checks when omitted")
 	number, err := parseIssueArg(fs, args, false)
 	if err != nil {
@@ -571,10 +571,11 @@ func doneCommand(args []string) error {
 	}
 	// `merge: agent` and required_checks decide whether this merges, so they
 	// come from the default branch.
-	c, _, err := loadEnforcedConfig(here, true)
+	c, source, err := loadEnforcedConfig(here, true)
 	if err != nil {
 		return err
 	}
+	noCI, bypass := noCISettings(c, source)
 	// A dispatcher may finish work from another checkout, so act as the
 	// worktree that holds this Issue's lease when there is one.
 	w := here.holding(number)
@@ -641,7 +642,14 @@ func doneCommand(args []string) error {
 			if err := promptMissingEvidence(&e, os.Stdin, os.Stderr); err != nil {
 				return err
 			}
-			ciURL, err := mergeWhenGreen(c, number, pull.URL)
+			var ciURL, local string
+			var err error
+			if noCI {
+				local, err = mergeWithoutCI(c, bypass, e, liveNoCIOps(c, w, number, state.Branch, pull.URL))
+			}
+			if local == "" && err == nil {
+				ciURL, err = mergeWhenGreen(c, number, pull.URL)
+			}
 			head := ""
 			if errors.Is(err, errPRBehind) && c.UpdatesBehind() {
 				if head, err = mergeDefaultIn(w, state.Branch, c.DefaultBranch); err == nil {
@@ -660,18 +668,38 @@ func doneCommand(args []string) error {
 			if pull.State != "MERGED" {
 				return flowErr("merge-blocked", "PR %s is %s after merging", pull.URL, pull.State)
 			}
-			if e.CIURL == pendingMerge {
+			if local != "" {
+				e.CIURL = local
+			} else if e.CIURL == pendingMerge {
 				e.CIURL = ciURL
 			}
 		}
 		e.FinalSHA = pull.MergeCommit
+		if e.CIURL == "" && noCI {
+			// A rerun: the merge landed and the evidence did not reach the Writer.
+			view, err := loadMergeView(c, pull.URL)
+			if err != nil {
+				return err
+			}
+			e.CIURL = noCIRerunEvidence(w, view.HeadRefOid, pull.CIURL)
+		}
 		if e.CIURL == "" {
 			e.CIURL = pull.CIURL
+		}
+		skippedCI := isNoCIEvidence(e.CIURL)
+		if skippedCI {
+			noCIDefaults(&e)
 		}
 		if err := promptMissingEvidence(&e, os.Stdin, os.Stderr); err != nil {
 			return err
 		}
+		if skippedCI && e.Boundary != "local" {
+			return flowErr("evidence-missing", "this merge skipped CI, so --boundary must be local, not %q", e.Boundary)
+		}
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "evidence.submit", PR: pull.URL, Evidence: &e}, *wait); err != nil {
+			if skippedCI {
+				return noCIAwaitingReceipt(pull.URL, err)
+			}
 			return err
 		}
 		if state, err = loadLiveWork(c, number); err != nil {
@@ -861,6 +889,9 @@ type prCheck struct {
 	Status  string `json:"status"`
 	Context string `json:"context"`
 	State   string `json:"state"`
+	// When a check run started and ended, to tell one that never started.
+	StartedAt   string `json:"startedAt"`
+	CompletedAt string `json:"completedAt"`
 }
 
 type checkVerdict int

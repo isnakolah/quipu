@@ -90,11 +90,15 @@ func protectCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	plan := map[string]any{"repository": c.Owner + "/" + c.Repository, "main_ruleset": mainRuleset(c, *adminsExempt), "branch_ruleset": branchRuleset(c.DefaultBranch), "apply": *apply}
+	exempt := *adminsExempt
+	if here, err := currentWorktree(); err == nil && enforcedBypass(here) {
+		exempt = true
+	}
+	plan := map[string]any{"repository": c.Owner + "/" + c.Repository, "main_ruleset": mainRuleset(c, exempt), "branch_ruleset": branchRuleset(c.DefaultBranch), "apply": *apply}
 	if !*apply {
 		return printValue(plan, *asJSON)
 	}
-	if err := protectRepository(c, *adminsExempt); err != nil {
+	if err := protectRepository(c, exempt); err != nil {
 		return err
 	}
 	return printValue(plan, *asJSON)
@@ -253,6 +257,7 @@ func doctorChecks() []doctorCheck {
 	}
 	current, found := readUnder(here.Top)(guideRule)
 	checks = append(checks, handbookCheck(current, found, enforced))
+	checks = append(checks, noCIChecks(enforced)...)
 	return checks
 }
 
