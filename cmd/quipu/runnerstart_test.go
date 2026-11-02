@@ -4,7 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,12 +18,14 @@ import (
 
 var downCheck = doctorCheck{"runner: Writer", "fail", "needs [self-hosted, old-box]: runner old-box is offline", runnerFix}
 
+func won() (runnerClaim, error) { return runnerClaim{won: true}, nil }
+
 func TestRunnerStartRunsWhenARunnerIsDown(t *testing.T) {
 	var ran []string
 	note := runnerStarter{
 		down:    func() []doctorCheck { return []doctorCheck{downCheck} },
 		command: func() string { return "start-it" },
-		claim:   func() bool { return true },
+		claim:   won,
 		run:     func(command string) error { ran = append(ran, command); return nil },
 	}.ensure()
 	if len(ran) != 1 || ran[0] != "start-it" {
@@ -35,7 +40,7 @@ func TestRunnerStartRunsWhenARunnerIsDown(t *testing.T) {
 
 func TestRunnerStartNeverRunsWhenRunnersAreUp(t *testing.T) {
 	never := func(string) error { t.Fatal("no runner is down"); return nil }
-	note := runnerStarter{down: func() []doctorCheck { return nil }, command: func() string { t.Fatal("no need to read it"); return "" }, claim: func() bool { return true }, run: never}.ensure()
+	note := runnerStarter{down: func() []doctorCheck { return nil }, command: func() string { t.Fatal("no need to read it"); return "" }, claim: won, run: never}.ensure()
 	if note != "" {
 		t.Fatalf("nothing to say: %q", note)
 	}
@@ -43,13 +48,13 @@ func TestRunnerStartNeverRunsWhenRunnersAreUp(t *testing.T) {
 
 func TestRunnerStartUnsetOrFailingIsReported(t *testing.T) {
 	never := func(string) error { t.Fatal("nothing to run"); return nil }
-	unset := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "" }, claim: func() bool { return true }, run: never}.ensure()
+	unset := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "" }, claim: won, run: never}.ensure()
 	for _, want := range []string{"old-box is offline", "runner_start is unset", "owner:"} {
 		if !strings.Contains(unset, want) {
 			t.Errorf("unset: missing %q: %s", want, unset)
 		}
 	}
-	failed := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "x" }, claim: func() bool { return true }, run: func(string) error { return errors.New("exit status 3") }}.ensure()
+	failed := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "x" }, claim: won, run: func(string) error { return errors.New("exit status 3") }}.ensure()
 	for _, want := range []string{"runner_start failed", "exit status 3", "owner:"} {
 		if !strings.Contains(failed, want) {
 			t.Errorf("failed: missing %q: %s", want, failed)
@@ -64,24 +69,78 @@ func TestRunnerStartRunsOncePerClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !claimRunnerStart(agent, now) {
+	claimed := func(w worktree, at time.Time) bool {
+		t.Helper()
+		claim, err := claimRunnerStart(w, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return claim.won
+	}
+	if !claimed(agent, now) {
 		t.Fatal("the first start runs")
 	}
-	if claimRunnerStart(main, now.Add(time.Minute)) {
+	if claimed(main, now.Add(time.Minute)) {
 		t.Fatal("another worktree of the clone must not start it again")
 	}
-	if claimRunnerStart(agent, now.Add(runnerStartEvery-time.Second)) {
+	if claimed(agent, now.Add(runnerStartEvery-time.Second)) {
 		t.Fatal("too soon")
 	}
-	if !claimRunnerStart(agent, now.Add(runnerStartEvery)) {
+	if !claimed(agent, now.Add(runnerStartEvery)) {
 		t.Fatal("a later need may start it again")
 	}
 	runs := 0
 	starter := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "x" },
-		claim: func() bool { return claimRunnerStart(agent, now.Add(time.Hour)) }, run: func(string) error { runs++; return nil }}
+		claim: func() (runnerClaim, error) { return claimRunnerStart(agent, now.Add(time.Hour)) }, run: func(string) error { runs++; return nil }}
 	first, second := starter.ensure(), starter.ensure()
 	if runs != 1 || !strings.Contains(first, "without waiting") || !strings.Contains(second, "not run again") {
 		t.Fatalf("runs=%d first=%q second=%q", runs, first, second)
+	}
+
+	later := now.Add(2 * time.Hour)
+	var wins atomic.Int32
+	var racing sync.WaitGroup
+	for range 20 {
+		racing.Add(1)
+		go func() {
+			defer racing.Done()
+			if claim, err := claimRunnerStart(agent, later); err == nil && claim.won {
+				wins.Add(1)
+			}
+		}()
+	}
+	racing.Wait()
+	if wins.Load() != 1 {
+		t.Fatalf("%d agents started at once, and %d of them won the claim", 20, wins.Load())
+	}
+}
+
+func TestRunnerStartFailureIsToldToThoseItHoldsBack(t *testing.T) {
+	_, agent := publishedRepo(t, rootConfigPath, repoConfig(t))
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	if claim, err := claimRunnerStart(agent, now); err != nil || !claim.won {
+		t.Fatalf("%+v %v", claim, err)
+	}
+	recordRunnerFailure(agent, errors.New("exit status 3\n(output in log)"))
+	note := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "x" },
+		claim: func() (runnerClaim, error) { return claimRunnerStart(agent, now.Add(time.Minute)) },
+		run:   func(string) error { t.Fatal("not due"); return nil }}.ensure()
+	for _, want := range []string{"runner_start failed", "exit status 3 (output in log)", "owner:"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("missing %q: %s", want, note)
+		}
+	}
+	if claim, err := claimRunnerStart(agent, now.Add(runnerStartEvery)); err != nil || !claim.won {
+		t.Fatalf("it may be tried again later: %+v %v", claim, err)
+	}
+}
+
+func TestRunnerStartThatCannotClaimDoesNotRun(t *testing.T) {
+	note := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "x" },
+		claim: func() (runnerClaim, error) { return runnerClaim{}, errors.New("read-only") },
+		run:   func(string) error { t.Fatal("must not run"); return nil }}.ensure()
+	if !strings.Contains(note, "read-only") || strings.Contains(note, "ran in the last") {
+		t.Fatal(note)
 	}
 }
 
@@ -144,7 +203,7 @@ func TestRunDetachedDoesNotBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(top, "ran-here")); err != nil {
-		t.Fatalf("it runs in the repository root: %v", err)
+		t.Fatalf("it runs in the directory it was given: %v", err)
 	}
 }
 
@@ -243,8 +302,32 @@ func TestWakeWorkflowsNameTheRequiredChecks(t *testing.T) {
 	if strings.Join(got, ",") != "Quipu policy,Core" {
 		t.Fatalf("%v", got)
 	}
-	if got := wakeWorkflows(model.Config{}, nil); strings.Join(got, ",") != "Quipu policy,CI" {
-		t.Fatalf("a first adoption writes the generated CI: %v", got)
+	both := []workflowJob{{ID: "test", Workflow: "One"}, {ID: "test", Workflow: "Two", Labels: []string{"ubuntu-latest"}}}
+	if got := wakeWorkflows(model.Config{RequiredChecks: []string{"test"}}, both); strings.Join(got, ",") != "Quipu policy,One,Two" {
+		t.Fatalf("either may be the one that runs: %v", got)
+	}
+	if got := wakeWorkflows(model.Config{RequiredChecks: []string{"gone"}}, both); strings.Join(got, ",") != "Quipu policy" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestJobsAfterInstallReadsWhatInstallLeaves(t *testing.T) {
+	top := t.TempDir()
+	writeRepoFile(t, top, ".github/workflows/ci.yml", []byte("name: Build\njobs:\n  test:\n    runs-on: ubuntu-latest\n"))
+	writeRepoFile(t, top, ".github/workflows/nameless.yml", []byte("jobs:\n  lint:\n    runs-on: ubuntu-latest\n"))
+	rendered := map[string]string{
+		".github/workflows/ci.yml":     "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+		".github/workflows/fresh.yml":  "name: Fresh\njobs:\n  new:\n    runs-on: ubuntu-latest\n",
+		".github/ISSUE_TEMPLATE/x.yml": "jobs:\n  form:\n    runs-on: ubuntu-latest\n",
+	}
+	c := model.Config{RequiredChecks: []string{"test", "lint", "new", "form"}}
+	kept := wakeWorkflows(c, jobsAfterInstall(top, rendered, false))
+	if strings.Join(kept, ",") != "Quipu policy,Build,.github/workflows/nameless.yml,Fresh" {
+		t.Fatalf("without replace an existing file stays: %v", kept)
+	}
+	replaced := wakeWorkflows(c, jobsAfterInstall(top, rendered, true))
+	if strings.Join(replaced, ",") != "Quipu policy,CI,.github/workflows/nameless.yml,Fresh" {
+		t.Fatalf("with replace the generated file wins: %v", replaced)
 	}
 }
 
@@ -297,7 +380,7 @@ func TestStatusReportsPullRequestsWithoutWaiting(t *testing.T) {
 		"queued and failed":   {c, red, queueState{State: "queued"}, mergeGate(red.Checks, required), "Fix the cause", ""},
 		"queue rejected":      {c, running, queueState{State: "rejected", Detail: "stale"}, nil, "rejected the queued merge: stale", ""},
 		"queue stopped":       {c, running, queueState{State: "stopped", Detail: "head moved"}, nil, "stopped: head moved", ""},
-		"merged, no evidence": {c, mergeView{URL: "url", State: "MERGED"}, queueState{}, nil, "--actor claude/o/1", "no evidence"},
+		"merged, no evidence": {c, mergeView{URL: "url", State: "MERGED"}, queueState{}, nil, "--actor claude/o/1", ""},
 		"closed":              {c, mergeView{URL: "url", State: "CLOSED"}, queueState{}, nil, "Open a new PR from 007/work", ""},
 	} {
 		got := describePull(tc.c, item, tc.view, tc.queue, tc.gate)
@@ -319,9 +402,49 @@ func TestStatusReportsPullRequestsWithoutWaiting(t *testing.T) {
 	if got := describePull(c, item, running, queueState{}, mergeGate(running.Checks, required)); got.Checks[1].Result != "IN_PROGRESS" {
 		t.Fatalf("a running check says so: %+v", got.Checks)
 	}
+	early := item
+	early.Status = "In progress"
+	for name, tc := range map[string]struct {
+		c    model.Config
+		view mergeView
+		gate error
+		want string
+	}{
+		"green, owner merges":   {model.Config{}, green, nil, "Move it there: quipu done 7 --json"},
+		"running, owner merges": {model.Config{}, running, mergeGate(running.Checks, required), "Move it there: quipu done 7 --json"},
+		"failed, owner merges":  {model.Config{}, red, mergeGate(red.Checks, required), "Fix the cause"},
+		"merged early":          {c, mergeView{URL: "url", State: "MERGED"}, nil, "Tell the owner"},
+		"running, agents merge": {c, running, mergeGate(running.Checks, required), "no need to wait"},
+	} {
+		if got := describePull(tc.c, early, tc.view, queueState{}, tc.gate); !strings.Contains(got.Next, tc.want) {
+			t.Errorf("not in review yet, %s: %+v", name, got)
+		}
+	}
 	status := buildStatusReport("o/r", nil, time.Now())
 	if status.PullRequests == nil {
 		t.Fatal("an empty list, for JSON")
+	}
+}
+
+func TestPullsReplaceWhatTheOwnerQueueSaidOfThem(t *testing.T) {
+	queue := []ownerItem{{Number: 3, Reason: "review and merge its PR"}, {Number: 5, Reason: "review and merge its PR"}, {Number: 9, Reason: "review and merge its PR"}}
+	pulls := []pullReport{
+		{Issue: 3, State: "OPEN", owner: "a required check cannot start; start its runner"},
+		{Issue: 5, State: "MERGED"},
+		{Issue: 7, State: "MERGED", owner: "PR merged before it reached review"},
+		{Issue: 9, State: "OPEN"},
+	}
+	got, attention := addPullsToQueues(queue, nil, pulls, map[int]string{7: "seven"})
+	want := []ownerItem{
+		{Number: 3, Reason: "a required check cannot start; start its runner"},
+		{Number: 7, Title: "seven", Reason: "PR merged before it reached review"},
+		{Number: 9, Reason: "review and merge its PR"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%+v", got)
+	}
+	if len(attention) != 3 || !strings.Contains(attention[1], "#5 PR merged with no evidence") {
+		t.Fatalf("%v", attention)
 	}
 }
 
@@ -358,10 +481,21 @@ func TestQueueStateOfReadsTheReceipts(t *testing.T) {
 	if got := queueStateOf([]github.Comment{request("q", "merge.queue"), request("q2", "merge.queue")}, again); got.State != "queued" {
 		t.Fatalf("%+v", got)
 	}
-	// A result from an earlier claim says nothing about this one.
+	// A result or a request from an earlier claim says nothing about this one.
 	claimed := at.Add(time.Hour)
 	stale := []writer.Receipt{{RequestID: writer.MergeResultID(accepted), Result: "accepted", Detail: "old", At: at}, {RequestID: "c", Result: "accepted", At: claimed, State: &writer.ReceiptState{Status: "Claimed"}}}
 	if got := queueStateOf(nil, stale); got.State != "" {
+		t.Fatalf("%+v", got)
+	}
+	old := request("q", "merge.queue")
+	old.CreatedAt = at.Format(time.RFC3339)
+	lastClaim := []writer.Receipt{{RequestID: "q", Result: "rejected", Detail: "stale", At: at}, {RequestID: "c", Result: "accepted", At: claimed, State: &writer.ReceiptState{Status: "Claimed"}}}
+	if got := queueStateOf([]github.Comment{old}, lastClaim); got.State != "" {
+		t.Fatalf("an old rejection must not hide what this claim is doing: %+v", got)
+	}
+	current := request("q", "merge.queue")
+	current.CreatedAt = claimed.Add(time.Minute).Format(time.RFC3339)
+	if got := queueStateOf([]github.Comment{current}, lastClaim[1:]); got.State != "queued" {
 		t.Fatalf("%+v", got)
 	}
 }

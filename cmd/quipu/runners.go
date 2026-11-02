@@ -322,11 +322,7 @@ func checkJob(check string, jobs []workflowJob) (workflowJob, bool) {
 	var found workflowJob
 	matched := false
 	for _, job := range jobs {
-		name := job.Name
-		if name == "" {
-			name = job.ID
-		}
-		if check != name && !strings.HasPrefix(check, name+" (") {
+		if !jobMatchesCheck(job, check) {
 			continue
 		}
 		if matched && (job.Computed || strings.Join(job.Labels, "\n") != strings.Join(found.Labels, "\n")) {
@@ -335,6 +331,15 @@ func checkJob(check string, jobs []workflowJob) (workflowJob, bool) {
 		found, matched = job, true
 	}
 	return found, matched
+}
+
+// jobMatchesCheck reports whether a check is this job, or a matrix leg of it.
+func jobMatchesCheck(job workflowJob, check string) bool {
+	name := job.Name
+	if name == "" {
+		name = job.ID
+	}
+	return check == name || strings.HasPrefix(check, name+" (")
 }
 
 // readWorkflowJobs reads the default branch's workflow files, or the worktree's

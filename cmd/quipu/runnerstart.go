@@ -31,8 +31,14 @@ const (
 type runnerStarter struct {
 	down    func() []doctorCheck
 	command func() string
-	claim   func() bool
+	claim   func() (runnerClaim, error)
 	run     func(command string) error
+}
+
+// runnerClaim is what the stamp says when a start is due.
+type runnerClaim struct {
+	won    bool
+	failed string // why the last start failed, if it did and it was recent
 }
 
 // ensure starts a needed runner that is down and says what it did, or returns ""
@@ -51,7 +57,14 @@ func (s runnerStarter) ensure() string {
 	if command == "" {
 		return what + ". workflows.runner_start is unset, so nothing started them; " + runnerFix
 	}
-	if !s.claim() {
+	claim, err := s.claim()
+	if err != nil {
+		return what + ". Could not tell whether runner_start ran recently, so it was not run: " + err.Error() + "; " + runnerFix
+	}
+	if claim.failed != "" {
+		return what + ". runner_start failed in the last " + runnerStartEvery.String() + ": " + claim.failed + "; " + runnerFix
+	}
+	if !claim.won {
 		return what + ". runner_start ran in the last " + runnerStartEvery.String() + ", so it was not run again. Carry on; do not wait for it"
 	}
 	if err := s.run(command); err != nil {
@@ -70,35 +83,72 @@ func enforcedRunnerStart(w worktree) string {
 	return c.Workflows.RunnerStart
 }
 
-// claimRunnerStart records this start for every worktree of the clone, and
-// reports false when one ran recently.
-func claimRunnerStart(w worktree, now time.Time) bool {
+// runnerStamp is the stamp shared by every worktree of the clone.
+func runnerStamp(w worktree) (string, error) {
 	dir, err := w.git("rev-parse", "--git-common-dir")
 	if err != nil {
-		return false
+		return "", err
 	}
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(w.Top, dir)
 	}
-	path := filepath.Join(dir, "quipu-runner-start")
-	if raw, err := os.ReadFile(path); err == nil {
-		if last, err := time.Parse(time.RFC3339, strings.TrimSpace(string(raw))); err == nil && now.Sub(last) < runnerStartEvery {
-			return false
-		}
-	}
-	return os.WriteFile(path, []byte(now.UTC().Format(time.RFC3339)+"\n"), 0o644) == nil
+	return filepath.Join(dir, "quipu-runner-start"), nil
 }
 
-// runDetached starts command and returns once it has failed, finished, or had
-// the grace period. Past that it keeps running, with its output in logPath.
-func runDetached(top, command, logPath string, grace time.Duration) error {
+// claimRunnerStart lets one agent in the clone start the runner per
+// runnerStartEvery. The lock is what makes it one when several start at once.
+func claimRunnerStart(w worktree, now time.Time) (runnerClaim, error) {
+	path, err := runnerStamp(w)
+	if err != nil {
+		return runnerClaim{}, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return runnerClaim{}, err
+	}
+	defer lock.Close()
+	if err := lockFile(lock); err != nil {
+		return runnerClaim{}, err
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		when, failed, _ := strings.Cut(strings.TrimSpace(string(raw)), "\n")
+		if last, err := time.Parse(time.RFC3339, when); err == nil && now.Sub(last) < runnerStartEvery {
+			return runnerClaim{failed: failed}, nil
+		}
+	}
+	if err := os.WriteFile(path, []byte(now.UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
+		return runnerClaim{}, err
+	}
+	return runnerClaim{won: true}, nil
+}
+
+// recordRunnerFailure adds why a start failed to the stamp, so the agents it
+// holds back hear that instead of being told a start is under way.
+func recordRunnerFailure(w worktree, failure error) {
+	path, err := runnerStamp(w)
+	if err != nil {
+		return
+	}
+	stamp, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer stamp.Close()
+	fmt.Fprintln(stamp, strings.ReplaceAll(failure.Error(), "\n", " "))
+}
+
+// runDetached starts command in dir and returns once it has failed, finished, or
+// had the grace period. Past that it keeps running, in its own session, with its
+// output in logPath.
+func runDetached(dir, command, logPath string, grace time.Duration) error {
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer log.Close()
 	cmd := exec.Command("sh", "-c", command)
-	cmd.Dir, cmd.Stdout, cmd.Stderr = top, log, log
+	cmd.Dir, cmd.Stdout, cmd.Stderr = dir, log, log
+	detach(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -128,9 +178,18 @@ func ensureRunner(c model.Config, w worktree) string {
 			return down
 		},
 		command: func() string { return enforcedRunnerStart(w) },
-		claim:   func() bool { return claimRunnerStart(w, time.Now()) },
+		claim:   func() (runnerClaim, error) { return claimRunnerStart(w, time.Now()) },
 		run: func(command string) error {
-			return runDetached(w.Top, command, filepath.Join(w.GitDir, "quipu-runner-start.log"), runnerStartGrace)
+			// Not the worktree: there a relative path would run the agent's copy
+			// of a script, and only the default branch decides what runs.
+			home, err := os.UserHomeDir()
+			if err == nil {
+				err = runDetached(home, command, filepath.Join(w.GitDir, "quipu-runner-start.log"), runnerStartGrace)
+			}
+			if err != nil {
+				recordRunnerFailure(w, err)
+			}
+			return err
 		},
 	}.ensure()
 	if note != "" {

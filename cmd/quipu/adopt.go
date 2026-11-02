@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -212,7 +213,11 @@ func provision(top string, c model.Config, replace bool) ([]string, []string, er
 	}
 	options := workflowOptions(c)
 	if c.MergesInBackground() {
-		options.WakeOn = wakeWorkflows(c, jobsUnder(top))
+		rendered, err := bootstrap.Render(options)
+		if err != nil {
+			return changes, nil, err
+		}
+		options.WakeOn = wakeWorkflows(c, jobsAfterInstall(top, rendered, replace))
 	}
 	files, err := bootstrap.Install(top, options, replace)
 	if err := note(files.Written, err); err != nil {
@@ -224,34 +229,51 @@ func provision(top string, c model.Config, replace bool) ([]string, []string, er
 	return changes, files.Kept, note(syncGuides(top, true))
 }
 
-// wakeWorkflows names the workflows whose finish lets a queued merge go ahead: the
-// ones behind the required checks and policy. A check with no workflow yet is in
-// the generated CI, which this same step writes.
+// wakeWorkflows names the workflows whose finish lets a queued merge go ahead:
+// policy's, and every one with a job behind a required check.
 func wakeWorkflows(c model.Config, jobs []workflowJob) []string {
 	names := []string{"Quipu policy"}
 	for _, check := range c.Checks() {
-		name := "CI"
-		if job, found := checkJob(check, jobs); found && job.Workflow != "" {
-			name = job.Workflow
-		}
-		if !contains(names, name) {
-			names = append(names, name)
+		for _, job := range jobs {
+			if !jobMatchesCheck(job, check) || contains(names, job.Workflow) {
+				continue
+			}
+			names = append(names, job.Workflow)
 		}
 	}
 	return names
 }
 
-// jobsUnder reads the jobs of the workflow files in a checkout.
-func jobsUnder(top string) []workflowJob {
-	var jobs []workflowJob
+// jobsAfterInstall reads the jobs of the workflow files as Install will leave
+// them. GitHub knows a workflow with no name by its path.
+func jobsAfterInstall(top string, rendered map[string]string, replace bool) []workflowJob {
+	files := map[string][]byte{}
 	paths, _ := filepath.Glob(filepath.Join(top, ".github", "workflows", "*.y*ml"))
 	for _, path := range paths {
 		if raw, err := os.ReadFile(path); err == nil {
-			if parsed, err := parseWorkflowJobs(raw); err == nil {
-				jobs = append(jobs, parsed...)
-			}
+			name, _ := filepath.Rel(top, path)
+			files[filepath.ToSlash(name)] = raw
 		}
 	}
+	for name, content := range rendered {
+		if _, exists := files[name]; (replace || !exists) && strings.HasPrefix(name, ".github/workflows/") {
+			files[name] = []byte(content)
+		}
+	}
+	var jobs []workflowJob
+	for name, raw := range files {
+		parsed, err := parseWorkflowJobs(raw)
+		if err != nil {
+			continue
+		}
+		for _, job := range parsed {
+			if job.Workflow == "" {
+				job.Workflow = name
+			}
+			jobs = append(jobs, job)
+		}
+	}
+	slices.SortFunc(jobs, func(a, b workflowJob) int { return strings.Compare(a.Workflow, b.Workflow) })
 	return jobs
 }
 

@@ -106,11 +106,16 @@ jobs:
           case "$EVENT" in
             workflow_run)
               # A run failed on the default branch: file one Ready P0 Defect.
-              quipu writer defect --run-id "$RUN_ID" --apply --json
 [[- if .WakeOn]]
+              # A failure here must not hold up the queued merge below.
+              defect=0
+              quipu writer defect --run-id "$RUN_ID" --apply --json || defect=$?
               # Checks finished: a queued merge may be able to go ahead.
               quipu writer reconcile --apply --json
-[[- end]] ;;
+              exit "$defect" ;;
+[[- else]]
+              quipu writer defect --run-id "$RUN_ID" --apply --json ;;
+[[- end]]
             issue_comment|issues)
               # Drain everything since the last successful run: Actions keeps
               # only one queued run per concurrency group, and runners sleep.

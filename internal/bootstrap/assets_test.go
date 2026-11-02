@@ -154,7 +154,7 @@ func TestWriterWakesWhenChecksFinishOnlyWhenAsked(t *testing.T) {
 	if !strings.Contains(parsed.Jobs["writer"].If, "head_repository.full_name == github.repository") {
 		t.Fatalf("a run from a fork must not wake it: %s", parsed.Jobs["writer"].If)
 	}
-	if !strings.Contains(writer, "# Checks finished: a queued merge may be able to go ahead.\n              quipu writer reconcile --apply --json ;;") {
+	if !strings.Contains(writer, "# Checks finished: a queued merge may be able to go ahead.\n              quipu writer reconcile --apply --json\n              exit \"$defect\" ;;") {
 		t.Fatalf("a finished check does not reconcile:\n%s", writer)
 	}
 	if text := before[".github/workflows/quipu-writer.yml"]; strings.Contains(text, "head_repository") || strings.Contains(text, "Checks finished") {

@@ -83,12 +83,7 @@ func statusCommand(args []string) error {
 	for _, item := range items {
 		titles[item.Number] = item.Title
 	}
-	for _, pull := range report.PullRequests {
-		if pull.owner != "" {
-			report.OwnerQueue = append(report.OwnerQueue, ownerItem{Number: pull.Issue, Title: titles[pull.Issue], Reason: pull.owner})
-			report.Attention = append(report.Attention, fmt.Sprintf("#%d %s", pull.Issue, pull.owner))
-		}
-	}
+	report.OwnerQueue, report.Attention = addPullsToQueues(report.OwnerQueue, report.Attention, report.PullRequests, titles)
 	if *asJSON {
 		return printValue(report, true)
 	}
@@ -842,12 +837,8 @@ func findPullRequest(c model.Config, explicit, branch string) (pullRequest, erro
 		if branch == "" {
 			return pullRequest{}, flowErr("pr-missing", "the work has no branch; pass --pr URL")
 		}
-		output, err := ghOutput("pr", "list", "--repo", c.Owner+"/"+c.Repository, "--head", branch, "--state", "all", "--json", "url,state", "--limit", "5")
+		pulls, err := branchPulls(c, branch)
 		if err != nil {
-			return pullRequest{}, err
-		}
-		var pulls []struct{ URL, State string }
-		if err := json.Unmarshal(output, &pulls); err != nil {
 			return pullRequest{}, err
 		}
 		target = pickPullRequest(pulls)

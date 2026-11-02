@@ -73,8 +73,9 @@ type Workflows struct {
 	// branch become Ready P0 Defects. Unset means [CI]; [] turns it off.
 	DefectsFrom *[]string `yaml:"defects_from,omitempty" json:"defects_from,omitempty"`
 	// RunnerStart is a shell command that starts the repository's runner. When a
-	// needed runner is down, `quipu start` and `quipu done` run it from the agent's
-	// machine without waiting. Only the default branch's copy ever runs.
+	// needed runner is down, `quipu start` and `quipu done` run it from the home
+	// directory of the agent's machine, without waiting. Only the default branch's
+	// copy ever runs.
 	RunnerStart string `yaml:"runner_start,omitempty" json:"runner_start,omitempty"`
 }
 
@@ -161,7 +162,7 @@ func (w Workflows) validate() error {
 		}
 	}
 	if strings.ContainsAny(w.RunnerStart, "\n\r") {
-		return fmt.Errorf("workflows.runner_start must be one line; put anything longer in a script")
+		return fmt.Errorf("workflows.runner_start must be one line; put anything longer in a script outside the repository")
 	}
 	if w.Schedule != "" && w.Schedule != "off" && !cronSchedule.MatchString(w.Schedule) {
 		return fmt.Errorf("workflows.schedule must be a five-field cron expression or off, not %q", w.Schedule)
