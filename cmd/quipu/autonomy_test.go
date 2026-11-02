@@ -118,6 +118,8 @@ func TestGuardReadsOpen(t *testing.T) {
 		"git notes add":            "git-refs",
 		"gh pr merge 1":            "merge-approve",
 		"nproc > out.txt":          "no-lease",
+		"arch":                     "no-lease",
+		"arch -arm64 python3 -c 1": "no-lease",
 	} {
 		if code := guardCode(t, open.Top, "Bash", map[string]any{"command": command}); code != want {
 			t.Errorf("open: %q: want %s, got %q", command, want, code)
@@ -181,6 +183,8 @@ func TestAgentIssueProblem(t *testing.T) {
 		"contract":             {both, "--kind contract --parent 1", "may not create"},
 		"last flag wins":       {both, "--kind story --kind epic --parent 1", "may not create"},
 		"second parent":        {both, "--kind story --parent 1 --parent 2", "must be an open Epic"},
+		"octal parent":         {issues, "--kind story --parent 010", "could not read parent #010"},
+		"hex parent":           {issues, "--kind story --parent 0x2", "must be an open Epic"},
 		"Decision, no triage":  {issues, "--kind decision --parent 1", "triage_by"},
 		"Decision with triage": {triage, "--kind decision --parent 1", ""},
 		"Gate with triage":     {triage, "--kind gate --parent 1", ""},
@@ -202,6 +206,12 @@ func TestTriageCannotBypassReadyOrClose(t *testing.T) {
 	agents := model.Config{TriageBy: "agents", Areas: []string{"core"}}
 	readyToo := agents
 	readyToo.ReadyBy = "agents"
+	parent := func(number int) (string, error) {
+		if number == 1 {
+			return "Epic", nil
+		}
+		return "a closed Issue", nil
+	}
 	for name, tc := range map[string]struct {
 		c      model.Config
 		o      triageOptions
@@ -225,9 +235,44 @@ func TestTriageCannotBypassReadyOrClose(t *testing.T) {
 		"file a Decision":   {agents, triageOptions{Kind: "decision"}, []string{triageLabel}, ""},
 		"Epic kind":         {agents, triageOptions{Kind: "epic"}, []string{triageLabel}, "Epics stay"},
 		"kind already set":  {agents, triageOptions{Kind: "gate"}, labels, "already has kind"},
+		"same kind again":   {agents, triageOptions{Kind: "story"}, labels, ""},
+		"parent not Epic":   {agents, triageOptions{Parent: 2}, labels, "must be an open Epic"},
 		"Decision to story": {agents, triageOptions{Kind: "story"}, []string{triageLabel, "kind:decision"}, "already has kind"},
 	} {
-		err := checkTriage(tc.c, 7, tc.o, tc.labels)
+		err := checkTriage(tc.c, 7, tc.o, liveWork{Labels: tc.labels, Status: "Ready"}, true, parent)
+		if tc.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want %q, got %v", name, tc.want, err)
+		}
+	}
+}
+
+func TestTriageFailsBeforeChangingAnything(t *testing.T) {
+	c := model.Config{TriageBy: "agents", Areas: []string{"core"}}
+	epic := func(int) (string, error) { return "Epic", nil }
+	flagged := []string{triageLabel}
+	for name, tc := range map[string]struct {
+		o         triageOptions
+		state     liveWork
+		inProject bool
+		want      string
+	}{
+		"joining, no kind":        {triageOptions{Area: "core"}, liveWork{Labels: flagged}, false, "no kind"},
+		"joining, no area":        {triageOptions{Kind: "story"}, liveWork{Labels: flagged}, false, "no area"},
+		"joining, all known":      {triageOptions{Kind: "story", Area: "core", Parent: 1}, liveWork{Labels: flagged}, false, ""},
+		"joining stays Backlog":   {triageOptions{Kind: "story", Area: "core", Status: "backlog"}, liveWork{Labels: flagged}, false, ""},
+		"Backlog cannot block":    {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "Backlog"}, true, "cannot move"},
+		"Ready can go to Backlog": {triageOptions{Status: "backlog"}, liveWork{Labels: flagged, Status: "Ready"}, true, ""},
+		"Ready can block":         {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "Ready"}, true, ""},
+		"held work stays":         {triageOptions{Status: "backlog"}, liveWork{Labels: flagged, Status: "In progress"}, true, "leaves work in progress alone"},
+		"reviewed work stays":     {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "In review"}, true, "leaves work in progress alone"},
+	} {
+		err := checkTriage(c, 7, tc.o, tc.state, tc.inProject, epic)
 		if tc.want == "" {
 			if err != nil {
 				t.Errorf("%s: %v", name, err)
@@ -257,6 +302,14 @@ func TestDecideQueuedMerge(t *testing.T) {
 		return view
 	}
 	failed := []prCheck{{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE"}, {Name: "policy", Status: "COMPLETED", Conclusion: "SUCCESS"}}
+	notRun := with(func(v *mergeView) { v.Checks = passing("policy") })
+	if got, reason := decideQueuedMerge(notRun, "abc", required, false, queueGrace); got != queueFail || !strings.Contains(reason, "never ran: test") {
+		t.Errorf("a check that never appears cannot wait for ever: %d %q", got, reason)
+	}
+	running := with(func(v *mergeView) { v.Checks = append(passing("policy"), prCheck{Name: "test", Status: "QUEUED"}) })
+	if got, _ := decideQueuedMerge(running, "abc", required, false, 48*time.Hour); got != queueWait {
+		t.Errorf("a queued job waits, and GitHub ends it if no runner comes: %d", got)
+	}
 	for name, tc := range map[string]struct {
 		view   mergeView
 		update bool
@@ -283,7 +336,7 @@ func TestDecideQueuedMerge(t *testing.T) {
 		"closed":                {with(func(v *mergeView) { v.State = "CLOSED" }), false, queueFail, "closed"},
 		"pushed after queueing": {with(func(v *mergeView) { v.HeadRefOid = "new" }), false, queueDrop, "rerun quipu done"},
 	} {
-		got, reason := decideQueuedMerge(tc.view, "abc", required, tc.update)
+		got, reason := decideQueuedMerge(tc.view, "abc", required, tc.update, 0)
 		if got != tc.want || !strings.Contains(reason, tc.reason) {
 			t.Errorf("%s: step %d, reason %q", name, got, reason)
 		}
@@ -458,8 +511,30 @@ func TestQueuedMergeUpdatesABehindPROnlyWithTheFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	queued, ok := writer.LatestQueuedMerge(f.w.receipts)
-	if f.updates != 1 || f.merges != 0 || !ok || queued.Merge.Head != "updated" || queued.Merge.Evidence.Criteria != "met" {
+	if f.updates != 1 || f.merges != 0 || !ok || queued.Merge.Head != "" || queued.Merge.UpdatedFrom != "abc" || queued.Merge.Evidence.Criteria != "met" {
 		t.Fatalf("updates=%d merges=%d queued=%+v", f.updates, f.merges, queued)
+	}
+	// GitHub still shows the old head: nothing changes, and the queue survives.
+	f.view.HeadRefOid = "abc"
+	if _, err := f.w.queuedMerge(f.state); err != nil {
+		t.Fatal(err)
+	}
+	if queued, ok = writer.LatestQueuedMerge(f.w.receipts); !ok || queued.Merge.Head != "" {
+		t.Fatalf("the Writer's own update must not drop its queue: %+v", queued)
+	}
+	// Once the new head shows, the queue pins it and merges on its checks.
+	f.view.HeadRefOid, f.view.MergeStateStatus = "updated", "CLEAN"
+	if _, err := f.w.queuedMerge(f.state); err != nil {
+		t.Fatal(err)
+	}
+	if queued, ok = writer.LatestQueuedMerge(f.w.receipts); !ok || queued.Merge.Head != "updated" {
+		t.Fatalf("queued=%+v", queued)
+	}
+	if _, err := f.w.queuedMerge(f.state); err != nil {
+		t.Fatal(err)
+	}
+	if f.merges != 1 {
+		t.Fatalf("merges=%d", f.merges)
 	}
 	without := newQueueFixture(t, backgroundMerge, view)
 	if _, err := without.w.queuedMerge(without.state); err != nil {
@@ -500,6 +575,54 @@ func TestMergeFailureReturnsTheWorkWithTheReason(t *testing.T) {
 	}
 }
 
+func TestRefusedMergeRetriesUntilTheGraceEnds(t *testing.T) {
+	f := newQueueFixture(t, backgroundMerge, greenView())
+	f.w.now = f.w.receipts[0].At.Add(10 * time.Minute)
+	f.w.ops.merge = func(int, mergeView) error { return errors.New("502") }
+	if moved, err := f.w.queuedMerge(f.state); err != nil || moved {
+		t.Fatalf("%v %v", moved, err)
+	}
+	if f.moved != nil || len(f.posted) != 0 || f.state.Holder == "" || len(f.w.report.Warnings) != 1 {
+		t.Fatalf("a passing failure must not evict the holder: %+v %v %+v", f.moved, f.posted, f.w.report)
+	}
+	if _, queued := writer.LatestQueuedMerge(f.w.receipts); !queued {
+		t.Fatal("the merge stays queued")
+	}
+}
+
+func TestMergeThatErrorsButLandedRecordsEvidence(t *testing.T) {
+	f := newQueueFixture(t, backgroundMerge, greenView())
+	merged := f.w.ops.merge
+	f.w.ops.merge = func(number int, view mergeView) error {
+		_ = merged(number, view)
+		return errors.New("502 after the merge landed")
+	}
+	if _, err := f.w.queuedMerge(f.state); err != nil {
+		t.Fatal(err)
+	}
+	if f.moved != nil || len(f.requests) != 2 || f.requests[0].Evidence.FinalSHA != "merge-sha" {
+		t.Fatalf("a merged PR must not go back to Ready: %+v %+v", f.moved, f.requests)
+	}
+}
+
+func TestQueuedEvidenceCitesTheHeadThatMerged(t *testing.T) {
+	c := model.Config{}
+	current := passing("test", "policy")
+	if got := queuedCIURL(c, "https://github.com/o/r/actions/runs/old", current); !strings.Contains(got, "/runs/1/job/test") {
+		t.Fatalf("a URL from before an update must not survive: %s", got)
+	}
+	other := model.Config{RequiredChecks: []string{"unit"}}
+	if got := queuedCIURL(other, pendingMerge, current); !strings.Contains(got, "/runs/1/") {
+		t.Fatalf("any passing run is better than none: %s", got)
+	}
+	if got := queuedCIURL(c, "https://given", nil); got != "https://given" {
+		t.Fatalf("no checks to read keeps what the agent gave: %s", got)
+	}
+	if got := queuedCIURL(c, pendingMerge, nil); got != "" {
+		t.Fatalf("the placeholder is never evidence: %s", got)
+	}
+}
+
 func TestQueuedEvidenceFinishesAfterAnInterruptedPass(t *testing.T) {
 	f := newQueueFixture(t, backgroundMerge, greenView())
 	f.state.Status = "Evidence pending"
@@ -526,6 +649,15 @@ func TestChecksStillRunning(t *testing.T) {
 	}
 	if checksStillRunning(nil) || checksStillRunning(errors.New("gh down")) {
 		t.Fatal("only pending checks queue a merge")
+	}
+	// Right after a push GitHub has no checks yet, which must not read as failure.
+	required := []string{"test", "policy"}
+	if err := mergeGate(nil, required); !checksStillRunning(err) || !strings.Contains(err.Error(), "never ran") {
+		t.Fatalf("checks not created yet: %v", err)
+	}
+	mixed := []prCheck{{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE"}}
+	if err := mergeGate(mixed, required); checksStillRunning(err) {
+		t.Fatalf("a real failure must never queue, even with another check missing: %v", err)
 	}
 }
 

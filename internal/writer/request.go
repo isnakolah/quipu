@@ -100,9 +100,12 @@ type Receipt struct {
 // held here, not in Receipt.Evidence, because only evidence validated against
 // a merged PR may count towards Done.
 type QueuedMerge struct {
-	PR       string   `json:"pr"`
-	Head     string   `json:"head"`
-	Evidence Evidence `json:"evidence"`
+	PR   string `json:"pr"`
+	Head string `json:"head"`
+	// UpdatedFrom is set, with Head empty, between the Writer updating a behind
+	// PR and GitHub showing the new head.
+	UpdatedFrom string   `json:"updated_from,omitempty"`
+	Evidence    Evidence `json:"evidence"`
 }
 
 // MergeResultID is the receipt that ends a queued merge.

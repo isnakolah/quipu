@@ -220,8 +220,9 @@ var readOnlyCommands = setOf("ls", "cat", "head", "tail", "wc", "grep", "egrep",
 
 // openReadCommands are also read-only, and pass with guard_reads: open. Only
 // commands that cannot write qualify: interpreters such as awk, python or perl
-// can do anything, and xxd and base64 can write a file, so they stay out.
-var openReadCommands = setOf("arch", "b2sum", "cal", "cksum", "expand", "getconf", "groups", "gzcat", "locale", "look",
+// can do anything, xxd and base64 can write a file, and macOS arch runs any
+// program, so they stay out.
+var openReadCommands = setOf("b2sum", "cal", "cksum", "expand", "getconf", "groups", "gzcat", "locale", "look",
 	"nm", "nproc", "otool", "paste", "pgrep", "rev", "sha224sum", "sha384sum", "sha512sum", "strings", "sum", "sw_vers",
 	"tac", "unexpand", "uptime", "who", "zcat")
 

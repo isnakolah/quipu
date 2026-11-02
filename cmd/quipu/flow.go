@@ -649,7 +649,7 @@ func doneCommand(args []string) error {
 				}
 			}
 			if checksStillRunning(err) && c.MergesInBackground() {
-				return queueMerge(c, w, number, actor, pull.URL, head, e, err, *asJSON)
+				return queueMerge(c, w, number, actor, state.Branch, pull.URL, head, e, err, *asJSON)
 			}
 			if err != nil {
 				return err
@@ -918,7 +918,15 @@ func mergeGate(checks []prCheck, required []string) error {
 		}
 	}
 	if len(failing) > 0 {
-		return flowErr("checks-failing", "required checks not passing: %s", strings.Join(failing, ", "))
+		e := flowErr("checks-failing", "required checks not passing: %s", strings.Join(failing, ", "))
+		onlyNeverRan := true
+		for _, name := range required {
+			onlyNeverRan = onlyNeverRan && verdicts[name] != checkFailing
+		}
+		if onlyNeverRan {
+			e.cause = errChecksNeverRan
+		}
+		return e
 	}
 	if len(pending) > 0 {
 		return flowErr("checks-pending", "required checks still running: %s", strings.Join(pending, ", "))

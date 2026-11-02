@@ -41,7 +41,7 @@ type flagRule struct {
 
 var flagRules = []flagRule{
 	{model.Config.AgentsCreateIssues, "- **`issues_by: agents`:** you may create a Story, Task, or Defect under an open Epic with `quipu issue create --kind story --area AREA --parent EPIC --title TITLE --body-file CONTRACT.md --apply`. The body must be a valid work contract. New Epics stay proposals: use `quipu propose`.\n"},
-	{model.Config.AgentsTriage, "- **`triage_by: agents`:** you may triage an Issue labeled `quipu:needs-triage` with `quipu triage N --json` and `--kind`, `--status backlog|blocked`, `--priority`, `--area`, or `--parent`; it adds the Issue to the Project if needed. `--status ready` needs `ready_by: agents`. You may file a Decision or Gate under an open Epic with `quipu issue create`, but never decide one. Triage never sets Done or Cancelled and never closes anything.\n"},
+	{model.Config.AgentsTriage, "- **`triage_by: agents`:** you may triage an Issue labeled `quipu:needs-triage` with `quipu triage N --json` and `--kind`, `--status`, `--priority`, `--area`, or `--parent`; it adds the Issue to the Project if needed. `--status` takes `backlog`, `ready`, or `blocked`, for a move the lifecycle allows, and `ready` needs `ready_by: agents`. `--parent` must be an open Epic. You may file a Decision or Gate under an open Epic with `quipu issue create`, but never decide one. Triage never sets Done or Cancelled and never closes anything.\n"},
 	{model.Config.UpdatesBehind, "- **`update_behind: auto`:** when your PR is behind the default branch, `quipu done` merges the default branch in and pushes. The checks then run again, so rerun it. A conflict stops with `merge-conflict` and leaves your branch as it was.\n"},
 	{model.Config.MergesInBackground, "- **`merge_wait: background`:** when your evidence is complete and only checks are still running, `quipu done` returns at once and frees this worktree. The Writer holds your evidence and merges when the checks pass. If one fails, the Issue returns to Ready with its branch, and the receipt says why. So do not wait: take other work. Pushing to the branch again takes it out of the queue; rerun `quipu done` to queue it again.\n"},
 	{model.Config.GuardReadsOpen, "- **`guard_reads: open`:** the guard also treats more read-only commands as reads, such as `git tag --sort`. Interpreters stay denied, and so does everything else in the handbook.\n"},
@@ -197,6 +197,8 @@ func guideCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Read the default branch as it is now, so a flag just merged is written.
+	_, _, _ = loadEnforcedConfig(here, true)
 	changed, err := syncGuides(here.Top, *sync)
 	if err != nil {
 		return err

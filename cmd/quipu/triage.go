@@ -29,8 +29,14 @@ type triageOptions struct {
 	Parent                       int
 }
 
-// checkTriage refuses what triage never does, before anything changes.
-func checkTriage(c model.Config, number int, o triageOptions, labels []string) error {
+// triageWaiting are the statuses of work not yet in anyone's hands.
+var triageWaiting = setOf("Backlog", "Ready", "Blocked")
+
+// checkTriage refuses what triage never does, and what would fail partway, before
+// anything changes. It judges the Status the Issue has, or Backlog when it is about
+// to join the Project.
+func checkTriage(c model.Config, number int, o triageOptions, state liveWork, inProject bool, parentKind func(int) (string, error)) error {
+	labels := state.Labels
 	if !c.AgentsTriage() {
 		return errors.New("triage needs triage_by: agents on the default branch")
 	}
@@ -41,10 +47,11 @@ func checkTriage(c model.Config, number int, o triageOptions, labels []string) e
 		if !triageKinds[o.Kind] {
 			return fmt.Errorf("--kind must be story, task, defect, contract, decision or gate; Epics stay proposals")
 		}
-		if current := labelKind(labels); current != "" {
+		if current := labelKind(labels); current != "" && !strings.EqualFold(current, o.Kind) {
 			return fmt.Errorf("#%d already has kind %s; only the owner changes it", number, current)
 		}
 	}
+	current := triageCurrentStatus(state, inProject)
 	if o.Status != "" {
 		status, ok := triageStatuses[strings.ToLower(o.Status)]
 		if !ok {
@@ -52,6 +59,12 @@ func checkTriage(c model.Config, number int, o triageOptions, labels []string) e
 		}
 		if status == "Ready" && !c.AgentsMakeReady() {
 			return errors.New("making work Ready needs ready_by: agents; only the owner makes work Ready here")
+		}
+		if !triageWaiting[current] {
+			return fmt.Errorf("#%d is %s, and triage leaves work in progress alone", number, current)
+		}
+		if status != current && !writer.CanTransition(current, status) {
+			return fmt.Errorf("#%d is %s, which cannot move to %s", number, current, status)
 		}
 	}
 	if o.Priority != "" && !map[string]bool{"P0": true, "P1": true, "P2": true, "P3": true}[o.Priority] {
@@ -63,7 +76,31 @@ func checkTriage(c model.Config, number int, o triageOptions, labels []string) e
 	if o.Parent < 0 || o.Parent == number {
 		return errors.New("--parent must be another Issue")
 	}
+	if !inProject {
+		if o.Kind == "" && labelKind(labels) == "" {
+			return fmt.Errorf("#%d has no kind; pass --kind so it can join the Project", number)
+		}
+		if o.Area == "" && labelValue(labels, "area:") == "" {
+			return fmt.Errorf("#%d has no area; pass --area so it can join the Project", number)
+		}
+	}
+	if o.Parent > 0 {
+		kind, err := parentKind(o.Parent)
+		if err != nil {
+			return fmt.Errorf("could not read parent #%d: %w", o.Parent, err)
+		}
+		if kind != "Epic" {
+			return fmt.Errorf("parent #%d must be an open Epic, not %s", o.Parent, kind)
+		}
+	}
 	return nil
+}
+
+func triageCurrentStatus(state liveWork, inProject bool) string {
+	if !inProject || state.Status == "" {
+		return "Backlog"
+	}
+	return state.Status
 }
 
 // labelValue returns the value of the first label with prefix, without it.
@@ -105,12 +142,13 @@ func triageCommand(args []string) error {
 	if err != nil && inProject {
 		return err
 	}
-	if err := checkTriage(c, number, o, state.Labels); err != nil {
+	parentKind := func(parent int) (string, error) { return openIssueKind(c, parent) }
+	if err := checkTriage(c, number, o, state, inProject, parentKind); err != nil {
 		return err
 	}
 	repo := c.Owner + "/" + c.Repository
 	edit := []string{"issue", "edit", strconv.Itoa(number), "--repo", repo}
-	if o.Kind != "" {
+	if o.Kind != "" && labelKind(state.Labels) == "" {
 		edit = append(edit, "--add-label", "kind:"+o.Kind)
 	}
 	currentArea := labelValue(state.Labels, "area:")
@@ -133,14 +171,10 @@ func triageCommand(args []string) error {
 	if !inProject {
 		kind, area, priority := o.Kind, o.Area, o.Priority
 		if kind == "" {
-			if kind = strings.ToLower(labelKind(state.Labels)); kind == "" {
-				return fmt.Errorf("#%d has no kind; rerun with --kind so it can join the Project", number)
-			}
+			kind = strings.ToLower(labelKind(state.Labels))
 		}
 		if area == "" {
-			if area = currentArea; area == "" {
-				return fmt.Errorf("#%d has no area; rerun with --area so it can join the Project", number)
-			}
+			area = currentArea
 		}
 		if priority == "" {
 			priority = "P2"
@@ -161,13 +195,13 @@ func triageCommand(args []string) error {
 			return err
 		}
 	}
-	status := state.Status
-	if o.Status != "" {
+	status := triageCurrentStatus(state, inProject)
+	if target := triageStatuses[strings.ToLower(o.Status)]; target != "" && target != status {
 		actor, err := resolveActor(here, "", number)
 		if err != nil {
 			return err
 		}
-		status = triageStatuses[strings.ToLower(o.Status)]
+		status = target
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: status}, *wait); err != nil {
 			return err
 		}
@@ -221,7 +255,9 @@ func agentIssueProblem(c model.Config, args []shellArg, parentKind func(int) (st
 		}
 	}
 	for _, value := range parents {
-		parent, err := strconv.Atoi(value)
+		// Base 0, as the command's own flag parsing reads it: --parent 010 is #8.
+		parsed, err := strconv.ParseInt(value, 0, 0)
+		parent := int(parsed)
 		if err != nil || parent < 1 {
 			return "--parent must be an Issue number"
 		}
