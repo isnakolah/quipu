@@ -26,3 +26,4 @@ policy:
 # Receipts before this moment were posted with the Writer token; later ones
 # count only when the Writer bot (github-actions[bot]) posted them.
 receipts_trusted_before: "2026-10-29T15:08:21Z"
+merge: agent
