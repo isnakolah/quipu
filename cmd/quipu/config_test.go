@@ -330,6 +330,7 @@ func TestWriteConfigKeepsTheExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.ReadyBy = "agents" // differs from the fixture, so writing it changes the file
 	fresh := t.TempDir()
 	written, err := writeConfig(fresh, c)
 	if err != nil || len(written) != 1 || written[0] != rootConfigPath {
