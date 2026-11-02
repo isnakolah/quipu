@@ -123,7 +123,7 @@ func newGuard(cwd string, now time.Time) *guard {
 	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}}
 	if w, err := openWorktree(cwd); err == nil {
 		g.session = w
-		if _, err := os.Stat(filepath.Join(w.Top, configPath)); err == nil {
+		if hasConfig(w.Top) {
 			_, err := w.readLease()
 			g.sessionLeased = err == nil
 		}
@@ -311,7 +311,12 @@ func (g *guard) writeIn(dir string) error {
 	}
 	c, err := loadConfigAt(w.Top)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		// Removing the config from a worktree must not remove the guard.
+		published, governed := w.publishedConfig()
+		if !governed {
+			return nil
+		}
+		c, err = published, nil
 	}
 	if err != nil {
 		return fmt.Errorf("QUIPU DENIED [config]: configuration unavailable in %s: %v", w.Top, err)

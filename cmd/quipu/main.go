@@ -19,7 +19,6 @@ import (
 	"github.com/isnakolah/quipu/internal/journal"
 	"github.com/isnakolah/quipu/internal/model"
 	"github.com/isnakolah/quipu/internal/writer"
-	"gopkg.in/yaml.v3"
 )
 
 const configPath = ".github/quipu/config.yaml"
@@ -52,6 +51,8 @@ func run(args []string) error {
 		return doneCommand(args[1:])
 	case "propose":
 		return proposeCommand(args[1:])
+	case "config":
+		return configCommand(args[1:])
 	case "ready":
 		return readyCommand(args[1:])
 	case "move":
@@ -394,7 +395,7 @@ Owner:
   hooks      install the agent guard hooks in this repository (--apply)
 
 Setup and advanced:
-  init|adopt|import|verify-commit|doctor|guide|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
+  init|adopt|import|verify-commit|doctor|guide|config|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")
@@ -440,7 +441,7 @@ func initCommand(args []string) error {
 	if err := initializeBootstrapRepository(*owner, *repo, c.DefaultBranch); err != nil {
 		return fmt.Errorf("GitHub repository and Project were provisioned, but local bootstrap push failed: %w", err)
 	}
-	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, created.Number, configPath)
+	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, created.Number, rootConfigPath)
 	// Protect only after the bootstrap push: protection forbids direct pushes.
 	if err := protectRepository(c, false); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\nGitHub does not enforce the flow yet; run `quipu protect --apply` (private repositories need a paid plan)\n", err)
@@ -623,16 +624,19 @@ func loadConfig() (model.Config, error) {
 }
 
 func loadConfigAt(top string) (model.Config, error) {
-	var c model.Config
-	raw, err := os.ReadFile(filepath.Join(top, configPath))
+	name, err := configFile(top)
 	if err != nil {
-		return c, err
+		return model.Config{}, err
 	}
-	err = yaml.Unmarshal(raw, &c)
+	raw, err := os.ReadFile(filepath.Join(top, name))
 	if err != nil {
-		return c, err
+		return model.Config{}, err
 	}
-	return c, c.Validate()
+	c, err := decodeConfig(raw)
+	if err != nil {
+		return c, fmt.Errorf("%s: %w", name, err)
+	}
+	return c, nil
 }
 func printValue(v any, asJSON bool) error {
 	if asJSON {

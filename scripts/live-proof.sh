@@ -45,7 +45,7 @@ mkdir "$target"
 
 # This proof runs the Writer locally, so its receipts are authored by you,
 # not github-actions[bot]. Trust them in this disposable repository only.
-printf '%s\n' 'receipts_trusted_before: "2100-01-01T00:00:00Z"' >>"$target/.github/quipu/config.yaml"
+printf '%s\n' 'receipts_trusted_before: "2100-01-01T00:00:00Z"' >>"$target/quipu.yml"
 
 project_number=$(gh project list --owner "$owner" --limit 100 --format json --jq ".projects[] | select(.title == \"$project_title\") | .number")
 test -n "$project_number"

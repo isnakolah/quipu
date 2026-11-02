@@ -87,13 +87,15 @@ required_checks: [test]             # CI checks main requires besides policy
 
 **Review.** Agents open PRs that say `Refs #N` and move the work to In review. Review and merge as usual; the `policy` check tells you whether the PR follows the flow. After the merge, the agent records evidence and the Writer closes the Issue.
 
-**Changing Quipu's own rules.** A PR that touches `.github/quipu/`, `.github/workflows/`, `.claude/settings.json`, `.codex/`, or the plugin hooks fails `policy` until you add the `quipu:owner-approved` label. Agents cannot add labels.
+**Changing Quipu's own rules.** A PR that touches `quipu.yml`, `.github/quipu/`, `.github/workflows/`, `.claude/settings.json`, `.codex/`, or the plugin hooks fails `policy` until you add the `quipu:owner-approved` label. Agents cannot add labels.
 
 **Watching.** `quipu status` shows the board and anything needing attention. `quipu validate` lists every rule violation in the live data; the Writer also writes it to each run's summary.
 
 ## Options
 
-Set these in `.github/quipu/config.yaml` through a reviewed PR (the file is owner-only, and the PR needs `quipu:owner-approved`). Every option that relaxes enforcement is off by default.
+Set these in `quipu.yml` at the repository root through a reviewed PR (the file is owner-only, and the PR needs `quipu:owner-approved`). Every option that relaxes enforcement is off by default, and takes effect only once merged to the default branch: a copy edited in a worktree cannot turn one on. An unknown key fails validation, so a misspelled option can't silently stay off. `quipu config --json` shows what is in effect.
+
+**Moving from `.github/quipu/config.yaml`.** The old path keeps working. To move, first upgrade every copy of quipu that touches the repository: the one on the runner's PATH, each agent machine, and the plugins. An older quipu doesn't know `quipu.yml`, so it would treat the repository as not using Quipu: its guard would allow every change, and the Writer would stop. Then run `git mv .github/quipu/config.yaml quipu.yml` in a PR with the `quipu:owner-approved` label. Keeping both files is an error.
 
 | Option | Default | Effect |
 |---|---|---|

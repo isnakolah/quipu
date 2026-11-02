@@ -23,7 +23,7 @@ import (
 const ownerApprovedLabel = "quipu:owner-approved"
 
 // protectedPaths hold the rules agents run under: config, workflows, hooks.
-var protectedPaths = []string{".github/quipu/", ".github/workflows/", ".claude/settings.json", ".codex/",
+var protectedPaths = []string{rootConfigPath, ".github/quipu/", ".github/workflows/", ".claude/settings.json", ".codex/",
 	"plugins/claude/quipu/hooks/", "plugins/codex/quipu/hooks/",
 	"plugins/claude/quipu/scripts/pre-write-guard", "plugins/codex/quipu/scripts/pre-write-guard"}
 

@@ -154,6 +154,13 @@ func (c Config) AgentsMerge() bool { return c.Merge == "agent" }
 // AgentsMakeReady reports whether agents may run `quipu ready`.
 func (c Config) AgentsMakeReady() bool { return c.ReadyBy == "agents" }
 
+// WithoutRelaxations turns off every setting that relaxes enforcement, for a
+// config that cannot be trusted to have come from the default branch.
+func (c Config) WithoutRelaxations() Config {
+	c.ReadyBy, c.Merge, c.PolicyExemptAuthors = "", "", nil
+	return c
+}
+
 type Project struct {
 	ID     string            `yaml:"id" json:"id"`
 	Number int               `yaml:"number" json:"number"`
