@@ -37,6 +37,11 @@ func freeDiskBytes(path string) (uint64, error) {
 	return uint64(stat.Bavail) * uint64(stat.Bsize), nil
 }
 
+// killGroup ends a detached command and everything it started.
+func killGroup(cmd *exec.Cmd) error {
+	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}
+
 // lockFile holds an exclusive lock on f until f is closed.
 func lockFile(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)

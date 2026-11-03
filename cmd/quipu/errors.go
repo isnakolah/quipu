@@ -49,7 +49,7 @@ var flowErrors = []flowErrorKind{
 var flagErrors = []flowErrorKind{
 	{"local-check-failed", "with `merge_without_ci`, `local_check` did not pass, so nothing merged", "fix the cause, commit, push, then rerun the same `quipu done N --json ...`"},
 	{"worktree-unclean", "with `merge_without_ci`, the worktree has changes or is not at the PR's head, so a check here would not be checking what merges", "commit and push, or `git restore` the changes, then rerun the same `quipu done N --json ...`"},
-	{"policy-rules", "with `merge_without_ci`, the PR breaks a policy rule, and those are never waived", "fix each problem it lists, then rerun the same `quipu done N --json ...`; what only the owner can do, such as the `quipu:owner-approved` label, ask the owner for"},
+	{"policy-rules", "with `merge_without_ci` or `merge: queue`, the PR breaks a policy rule, and those are never waived", "fix each problem it lists, then rerun the same `quipu done N --json ...`; what only the owner can do, such as the `quipu:owner-approved` label, ask the owner for"},
 	{"base-moved", "with `update_behind: auto`, the default branch moved during each run of `local_check`, so nothing merged", "take other work, then rerun the same `quipu done N --json ...` when the default branch is quieter"},
 	{"machine-busy", "with `limits`, every build slot on this machine is in use, so `local_check` did not run and nothing merged", "take other work, or stop if you have none, then rerun the same `quipu done N --json ...` later"},
 	{"merge-conflict", "with `update_behind: auto`, the work branch conflicts with the default branch, and the merge was undone", "run `git fetch origin && git merge origin/<default>`, resolve the conflicts, commit, push, then rerun the same `quipu done N --json ...`"},

@@ -55,7 +55,7 @@ func queueStateOf(comments []github.Comment, receipts []writer.Receipt) queueSta
 			continue
 		}
 		request, err := writer.ParseRequest(comment.Body)
-		if err != nil || request.Action != "merge.queue" {
+		if err != nil || (request.Action != "merge.queue" && request.Action != "merge.batch") {
 			continue
 		}
 		receipt, answered := receiptFor(receipts, request.ID)
@@ -113,8 +113,12 @@ func describePull(c model.Config, item statusItem, view mergeView, queue queueSt
 	case coded != nil && coded.Code == "checks-no-runner":
 		report.Next = fmt.Sprintf("%s. Do not poll: tell the owner, and take other work.", coded.Message)
 		report.owner = "a required check cannot start; start its runner"
+	case queue.State == "queued" && c.MergesInQueue():
+		report.Next = "Queued: the merge queue tests it in a batch and lands it. Nothing to do; take other work."
 	case queue.State == "queued":
 		report.Next = "Queued: the Writer merges when the checks pass. Nothing to do; take other work."
+	case c.MergesInQueue() && inReview:
+		report.Next = fmt.Sprintf("Queue it with the evidence flags: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary local", item.Number)
 	case !inReview && !c.AgentsMerge():
 		report.Next = fmt.Sprintf("Not in review yet. Move it there: quipu done %d --json. The checks need not have finished.", item.Number)
 	case gate != nil:

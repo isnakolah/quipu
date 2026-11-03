@@ -878,6 +878,8 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 		return nil
 	case sub == "worktree" && len(rest) > 1 && rest[1].s == "remove":
 		return nil
+	case sub == "queue" && len(rest) > 1 && rest[1].s == "status":
+		return nil
 	case sub == "ready" && agentsMakeReady(dir):
 		return nil
 	case sub == "triage" && agentsTriage(dir):

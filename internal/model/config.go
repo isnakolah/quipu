@@ -64,6 +64,8 @@ type Config struct {
 	// it there after the last step that needs the build, so a repository's
 	// agents never have to order it around local_check.
 	Cleanup string `yaml:"cleanup,omitempty" json:"cleanup,omitempty"`
+	// MergeQueue configures merge: queue.
+	MergeQueue MergeQueue `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
 	// Limits caps what agents may start on this machine. Unset, nothing is capped.
 	Limits Limits `yaml:"limits,omitempty" json:"limits,omitempty"`
 	// GuardReads "open" widens the commands the guard treats as read-only.
@@ -210,7 +212,88 @@ func (c Config) MergesInBackground() bool { return c.AgentsMerge() && c.MergeWai
 func (c Config) MergesWithoutCI() bool { return c.AgentsMerge() && c.MergeWithoutCI }
 
 // BypassesRulesets reports whether a merge without CI may use the admin bypass.
-func (c Config) BypassesRulesets() bool { return c.MergesWithoutCI() && c.MergeBypassRulesets }
+func (c Config) BypassesRulesets() bool {
+	return (c.MergesWithoutCI() || c.MergesInQueue()) && c.MergeBypassRulesets
+}
+
+// MergeQueue configures merge: queue: one worker lands batches of PRs, tested
+// together. Empty numbers take their defaults.
+type MergeQueue struct {
+	// Check is the shell command a batch must pass.
+	Check string `yaml:"check,omitempty" json:"check,omitempty"`
+	// BatchSize is how many PRs a batch takes. Default 4.
+	BatchSize int `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
+	// MaxWaitMinutes is how long a PR waits for a batch to fill. Default 30.
+	MaxWaitMinutes int `yaml:"max_wait_minutes,omitempty" json:"max_wait_minutes,omitempty"`
+	// FlakyRetries is how many more times a failed check runs before it counts as
+	// a failure. Nil means 1.
+	FlakyRetries *int `yaml:"flaky_retries,omitempty" json:"flaky_retries,omitempty"`
+	// CheckTimeoutMinutes ends a check that hangs, which says nothing about the
+	// code. Default 120.
+	CheckTimeoutMinutes int `yaml:"check_timeout_minutes,omitempty" json:"check_timeout_minutes,omitempty"`
+}
+
+// MergesInQueue reports whether a local worker lands PRs in tested batches.
+func (c Config) MergesInQueue() bool { return c.Merge == "queue" }
+
+// QueueBatchSize is how many PRs a batch takes.
+func (c Config) QueueBatchSize() int {
+	if c.MergeQueue.BatchSize > 0 {
+		return c.MergeQueue.BatchSize
+	}
+	return 4
+}
+
+// QueueMaxWait is how long a PR waits for a batch to fill.
+func (c Config) QueueMaxWait() time.Duration {
+	if c.MergeQueue.MaxWaitMinutes > 0 {
+		return time.Duration(c.MergeQueue.MaxWaitMinutes) * time.Minute
+	}
+	return 30 * time.Minute
+}
+
+// QueueFlakyRetries is how many more runs a failed check gets.
+func (c Config) QueueFlakyRetries() int {
+	if c.MergeQueue.FlakyRetries != nil {
+		return *c.MergeQueue.FlakyRetries
+	}
+	return 1
+}
+
+// QueueCheckTimeout is how long a batch's check may run.
+func (c Config) QueueCheckTimeout() time.Duration {
+	if c.MergeQueue.CheckTimeoutMinutes > 0 {
+		return time.Duration(c.MergeQueue.CheckTimeoutMinutes) * time.Minute
+	}
+	return 2 * time.Hour
+}
+
+// ValidateMergeQueue checks merge: queue and its settings.
+func (c Config) ValidateMergeQueue() error {
+	q := c.MergeQueue
+	if !c.MergesInQueue() {
+		if q.Check != "" || q.BatchSize != 0 || q.MaxWaitMinutes != 0 || q.FlakyRetries != nil || q.CheckTimeoutMinutes != 0 {
+			return fmt.Errorf("merge_queue needs merge: queue")
+		}
+		return nil
+	}
+	if strings.TrimSpace(q.Check) == "" {
+		return fmt.Errorf("merge: queue needs merge_queue.check")
+	}
+	if strings.ContainsAny(q.Check, "\n\r") {
+		return fmt.Errorf("merge_queue.check must be one line")
+	}
+	if q.BatchSize < 0 || q.MaxWaitMinutes < 0 || q.CheckTimeoutMinutes < 0 || (q.FlakyRetries != nil && *q.FlakyRetries < 0) {
+		return fmt.Errorf("merge_queue must not be negative")
+	}
+	if c.MergeWait == "background" {
+		return fmt.Errorf("merge: queue and merge_wait: background disagree: pick one")
+	}
+	if c.MergeWithoutCI {
+		return fmt.Errorf("merge: queue already skips CI before merge, so it can't be combined with merge_without_ci")
+	}
+	return nil
+}
 
 // Limits caps work across every repository and worktree on one machine. Each
 // repository's own numbers apply to claims in that repository.
@@ -283,6 +366,7 @@ func (c Config) WithoutRelaxations() Config {
 	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads = "", "", "", "", ""
 	c.MergeWithoutCI, c.LocalCheck, c.MergeBypassRulesets = false, "", false
 	c.Cleanup = ""
+	c.MergeQueue = MergeQueue{}
 	c.Workflows.RunnerStart = ""
 	return c
 }
@@ -335,8 +419,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("policy_exempt_authors accepts only bot accounts like dependabot[bot], not %q", author)
 		}
 	}
-	if c.Merge != "" && c.Merge != "owner" && c.Merge != "agent" {
-		return fmt.Errorf("merge must be owner or agent")
+	if c.Merge != "" && c.Merge != "owner" && c.Merge != "agent" && c.Merge != "queue" {
+		return fmt.Errorf("merge must be owner, agent, or queue")
 	}
 	if c.CommitFormat != "" && c.CommitFormat != "issue-prefix" {
 		return fmt.Errorf("commit_format must be issue-prefix or unset")
@@ -374,13 +458,16 @@ func (c Config) Validate() error {
 	if strings.ContainsAny(c.LocalCheck, "\n\r") {
 		return fmt.Errorf("local_check must be one line")
 	}
-	if c.MergeBypassRulesets && !c.MergeWithoutCI {
-		return fmt.Errorf("merge_bypass_rulesets needs merge_without_ci")
+	if c.MergeBypassRulesets && !c.MergeWithoutCI && !c.MergesInQueue() {
+		return fmt.Errorf("merge_bypass_rulesets needs merge_without_ci or merge: queue")
 	}
 	if strings.ContainsAny(c.Cleanup, "\n\r") {
 		return fmt.Errorf("cleanup must be one line")
 	}
 	if err := c.ValidateLimits(); err != nil {
+		return err
+	}
+	if err := c.ValidateMergeQueue(); err != nil {
 		return err
 	}
 	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {

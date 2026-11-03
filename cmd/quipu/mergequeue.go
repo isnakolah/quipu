@@ -129,15 +129,37 @@ func requiredChecks(c model.Config) []string {
 
 // mergePull merges with a merge commit, pinned to the head the checks ran on.
 func mergePull(c model.Config, number int, view mergeView, flags ...string) error {
-	args := []string{"pr", "merge", view.URL, "--repo", c.Owner + "/" + c.Repository, "--merge", "--match-head-commit", view.HeadRefOid}
+	return mergePullMarked(c, number, view, "", flags...)
+}
+
+// mergeMessage is the flags that set a merge commit's message. A marker joins the
+// body rather than replacing it, since gh keeps only the last --body and the
+// repository's commit format needs its footer.
+func mergeMessage(c model.Config, number int, view mergeView, marker string) ([]string, error) {
 	if c.CommitFormat == policycheck.IssuePrefix {
 		subject, body, err := policycheck.IssuePrefixMessage(number, view.Title)
 		if err != nil {
-			return flowErr("commit-format", "%v", err)
+			return nil, flowErr("commit-format", "%v", err)
 		}
-		args = append(args, "--subject", subject, "--body", body)
+		if marker != "" {
+			body += "\n\n" + marker
+		}
+		return []string{"--subject", subject, "--body", body}, nil
 	}
-	if _, err := ghOutput(append(args, flags...)...); err != nil {
+	if marker != "" {
+		return []string{"--body", marker}, nil
+	}
+	return nil, nil
+}
+
+// mergePullMarked is mergePull with one more line in the merge commit's body.
+func mergePullMarked(c model.Config, number int, view mergeView, marker string, flags ...string) error {
+	args := []string{"pr", "merge", view.URL, "--repo", c.Owner + "/" + c.Repository, "--merge", "--match-head-commit", view.HeadRefOid}
+	message, err := mergeMessage(c, number, view, marker)
+	if err != nil {
+		return err
+	}
+	if _, err := ghOutput(append(append(args, message...), flags...)...); err != nil {
 		return flowErr("merge-blocked", "GitHub refused to merge %s: %v", view.URL, err)
 	}
 	return nil
@@ -322,7 +344,7 @@ func (w *watch) queuedMerge(state *liveWork) (bool, error) {
 		return false, nil
 	}
 	queued, ok := writer.LatestQueuedMerge(w.receipts)
-	if !ok {
+	if !ok || queued.Merge.Batch {
 		return false, nil
 	}
 	if !w.c.MergesInBackground() {

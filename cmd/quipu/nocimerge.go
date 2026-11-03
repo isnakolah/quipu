@@ -548,6 +548,7 @@ type ruleset struct {
 	Rules []struct {
 		Type       string `json:"type"`
 		Parameters struct {
+			Strict bool `json:"strict_required_status_checks_policy"`
 			Checks []struct {
 				Context string `json:"context"`
 			} `json:"required_status_checks"`
@@ -587,6 +588,16 @@ func (r ruleset) appliesTo(branch string) bool {
 	return matches(r.Conditions.RefName.Include) && !matches(r.Conditions.RefName.Exclude)
 }
 
+// requiresUpToDate reports whether this ruleset wants branches up to date.
+func (r ruleset) requiresUpToDate() bool {
+	for _, rule := range r.Rules {
+		if rule.Type == "required_status_checks" && rule.Parameters.Strict {
+			return true
+		}
+	}
+	return false
+}
+
 // requires names the checks in this ruleset that merge_without_ci may waive.
 func (r ruleset) requires(required []string) []string {
 	var found []string
@@ -610,6 +621,12 @@ func judgeRulesets(c model.Config, rulesets []ruleset) []doctorCheck {
 		if r.Enforcement != "active" || r.Target != "branch" || !r.appliesTo(c.DefaultBranch) {
 			continue
 		}
+		// The queue lands one PR on top of another, so each is behind for a moment.
+		if c.MergesInQueue() && r.requiresUpToDate() {
+			checks = append(checks, doctorCheck{"merge: queue", "fail",
+				fmt.Sprintf("ruleset %q requires branches to be up to date, so GitHub refuses every landing after a batch's first", r.Name),
+				"owner: run quipu protect --apply"})
+		}
 		found := r.requires(requiredChecks(c))
 		if len(found) == 0 {
 			continue
@@ -630,7 +647,7 @@ func judgeRulesets(c model.Config, rulesets []ruleset) []doctorCheck {
 
 // noCIChecks is what doctor adds when merge_without_ci is on.
 func noCIChecks(c model.Config) []doctorCheck {
-	if !c.MergesWithoutCI() {
+	if !c.MergesWithoutCI() && !c.MergesInQueue() {
 		return nil
 	}
 	rulesets, err := loadRulesets(c)

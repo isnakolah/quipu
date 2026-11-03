@@ -484,6 +484,7 @@ func TestDoctorFailsOnARulesetThatWouldRefuse(t *testing.T) {
 		r.Rules = append(r.Rules, struct {
 			Type       string `json:"type"`
 			Parameters struct {
+				Strict bool `json:"strict_required_status_checks_policy"`
 				Checks []struct {
 					Context string `json:"context"`
 				} `json:"required_status_checks"`

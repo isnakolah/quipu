@@ -43,6 +43,8 @@ type Request struct {
 	Import              *Import   `json:"import,omitempty"`
 	// Head is the PR head a merge.queue request was checked against.
 	Head string `json:"head,omitempty"`
+	// Reason is why the merge queue returned this work.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Import records where an imported Issue stood before Quipu. The Writer
@@ -94,6 +96,8 @@ type Receipt struct {
 	At          time.Time     `json:"at"`
 	State       *ReceiptState `json:"state,omitempty"`
 	Merge       *QueuedMerge  `json:"merge,omitempty"`
+	// EndsQueue names the queued merge this receipt ends.
+	EndsQueue string `json:"ends_queue,omitempty"`
 }
 
 // QueuedMerge is a PR the Writer merges when its checks pass. Its evidence is
@@ -106,6 +110,9 @@ type QueuedMerge struct {
 	// PR and GitHub showing the new head.
 	UpdatedFrom string   `json:"updated_from,omitempty"`
 	Evidence    Evidence `json:"evidence"`
+	// Batch marks a PR for the merge queue's worker, which the Writer's own
+	// merging leaves alone.
+	Batch bool `json:"batch,omitempty"`
 }
 
 // MergeResultID is the receipt that ends a queued merge.
@@ -121,13 +128,45 @@ func LatestQueuedMerge(receipts []Receipt) (Receipt, bool) {
 			continue
 		}
 		for _, later := range receipts {
-			if later.RequestID == MergeResultID(r) {
+			if later.RequestID == MergeResultID(r) || later.EndsQueue == r.RequestID {
 				return Receipt{}, false
 			}
 		}
 		return r, true
 	}
 	return Receipt{}, false
+}
+
+// ReturnedFromQueue returns the receipt that gave this claim's work back from the
+// merge queue, if the queue gave it back and it hasn't been queued again.
+func ReturnedFromQueue(receipts []Receipt) (Receipt, bool) {
+	since := CycleStart(receipts)
+	for i := len(receipts) - 1; i >= 0; i-- {
+		r := receipts[i]
+		if r.Result != "accepted" || r.At.Before(since) {
+			continue
+		}
+		if r.EndsQueue != "" {
+			return r, true
+		}
+		if r.Merge != nil {
+			return Receipt{}, false
+		}
+	}
+	return Receipt{}, false
+}
+
+// SameLogin reports whether two actors are the same GitHub account. A takeover
+// must keep the PR's author and the lease holder's login the same.
+func SameLogin(a, b string) bool { return a != "" && b != "" && actorLogin(a) == actorLogin(b) }
+
+// actorLogin is the login in provider/login[/session], or the actor itself.
+func actorLogin(actor string) string {
+	parts := strings.Split(actor, "/")
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return actor
 }
 
 func HashRequest(r Request) (string, error) {
