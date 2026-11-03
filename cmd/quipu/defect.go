@@ -199,23 +199,33 @@ func writerDefectCommand(args []string) error {
 	if err := json.Unmarshal(output, &run); err != nil {
 		return err
 	}
-	report := map[string]any{"run": run.URL, "workflow": run.Name, "apply": *apply}
-	if reason := defectSkip(c, run); reason != "" {
-		report["skipped"] = reason
-		return printValue(report, *asJSON)
-	}
-	output, err = ghOutput("api", "--paginate", repo+"/issues?state=all&per_page=100")
+	report, err := defectForRun(c, run, *apply, now)
 	if err != nil {
 		return err
+	}
+	return printValue(report, *asJSON)
+}
+
+// defectForRun files one Defect for a failed run, unless it has one or gets none.
+func defectForRun(c model.Config, run runFacts, apply bool, now time.Time) (map[string]any, error) {
+	repo := "repos/" + c.Owner + "/" + c.Repository
+	report := map[string]any{"run": run.URL, "workflow": run.Name, "apply": apply}
+	if reason := defectSkip(c, run); reason != "" {
+		report["skipped"] = reason
+		return report, nil
+	}
+	output, err := ghOutput("api", "--paginate", repo+"/issues?state=all&per_page=100")
+	if err != nil {
+		return nil, err
 	}
 	filed, err := markedIssues(output, defectMarker)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if number, ok := filed[fmt.Sprint(run.ID)]; ok {
 		report["skipped"] = fmt.Sprintf("run already has Defect #%d", number)
 		report["defect"] = number
-		return printValue(report, *asJSON)
+		return report, nil
 	}
 	var pulls []mergedPull
 	if output, err := ghOutput("api", fmt.Sprintf("%s/commits/%s/pulls", repo, run.HeadSHA)); err == nil {
@@ -233,13 +243,13 @@ func writerDefectCommand(args []string) error {
 		area = node.Area
 	}
 	report["issue"], report["epic"], report["warnings"] = issue, epic.Number, warnings
-	if !*apply {
+	if !apply {
 		report["title"] = defectTitle(run)
-		return printValue(report, *asJSON)
+		return report, nil
 	}
 	number, err := fileDefect(c, run, pull, issue, epic.Number, area, now)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	report["defect"] = number
 	report["status"] = "Ready"
@@ -247,7 +257,7 @@ func writerDefectCommand(args []string) error {
 		report["status"] = "Backlog"
 		report["next"] = fmt.Sprintf("the owner links #%d under an Epic and runs quipu ready %d", number, number)
 	}
-	return printValue(report, *asJSON)
+	return report, nil
 }
 
 // fileDefect creates the Defect and, with a parent Epic, records it Ready.

@@ -51,7 +51,10 @@ func requireWriterIdentity(trust writer.Trust, now time.Time) error {
 
 func writerCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: quipu writer {run|reconcile|defect}")
+		return errors.New("usage: quipu writer {run|reconcile|defect|serve}")
+	}
+	if args[0] == "serve" {
+		return writerServeCommand(args[1:])
 	}
 	if args[0] == "reconcile" {
 		return writerReconcileCommand(args[1:])
@@ -60,7 +63,7 @@ func writerCommand(args []string) error {
 		return writerDefectCommand(args[1:])
 	}
 	if args[0] != "run" {
-		return errors.New("usage: quipu writer {run|reconcile|defect}")
+		return errors.New("usage: quipu writer {run|reconcile|defect|serve}")
 	}
 	fs := flag.NewFlagSet("writer run", flag.ContinueOnError)
 	number := fs.Int("issue-number", 0, "issue number")

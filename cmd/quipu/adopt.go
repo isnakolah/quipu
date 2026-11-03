@@ -289,7 +289,7 @@ func workflowOptions(c model.Config) bootstrap.Options {
 	return bootstrap.Options{
 		Owner: c.Owner, ProjectNumber: c.Project.Number, DefaultBranch: c.DefaultBranch, RunsOn: runners,
 		QuipuVersion: pin, Schedule: c.Workflows.Cron(), WriterOnPullRequest: c.Workflows.PullRequestTrigger(),
-		DefectsFrom: c.Workflows.DefectWorkflows(),
+		DefectsFrom: c.Workflows.DefectWorkflows(), WriterSerial: c.Workflows.SerialWriter(),
 	}
 }
 

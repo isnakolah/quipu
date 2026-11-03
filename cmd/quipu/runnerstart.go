@@ -316,6 +316,9 @@ func parseQueuedJobs(output []byte) ([]queuedJob, error) {
 	return jobs, nil
 }
 
+// writerRunnerLabel names a runner kept free for the serial Writer.
+const writerRunnerLabel = "quipu-writer"
+
 // runnerSetup is what a repository's self-hosted runners need.
 type runnerSetup struct {
 	Labels [][]string `json:"labels"`
@@ -354,6 +357,9 @@ func planRunnerSetup(c model.Config, jobs []workflowJob) runnerSetup {
 	)
 	if c.Workflows.RunnerStart == "" {
 		setup.Steps = append(setup.Steps, "Optional: set workflows.runner_start in quipu.yml to a command that starts this runner from an agent's machine, so agents can start it when it is down.")
+	}
+	if c.Workflows.SerialWriter() && !hasRunnerLabel(c.Workflows.Runner("writer"), writerRunnerLabel) {
+		setup.Steps = append(setup.Steps, fmt.Sprintf("The serial Writer answers in seconds only while a runner is free, and a build holding the only runner makes claims wait. To answer during builds, add a second runner that only the Writer can use: ./config.sh --url %s --no-default-labels --labels %s, then set workflows.runs_on.writer: [%s] in quipu.yml and regenerate the workflows.", url, writerRunnerLabel, writerRunnerLabel))
 	}
 	setup.Steps = append(setup.Steps, "Check it: quipu doctor, then quipu runner status --json.")
 	return setup
@@ -428,6 +434,22 @@ func runnerConfigChecks(c model.Config, pathVersion string) []doctorCheck {
 		checks = append(checks, doctorCheck{"merge_wait", "warn", "merge_wait: background with workflows.schedule off: unless the Writer workflow has been regenerated to run when checks finish, a queued merge waits for an Issue event", "owner: quipu adopt --apply --replace, or set a schedule"})
 	}
 	return checks
+}
+
+// writerModeCheck warns when the committed Writer workflow isn't the one the config
+// asks for, which is the state between setting the flag and regenerating.
+func writerModeCheck(c model.Config, workflow string, found bool) []doctorCheck {
+	if !found {
+		return nil
+	}
+	serial := strings.Contains(workflow, "quipu writer serve")
+	switch {
+	case c.Workflows.SerialWriter() && !serial:
+		return []doctorCheck{{"writer mode", "warn", "workflows.writer_mode is serial, but the Writer workflow still starts a run per event", "owner: update workflows.quipu_version and the runner's quipu first, then regenerate quipu-writer.yml with quipu adopt --apply --replace and merge it through a PR"}}
+	case !c.Workflows.SerialWriter() && serial:
+		return []doctorCheck{{"writer mode", "warn", "the Writer workflow is serial, but workflows.writer_mode is not set", "owner: set workflows.writer_mode: serial, or regenerate the workflow to go back"}}
+	}
+	return nil
 }
 
 // pathQuipuVersion is the version of the quipu that hooks and runners find.

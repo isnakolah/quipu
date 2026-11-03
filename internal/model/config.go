@@ -81,8 +81,11 @@ type Workflows struct {
 	// QuipuVersion is the tag or commit the workflows install. A runner that
 	// already has quipu on its PATH uses that binary instead.
 	QuipuVersion string `yaml:"quipu_version,omitempty" json:"quipu_version,omitempty"`
+	// WriterMode "serial" has one Writer job apply requests in order, with events
+	// only waking it. Empty keeps a run per event.
+	WriterMode string `yaml:"writer_mode,omitempty" json:"writer_mode,omitempty"`
 	// Schedule is the Writer's cron schedule, or "off". Empty means every
-	// five minutes.
+	// five minutes, or every fifteen with a serial Writer.
 	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
 	// WriterOnPullRequest runs the Writer on PR events (default true). Turn
 	// it off to save runner time; the schedule still rechecks PR policy.
@@ -110,6 +113,10 @@ var WorkflowJobs = []string{"writer", "policy", "test"}
 
 const DefaultSchedule = "*/5 * * * *"
 
+// SerialSchedule is rarer: requests wake a serial Writer, so the schedule only
+// sweeps for what leaves no request.
+const SerialSchedule = "*/15 * * * *"
+
 // Runner returns the runner labels for job.
 func (w Workflows) Runner(job string) []string {
 	if labels := w.RunsOn[job]; len(labels) > 0 {
@@ -125,12 +132,18 @@ func (w Workflows) Runner(job string) []string {
 func (w Workflows) Cron() string {
 	switch w.Schedule {
 	case "":
+		if w.SerialWriter() {
+			return SerialSchedule
+		}
 		return DefaultSchedule
 	case "off":
 		return ""
 	}
 	return w.Schedule
 }
+
+// SerialWriter reports whether one Writer job serves every request.
+func (w Workflows) SerialWriter() bool { return w.WriterMode == "serial" }
 
 // PullRequestTrigger reports whether the Writer runs on PR events.
 func (w Workflows) PullRequestTrigger() bool {
@@ -154,6 +167,9 @@ var (
 )
 
 func (w Workflows) validate() error {
+	if w.WriterMode != "" && w.WriterMode != "serial" {
+		return fmt.Errorf("workflows.writer_mode must be serial or unset, not %q", w.WriterMode)
+	}
 	for job, labels := range w.RunsOn {
 		known := job == "default"
 		for _, name := range WorkflowJobs {

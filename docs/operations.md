@@ -76,7 +76,9 @@ When a workflow listed in `workflows.defects_from` (default `[CI]`) fails on the
 
 Set `defects_from: []` to turn this off.
 
-It runs on every Issue comment and Issue event, on PR events, every five minutes, on demand with `gh workflow run quipu-writer.yml`, and, once its workflow is regenerated with `merge_wait: background` on, when `Quipu policy` or a required check's workflow finishes, so a queued merge doesn't wait for the schedule. Event-triggered runs scan every Issue updated since the last successful Writer run began (`--since-last-run`), so nothing is lost when Actions drops queued runs (it keeps one per concurrency group) or a self-hosted runner sleeps for hours; scheduled runs scan every Issue. All reads page past 100 Issues.
+With `workflows.writer_mode: serial`, `quipu writer serve` runs instead: see [the serial Writer](owner-guide.md#the-serial-writer). It wakes on request comments, on failed or waking workflow runs, on the schedule (every 15 minutes unless set), and on dispatch. A failed default-branch run in `defects_from` gets its Defect by listing recent runs, so a pending run being replaced can't lose it. Runs that show as skipped are comments that weren't requests. `scripts/writer-proof.sh` proves this in real Actions on a disposable repository, and needs a pushed commit to pin.
+
+Otherwise it runs on every Issue comment and Issue event, on PR events, every five minutes, on demand with `gh workflow run quipu-writer.yml`, and, once its workflow is regenerated with `merge_wait: background` on, when `Quipu policy` or a required check's workflow finishes, so a queued merge doesn't wait for the schedule. Event-triggered runs scan every Issue updated since the last successful Writer run began (`--since-last-run`), so nothing is lost when Actions drops queued runs (it keeps one per concurrency group) or a self-hosted runner sleeps for hours; scheduled runs scan every Issue. All reads page past 100 Issues.
 
 ## Configuration
 
