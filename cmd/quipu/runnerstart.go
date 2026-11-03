@@ -359,7 +359,7 @@ func planRunnerSetup(c model.Config, jobs []workflowJob) runnerSetup {
 		setup.Steps = append(setup.Steps, "Optional: set workflows.runner_start in quipu.yml to a command that starts this runner from an agent's machine, so agents can start it when it is down.")
 	}
 	if c.Workflows.SerialWriter() && !hasRunnerLabel(c.Workflows.Runner("writer"), writerRunnerLabel) {
-		setup.Steps = append(setup.Steps, fmt.Sprintf("The serial Writer answers in seconds only while a runner is free, and a build holding the only runner makes claims wait. To answer during builds, add a second runner that only the Writer can use: ./config.sh --url %s --no-default-labels --labels %s, then set workflows.runs_on.writer: [%s] in quipu.yml and regenerate the workflows.", url, writerRunnerLabel, writerRunnerLabel))
+		setup.Steps = append(setup.Steps, fmt.Sprintf("The serial Writer answers quickly only while a runner is free, and a build holding the only runner makes claims wait. To answer during builds, add a second runner that only the Writer can use: ./config.sh --url %s --no-default-labels --labels %s, then set workflows.runs_on.writer: [%s] in quipu.yml and regenerate the workflows.", url, writerRunnerLabel, writerRunnerLabel))
 	}
 	setup.Steps = append(setup.Steps, "Check it: quipu doctor, then quipu runner status --json.")
 	return setup
