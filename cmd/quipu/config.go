@@ -174,6 +174,7 @@ var optionDefaults = map[string]any{
 	"merge_bypass_rulesets":            false,
 	"cleanup":                          "none",
 	"limits":                           "none",
+	"merge_queue":                      "none",
 	"guard_reads":                      "closed",
 	"workflows.runs_on":                map[string][]string{"default": {"ubuntu-latest"}},
 	"workflows.quipu_version":          "main",

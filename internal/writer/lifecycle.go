@@ -65,6 +65,50 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 			return WorkState{}, fmt.Errorf("merge queue applies to work In review, not %q", current.Status)
 		}
 		return current, nil
+	case "merge.batch":
+		if request.Evidence == nil || request.PR == "" || request.Head == "" {
+			return WorkState{}, fmt.Errorf("merge queue request requires evidence, pull request URL, and head")
+		}
+		if err := request.Evidence.Validate(); err != nil {
+			return WorkState{}, err
+		}
+		if err := sameHolder(current, request.Actor); err != nil {
+			return WorkState{}, err
+		}
+		if current.Status != "In review" {
+			if err := RequireTransition(current.Status, "In review"); err != nil {
+				return WorkState{}, err
+			}
+		}
+		current.Status = "In review"
+		return current, nil
+	case "queue.return":
+		if request.PR == "" || request.Reason == "" {
+			return WorkState{}, fmt.Errorf("queue return requires pull request URL and reason")
+		}
+		if err := sameHolder(current, request.Actor); err != nil {
+			return WorkState{}, err
+		}
+		if current.Status != "In review" {
+			return WorkState{}, fmt.Errorf("queue return applies to work In review, not %q", current.Status)
+		}
+		return current, nil
+	case "takeover":
+		if current.Status != "In review" {
+			return WorkState{}, fmt.Errorf("takeover applies to work In review, not %q", current.Status)
+		}
+		if !SameLogin(current.Lease.Holder, request.Actor) {
+			return WorkState{}, fmt.Errorf("takeover needs the same login as %s", current.Lease.Holder)
+		}
+		if request.Branch != current.Lease.Branch {
+			return WorkState{}, fmt.Errorf("takeover keeps branch %s, not %q", current.Lease.Branch, request.Branch)
+		}
+		expires, err := requestExpiry(request.LeaseExpiresAt, now)
+		if err != nil {
+			return WorkState{}, err
+		}
+		current.Lease.Holder, current.Lease.Expires = request.Actor, expires
+		return current, nil
 	case "status":
 		if request.Status == "" {
 			return WorkState{}, fmt.Errorf("status request requires status")
@@ -169,9 +213,14 @@ func AlreadyApplied(current WorkState, request Request, receipts []Receipt, now 
 		return byHolder && (current.Status == "In review" || current.Status == "Evidence pending" || current.Status == "Done")
 	case "evidence.submit":
 		return byHolder && (current.Status == "Evidence pending" || current.Status == "Done") && evidenceRecorded(receipts, request.Evidence)
-	case "merge.queue":
+	case "merge.queue", "merge.batch":
 		queued, ok := LatestQueuedMerge(receipts)
 		return ok && byHolder && current.Status == "In review" && queued.Merge.PR == request.PR && queued.Merge.Head == request.Head
+	case "queue.return":
+		_, returned := ReturnedFromQueue(receipts)
+		return returned && byHolder
+	case "takeover":
+		return byHolder && current.Status == "In review" && request.Branch == current.Lease.Branch
 	case "status":
 		return request.Status != "" && request.Status != "Claimed" && current.Status == request.Status && (holder == "" || byHolder)
 	case "release", "resume":

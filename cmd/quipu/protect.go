@@ -58,7 +58,7 @@ func mainRuleset(c model.Config, adminsExempt bool) map[string]any {
 				"required_review_thread_resolution": true, "allowed_merge_methods": []string{"merge", "squash", "rebase"},
 			}},
 			{"type": "required_status_checks", "parameters": map[string]any{
-				"strict_required_status_checks_policy": true, "do_not_enforce_on_create": false, "required_status_checks": checks,
+				"strict_required_status_checks_policy": !c.MergesInQueue(), "do_not_enforce_on_create": false, "required_status_checks": checks,
 			}},
 		},
 	}

@@ -14,6 +14,8 @@ func tryLockFile(*os.File) (bool, error) { return false, errors.New("no file loc
 
 func freeDiskBytes(string) (uint64, error) { return 0, errors.New("not supported here") }
 
+func killGroup(cmd *exec.Cmd) error { return cmd.Process.Kill() }
+
 // detach does nothing here: Windows does not signal a process group on exit.
 func detach(*exec.Cmd) {}
 

@@ -79,3 +79,72 @@ func TestUnanswered(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestMergeBatchLifecycle(t *testing.T) {
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	e := &Evidence{FinalSHA: "p", CIURL: "p", Commands: "c", Environments: "e", Criteria: "c", Artifacts: "a", Documentation: "d", Risks: "r", Boundary: "local"}
+	held := Lease{Holder: "claude/octo/x", Branch: "1/a", Expires: now.Add(time.Hour)}
+	queue := Request{Action: "merge.batch", Actor: "claude/octo/x", PR: "u", Head: "h", Evidence: e}
+	for _, status := range []string{"In progress", "In review"} {
+		next, err := ApplyLifecycle(WorkState{Status: status, Lease: held}, queue, now)
+		if err != nil || next.Status != "In review" || next.Lease.Holder != held.Holder {
+			t.Fatalf("%s: %+v, %v", status, next, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		current WorkState
+		request Request
+	}{
+		"not the holder": {WorkState{Status: "In progress", Lease: held}, Request{Action: "merge.batch", Actor: "claude/octo/y", PR: "u", Head: "h", Evidence: e}},
+		"not started":    {WorkState{Status: "Ready"}, queue},
+		"no evidence":    {WorkState{Status: "In progress", Lease: held}, Request{Action: "merge.batch", Actor: held.Holder, PR: "u", Head: "h"}},
+		"no head":        {WorkState{Status: "In progress", Lease: held}, Request{Action: "merge.batch", Actor: held.Holder, PR: "u", Evidence: e}},
+		"return, no why": {WorkState{Status: "In review", Lease: held}, Request{Action: "queue.return", Actor: held.Holder, PR: "u"}},
+		"return, Ready":  {WorkState{Status: "Ready", Lease: held}, Request{Action: "queue.return", Actor: held.Holder, PR: "u", Reason: "x"}},
+		"another login":  {WorkState{Status: "In review", Lease: held}, Request{Action: "takeover", Actor: "claude/other/x", Branch: "1/a"}},
+		"another branch": {WorkState{Status: "In review", Lease: held}, Request{Action: "takeover", Actor: "codex/octo/y", Branch: "2/b"}},
+		"not in review":  {WorkState{Status: "In progress", Lease: held}, Request{Action: "takeover", Actor: "codex/octo/y", Branch: "1/a"}},
+	} {
+		if _, err := ApplyLifecycle(tc.current, tc.request, now); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	next, err := ApplyLifecycle(WorkState{Status: "In review", Lease: held}, Request{Action: "takeover", Actor: "codex/octo/y", Branch: "1/a"}, now)
+	if err != nil || next.Lease.Holder != "codex/octo/y" || next.Status != "In review" || !next.Lease.Expires.After(now) {
+		t.Fatalf("%+v, %v", next, err)
+	}
+	if next, err := ApplyLifecycle(WorkState{Status: "In review", Lease: held}, Request{Action: "queue.return", Actor: held.Holder, PR: "u", Reason: "x"}, now); err != nil || next.Lease.Holder != held.Holder {
+		t.Fatalf("%+v, %v", next, err)
+	}
+}
+
+func TestQueueEntriesEndAndReturn(t *testing.T) {
+	at := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	queued := Receipt{RequestID: "q", Result: "accepted", At: at, Merge: &QueuedMerge{PR: "u", Head: "h", Batch: true}}
+	if _, ok := LatestQueuedMerge([]Receipt{queued}); !ok {
+		t.Fatal("queued")
+	}
+	if _, returned := ReturnedFromQueue([]Receipt{queued}); returned {
+		t.Fatal("not returned yet")
+	}
+	back := Receipt{RequestID: "r", Result: "accepted", At: at.Add(time.Minute), Detail: "why", EndsQueue: "q"}
+	if _, ok := LatestQueuedMerge([]Receipt{queued, back}); ok {
+		t.Fatal("it left the queue")
+	}
+	if got, returned := ReturnedFromQueue([]Receipt{queued, back}); !returned || got.Detail != "why" {
+		t.Fatalf("%+v %v", got, returned)
+	}
+	again := Receipt{RequestID: "q2", Result: "accepted", At: at.Add(2 * time.Minute), Merge: &QueuedMerge{PR: "u", Head: "h2", Batch: true}}
+	if got, ok := LatestQueuedMerge([]Receipt{queued, back, again}); !ok || got.Merge.Head != "h2" {
+		t.Fatalf("queued again: %+v %v", got, ok)
+	}
+	if _, returned := ReturnedFromQueue([]Receipt{queued, back, again}); returned {
+		t.Fatal("queued again means not returned")
+	}
+	if !SameLogin("claude/octo/a", "codex/octo/b") || !SameLogin("octo", "octo") || SameLogin("claude/octo/a", "claude/other/a") {
+		t.Fatal("logins")
+	}
+	if !AlreadyApplied(WorkState{Status: "In review", Lease: Lease{Holder: "h"}}, Request{Action: "queue.return", Actor: "h"}, []Receipt{queued, back}, at) {
+		t.Fatal("a repeated return changes nothing")
+	}
+}

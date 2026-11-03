@@ -145,6 +145,27 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 			return rejectedReceipt(request, err)
 		}
 	}
+	if request.Action == "merge.batch" {
+		if !c.MergesInQueue() {
+			return rejectedReceipt(request, errors.New("merge.batch needs merge: queue on the default branch"))
+		}
+		if err := validateReviewPR(c, number, state.Branch, request.PR); err != nil {
+			return rejectedReceipt(request, err)
+		}
+	}
+	var endsQueue string
+	if request.Action == "queue.return" {
+		queued, ok := writer.LatestQueuedMerge(receipts)
+		if !ok || !queued.Merge.Batch || queued.Merge.PR != request.PR {
+			return rejectedReceipt(request, errors.New("this PR is not in the merge queue"))
+		}
+		endsQueue = queued.RequestID
+	}
+	if request.Action == "takeover" {
+		if _, returned := writer.ReturnedFromQueue(receipts); !returned {
+			return rejectedReceipt(request, errors.New("takeover applies only to work the merge queue returned"))
+		}
+	}
 	if request.Action == "import" && writer.LastState(receipts) != nil {
 		return rejectedReceipt(request, errors.New("import applies only to work that has not entered the flow"))
 	}
@@ -178,6 +199,17 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if request.Action == "merge.queue" {
 		receipt.Detail = "merge queued; the Writer merges when the checks pass"
 		receipt.Merge = &writer.QueuedMerge{PR: request.PR, Head: request.Head, Evidence: *request.Evidence}
+	}
+	if request.Action == "merge.batch" {
+		receipt.Detail = "queued for the merge queue, which tests it in a batch"
+		receipt.Merge = &writer.QueuedMerge{PR: request.PR, Head: request.Head, Evidence: *request.Evidence, Batch: true}
+	}
+	if request.Action == "queue.return" {
+		receipt.Detail = "returned by the merge queue: " + request.Reason
+		receipt.EndsQueue = endsQueue
+	}
+	if request.Action == "takeover" {
+		receipt.Detail = "taken over by " + request.Actor + " after the merge queue returned it"
 	}
 	return receipt
 }
@@ -294,6 +326,9 @@ func validateEvidence(c model.Config, number int, branch, pr string, evidence *w
 	}
 	if isNoCIEvidence(evidence.CIURL) {
 		return checkNoCIEvidence(c, *evidence, view)
+	}
+	if isQueueEvidence(evidence.CIURL) {
+		return checkQueueEvidence(c, *evidence, view)
 	}
 	return checkCIRun(c, evidence.CIURL, view)
 }

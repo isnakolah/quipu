@@ -58,6 +58,8 @@ type statusReport struct {
 	PullRequests []pullReport `json:"pull_requests"`
 	// Machine is this computer's slots and disk, when limits are set.
 	Machine *machineReport `json:"machine,omitempty"`
+	// Queue is the merge queue, in merge: queue.
+	Queue *queueReport `json:"queue,omitempty"`
 }
 
 func statusCommand(args []string) error {
@@ -75,7 +77,7 @@ func statusCommand(args []string) error {
 		return err
 	}
 	report := buildStatusReport(c.Owner+"/"+c.Repository, items, time.Now())
-	report.OwnerQueue = ownerQueue(items, c.AgentsMerge(), time.Now())
+	report.OwnerQueue = ownerQueue(items, c.AgentsMerge() || c.MergesInQueue(), time.Now())
 	actor := ""
 	if here, err := currentWorktree(); err == nil {
 		actor, _ = resolveActor(here, "", 0)
@@ -88,6 +90,10 @@ func statusCommand(args []string) error {
 	report.OwnerQueue, report.Attention = addPullsToQueues(report.OwnerQueue, report.Attention, report.PullRequests, titles)
 	if here, err := currentWorktree(); err == nil {
 		report.Machine = loadMachineReport(enforcedLimits(c, here, false), here.Top, time.Now())
+		if enforced, source, err := loadEnforcedConfig(here, false); err == nil && source != configSourceWorktree {
+			addQueueToReport(&report, loadQueueReport(enforced, here, func() ([]queueMember, []queueReturned, error) { return queuedAmong(enforced, items) }))
+			ensureQueueWorker(enforced, here)
+		}
 	}
 	if *asJSON {
 		return printValue(report, true)
@@ -311,6 +317,7 @@ func renderStatus(report statusReport, now time.Time) string {
 		}
 	}
 	b.WriteString(renderMachine(report.Machine))
+	b.WriteString(renderQueue(report.Queue))
 	return b.String()
 }
 
@@ -365,6 +372,10 @@ func startCommand(args []string) error {
 		return err
 	}
 	c = enforcedLimits(c, here, true)
+	if enforced, source, err := loadEnforcedConfig(here, false); err == nil && source != configSourceWorktree {
+		c.Merge, c.MergeQueue = enforced.Merge, enforced.MergeQueue
+		ensureQueueWorker(c, here)
+	}
 	// Before any request: the Writer that answers it may be on that runner.
 	note := ensureRunner(c, here)
 	respond := func(result flowResult) error {
@@ -503,6 +514,13 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, wait); err != nil {
 			return flowResult{}, err
 		}
+		if state, err = loadLiveWork(c, number); err != nil {
+			return flowResult{}, err
+		}
+	}
+	if took, err := takeOverReturned(c, number, state, actor, wait); err != nil {
+		return flowResult{}, err
+	} else if took {
 		if state, err = loadLiveWork(c, number); err != nil {
 			return flowResult{}, err
 		}
@@ -675,6 +693,16 @@ func doneCommand(args []string) error {
 	if state.Status == "Claimed" || state.Status == "In progress" || state.Status == "In review" {
 		if pull, err = findPullRequest(c, *prFlag, state.Branch); err != nil {
 			return err
+		}
+	}
+	if c.MergesInQueue() && source != configSourceWorktree && (state.Status == "Claimed" || state.Status == "In progress" || state.Status == "In review") {
+		// A rerun after the queue landed it finds the worker recording the evidence.
+		if pull.State == "OPEN" {
+			return queueForBatch(c, w, number, actor, pull, state, cleanup, e, *wait, respond)
+		}
+		if pull.State == "MERGED" {
+			ensureQueueWorker(c, w)
+			return respond(flowResult{Issue: number, Status: state.Status, PR: pull.URL, Next: "Merged. The merge queue's worker records the evidence and the Writer closes the Issue. Take other work."})
 		}
 	}
 	if state.Status == "Claimed" || state.Status == "In progress" {
@@ -1323,7 +1351,7 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 // actions that depend on earlier evidence or a queued merge read the comments.
 func requestApplied(c model.Config, client *github.Client, number int, state liveWork, r writer.Request) bool {
 	var receipts []writer.Receipt
-	if r.Action == "evidence.submit" || r.Action == "merge.queue" {
+	if r.Action == "evidence.submit" || r.Action == "merge.queue" || r.Action == "merge.batch" || r.Action == "queue.return" {
 		comments, err := client.ListComments(context.Background(), c.Owner, c.Repository, number)
 		if err != nil {
 			return false

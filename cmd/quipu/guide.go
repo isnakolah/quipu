@@ -47,6 +47,7 @@ var flagRules = []flagRule{
 	{model.Config.MergesWithoutCI, "- **`merge_without_ci`:** when required checks are pending, skipped, never ran, or were cancelled before starting, `quipu done` merges anyway, once this worktree is clean and at the PR's head, the policy rules pass, and `local_check` exits 0. Run it with `--boundary local`, never `CI`. A check that ran and failed still blocks. The evidence records that the merge skipped CI. If the merge lands and the Writer does not answer, rerun the same command.\n"},
 	{model.Config.CleansUp, "- **`cleanup`:** do not run this repository's cleanup yourself. Quipu runs it in your worktree after the last step that needs the build, including when `quipu worktree remove` takes the worktree away. If it fails, the result's `warnings` says so, and the work still counts as finished.\n"},
 	{model.Config.LimitsMachine, "- **`limits`:** this machine caps how much runs at once, across every repository on it. `quipu start` may return `\"status\": \"Busy\"` with a `reason` and claim nothing: finish any work you hold, and when none is left, report the reason and stop. Don't poll. Work you already hold always resumes, and `--next` first offers Ready work that needs no build slot. A long `local_check` holds a slot too, and stops with `machine-busy` when none is free. Your slot lasts while you make tool calls, and frees itself when you go quiet or your lease ends.\n"},
+	{model.Config.MergesInQueue, "- **`merge: queue`:** `quipu done N --json` with every evidence flag and `--boundary local` queues your PR and returns at once, freeing this worktree and its build slot, so take other work. Run the check yourself first if you want to, but the queue runs the repository's check on the PR merged with the latest default branch and the PRs ahead of it. If it passes, the queue lands your PR and the Writer closes the Issue. If your PR is at fault or conflicts, it returns to In review with the failure attached: `quipu status --json` lists it under `queue.returned`. Run `quipu start N --json`, fix it, push, and run `quipu done` again; another worktree of the same login can take it over this way. Pushing after queueing takes the PR out of the queue. `quipu queue status --json` shows the queue. You never run the worker.\n"},
 	{model.Config.GuardReadsOpen, "- **`guard_reads: open`:** the guard also treats more read-only commands as reads, such as `git tag --sort`. Interpreters stay denied, and so does everything else in the handbook.\n"},
 }
 
@@ -81,7 +82,7 @@ var flagErrorOn = map[string]func(model.Config) bool{
 	"base-moved":         model.Config.UpdatesBehind,
 	"local-check-failed": model.Config.MergesWithoutCI,
 	"worktree-unclean":   model.Config.MergesWithoutCI,
-	"policy-rules":       model.Config.MergesWithoutCI,
+	"policy-rules":       func(c model.Config) bool { return c.MergesWithoutCI() || c.MergesInQueue() },
 }
 
 // handbookCheck compares the committed handbook with what the config in force
