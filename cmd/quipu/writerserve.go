@@ -432,6 +432,11 @@ func writerServeCommand(args []string) error {
 			if err := sweepFailedRuns(c, true, now); err != nil {
 				failures = append(failures, "failed runs: "+err.Error())
 			}
+			if window == 0 {
+				if err := runNightlySlowChecks(c, now); err != nil {
+					failures = append(failures, "slow checks: "+err.Error())
+				}
+			}
 			if len(failures) > 0 {
 				return errors.New(strings.Join(failures, "; "))
 			}

@@ -47,6 +47,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu done N --json` | PR open: move to review | `status: "In review"`, `pr`, `next` |
 | `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` | PR merged: record evidence and close | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
+| `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
 | `quipu worktree remove N --json` | to free a finished worktree, by Issue number or path | `status: "Removed"`, `worktree`, `warnings`, `next` |
 | `quipu guide` | to read this handbook | this text |
@@ -145,6 +146,10 @@ The Writer rejects evidence unless the PR is merged from your leased branch with
 - An expired lease that nobody else took can be re-taken with `quipu start N --json`.
 - Claimed and In progress work whose lease expires returns to Ready, so another agent may take it, unless its branch has an open PR: that work stays yours, and `quipu start N --json` renews it. Work In review keeps its holder.
 - The guard checks your lease against GitHub at most every five minutes, so it stays fast with many agents.
+
+## Parking on a Decision
+
+When your work can't go on until the owner decides something, commit and push what you have, then run `quipu park N --on D --json`, where D is an open Decision. Your Issue moves to Blocked and keeps its branch, your lease and build slot are freed, and the owner sees it in `owner_queue`. Then take other work. When the work is Ready again, `quipu start N --json` picks it up from its branch, in any worktree.
 
 ## Proposing work
 

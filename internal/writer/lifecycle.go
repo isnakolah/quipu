@@ -182,6 +182,17 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 			return WorkState{}, err
 		}
 		return WorkState{Status: "Blocked", Lease: Lease{Branch: current.Lease.Branch}}, nil
+	case "park":
+		if request.On < 1 {
+			return WorkState{}, fmt.Errorf("park needs the Decision it waits for")
+		}
+		if err := activeHolder(current, request.Actor, now); err != nil {
+			return WorkState{}, err
+		}
+		if err := RequireTransition(current.Status, "Blocked"); err != nil {
+			return WorkState{}, err
+		}
+		return WorkState{Status: "Blocked", Lease: Lease{Branch: current.Lease.Branch}}, nil
 	case "import":
 		return applyImport(current, request)
 	case "resume":
@@ -225,7 +236,7 @@ func AlreadyApplied(current WorkState, request Request, receipts []Receipt, now 
 		return request.Status != "" && request.Status != "Claimed" && current.Status == request.Status && (holder == "" || byHolder)
 	case "release", "resume":
 		return current.Status == "Ready" && holder == ""
-	case "block":
+	case "block", "park":
 		return current.Status == "Blocked" && holder == ""
 	case "import":
 		return request.Import != nil && importRecorded(receipts, *request.Import)

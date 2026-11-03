@@ -64,6 +64,16 @@ type Config struct {
 	// it there after the last step that needs the build, so a repository's
 	// agents never have to order it around local_check.
 	Cleanup string `yaml:"cleanup,omitempty" json:"cleanup,omitempty"`
+	// AutoReady moves work to Ready when its last blocker closes, unless it is
+	// labelled quipu:needs-owner. Decisions and Gates never move.
+	AutoReady bool `yaml:"auto_ready,omitempty" json:"auto_ready,omitempty"`
+	// Dispatch configures quipu daemon.
+	Dispatch Dispatch `yaml:"dispatch,omitempty" json:"dispatch,omitempty"`
+	// ScopedChecks choose what merge: queue and merge_without_ci run from the paths
+	// a change touches.
+	ScopedChecks []ScopedCheck `yaml:"scoped_checks,omitempty" json:"scoped_checks,omitempty"`
+	// SlowChecks are workflows run on the default branch per batch or nightly.
+	SlowChecks []SlowCheck `yaml:"slow_checks,omitempty" json:"slow_checks,omitempty"`
 	// MergeQueue configures merge: queue.
 	MergeQueue MergeQueue `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
 	// Limits caps what agents may start on this machine. Unset, nothing is capped.
@@ -232,6 +242,185 @@ func (c Config) BypassesRulesets() bool {
 	return (c.MergesWithoutCI() || c.MergesInQueue()) && c.MergeBypassRulesets
 }
 
+// Dispatch configures quipu daemon.
+type Dispatch struct {
+	// AgentCommand runs through sh in each new worktree. It gets QUIPU_ISSUE,
+	// QUIPU_BRANCH, QUIPU_WORKTREE and QUIPU_PROMPT.
+	AgentCommand string `yaml:"agent_command,omitempty" json:"agent_command,omitempty"`
+	// MaxAgents caps agents at once on this clone; limits.build_slots caps builds
+	// across the machine. Zero means 2.
+	MaxAgents int `yaml:"max_agents,omitempty" json:"max_agents,omitempty"`
+	// PollSeconds is how often it looks. Zero means 60.
+	PollSeconds int `yaml:"poll_seconds,omitempty" json:"poll_seconds,omitempty"`
+}
+
+// Dispatches reports whether quipu daemon has a command to run.
+func (c Config) Dispatches() bool { return c.Dispatch.AgentCommand != "" }
+
+// DispatchMaxAgents is the agents quipu daemon runs at once.
+func (c Config) DispatchMaxAgents() int {
+	if c.Dispatch.MaxAgents > 0 {
+		return c.Dispatch.MaxAgents
+	}
+	return 2
+}
+
+// DispatchPoll is how often quipu daemon looks.
+func (c Config) DispatchPoll() time.Duration {
+	if c.Dispatch.PollSeconds > 0 {
+		return time.Duration(c.Dispatch.PollSeconds) * time.Second
+	}
+	return time.Minute
+}
+
+// ScopedCheck runs Command when a change touches Paths. With no Command, those paths
+// need no check at all, which is how docs skip builds.
+type ScopedCheck struct {
+	Command string   `yaml:"command,omitempty" json:"command,omitempty"`
+	Paths   []string `yaml:"paths" json:"paths"`
+}
+
+// SlowCheck is a workflow too slow for every change.
+type SlowCheck struct {
+	Workflow string `yaml:"workflow" json:"workflow"`
+	When     string `yaml:"when" json:"when"` // batch | nightly
+}
+
+// ScopeChoice is what to run for a change, and why, for the evidence.
+type ScopeChoice struct {
+	// Command is what to run. Empty means nothing needs to.
+	Command string
+	Reason  string
+}
+
+// ScopedCommand picks what a change runs. A path no entry names runs the full check:
+// forgetting to list a directory must cost a build, never skip one.
+func (c Config) ScopedCommand(paths []string, full string) ScopeChoice {
+	if len(c.ScopedChecks) == 0 {
+		return ScopeChoice{Command: full}
+	}
+	if len(paths) == 0 {
+		return ScopeChoice{Command: full, Reason: "scoped_checks: no changed paths to go on, so the full check ran"}
+	}
+	chosen := map[int]bool{}
+	for _, path := range paths {
+		named := false
+		for i, check := range c.ScopedChecks {
+			for _, glob := range check.Paths {
+				if GlobMatches(glob, path) {
+					named, chosen[i] = true, true
+				}
+			}
+		}
+		if !named {
+			return ScopeChoice{Command: full, Reason: fmt.Sprintf("scoped_checks: %s is named by no entry, so the full check ran", path)}
+		}
+	}
+	var run, skipped []string
+	for i, check := range c.ScopedChecks {
+		if check.Command == "" || slices.Contains(run, check.Command) {
+			continue
+		}
+		if chosen[i] {
+			run = append(run, check.Command)
+		}
+	}
+	for i, check := range c.ScopedChecks {
+		if check.Command != "" && !chosen[i] && !slices.Contains(run, check.Command) && !slices.Contains(skipped, check.Command) {
+			skipped = append(skipped, check.Command)
+		}
+	}
+	shown := paths
+	if len(shown) > 5 {
+		shown = shown[:5]
+	}
+	changed := strings.Join(shown, ", ")
+	if len(run) == 0 {
+		return ScopeChoice{Reason: fmt.Sprintf("scoped_checks: nothing ran, because the changed paths need no check: %s", changed)}
+	}
+	reason := "scoped_checks: ran " + strings.Join(run, " and ") + " for " + changed
+	if len(skipped) > 0 {
+		reason += "; skipped " + strings.Join(skipped, " and ") + ", because none of its paths changed"
+	}
+	return ScopeChoice{Command: strings.Join(run, " && "), Reason: reason}
+}
+
+// GlobMatches matches a repository path: * and ? stay within a directory, and **
+// crosses them.
+func GlobMatches(glob, path string) bool {
+	pattern, err := globPattern(glob)
+	return err == nil && pattern.MatchString(path)
+}
+
+func globPattern(glob string) (*regexp.Regexp, error) {
+	if glob == "" || strings.HasPrefix(glob, "/") || slices.Contains(strings.Split(glob, "/"), "..") {
+		return nil, fmt.Errorf("%q must be a path relative to the repository root", glob)
+	}
+	var out strings.Builder
+	out.WriteString("^")
+	for i := 0; i < len(glob); i++ {
+		switch {
+		case strings.HasPrefix(glob[i:], "**/"):
+			out.WriteString("(?:.*/)?")
+			i += 2
+		case strings.HasPrefix(glob[i:], "**"):
+			out.WriteString(".*")
+			i++
+		case glob[i] == '*':
+			out.WriteString("[^/]*")
+		case glob[i] == '?':
+			out.WriteString("[^/]")
+		default:
+			out.WriteString(regexp.QuoteMeta(string(glob[i])))
+		}
+	}
+	out.WriteString("$")
+	return regexp.Compile(out.String())
+}
+
+// ValidateAutonomy checks dispatch, scoped_checks and slow_checks.
+func (c Config) ValidateAutonomy() error {
+	d := c.Dispatch
+	if d.AgentCommand == "" && (d.MaxAgents != 0 || d.PollSeconds != 0) {
+		return fmt.Errorf("dispatch needs agent_command")
+	}
+	if d.MaxAgents < 0 || d.PollSeconds < 0 {
+		return fmt.Errorf("dispatch.max_agents and dispatch.poll_seconds cannot be negative")
+	}
+	if len(c.ScopedChecks) > 0 && !c.MergesInQueue() && !c.MergesWithoutCI() {
+		return fmt.Errorf("scoped_checks choose what merge: queue or merge_without_ci runs; neither is on")
+	}
+	for i, check := range c.ScopedChecks {
+		if len(check.Paths) == 0 {
+			return fmt.Errorf("scoped_checks[%d] needs paths", i)
+		}
+		for _, glob := range check.Paths {
+			if _, err := globPattern(glob); err != nil {
+				return fmt.Errorf("scoped_checks[%d]: %w", i, err)
+			}
+		}
+	}
+	for i, check := range c.SlowChecks {
+		switch check.When {
+		case "nightly":
+		case "batch":
+			if !c.MergesInQueue() {
+				return fmt.Errorf("slow_checks[%d]: when: batch needs merge: queue", i)
+			}
+		default:
+			return fmt.Errorf("slow_checks[%d]: when must be batch or nightly, not %q", i, check.When)
+		}
+		if !workflowName.MatchString(check.Workflow) {
+			return fmt.Errorf("slow_checks[%d]: invalid workflow %q", i, check.Workflow)
+		}
+		// A failure no one files is a check no one runs.
+		if !slices.Contains(c.Workflows.DefectWorkflows(), check.Workflow) {
+			return fmt.Errorf("slow_checks[%d]: %q must be in workflows.defects_from, so that its failure opens a Defect", i, check.Workflow)
+		}
+	}
+	return nil
+}
+
 // MergeQueue configures merge: queue: one worker lands batches of PRs, tested
 // together. Empty numbers take their defaults.
 type MergeQueue struct {
@@ -383,6 +572,7 @@ func (c Config) WithoutRelaxations() Config {
 	c.MergeWithoutCI, c.LocalCheck, c.MergeBypassRulesets = false, "", false
 	c.Cleanup = ""
 	c.MergeQueue = MergeQueue{}
+	c.AutoReady, c.Dispatch, c.ScopedChecks, c.SlowChecks = false, Dispatch{}, nil, nil
 	c.Workflows.RunnerStart = ""
 	return c
 }
@@ -481,6 +671,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("cleanup must be one line")
 	}
 	if err := c.ValidateLimits(); err != nil {
+		return err
+	}
+	if err := c.ValidateAutonomy(); err != nil {
 		return err
 	}
 	if err := c.ValidateMergeQueue(); err != nil {

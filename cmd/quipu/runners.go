@@ -451,6 +451,14 @@ type ownerItem struct {
 	Reason string `json:"reason"`
 }
 
+func issueList(numbers []int) string {
+	names := make([]string, len(numbers))
+	for i, number := range numbers {
+		names[i] = fmt.Sprintf("#%d", number)
+	}
+	return strings.Join(names, ", ")
+}
+
 // ownerQueue lists what waits on the owner and why. Agents leave these alone
 // and take other work.
 func ownerQueue(items []statusItem, agentsMerge bool, now time.Time) []ownerItem {
@@ -470,6 +478,8 @@ func ownerQueue(items []statusItem, agentsMerge bool, now time.Time) []ownerItem
 			if !agentsMerge {
 				reason = "review and merge its PR"
 			}
+		case item.Status == "Blocked" && len(item.WaitingOn) > 0:
+			reason = "parked, waiting on " + issueList(item.WaitingOn)
 		case item.Status == "Blocked":
 			reason = "blocked; decide how to unblock it"
 		case item.Status == "Claimed" || item.Status == "In progress":

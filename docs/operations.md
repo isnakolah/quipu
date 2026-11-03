@@ -105,6 +105,8 @@ Otherwise it runs on every Issue comment and Issue event, on PR events, every fi
 
 `scripts/behind-proof.sh` proves on a disposable, unprotected repository that a behind PR doesn't merge, that a semantic conflict between two PRs stops at `local_check`, that a repeated `quipu done` succeeds, and that a finished worktree can be removed.
 
+`scripts/dispatch-proof.sh` proves parking, `auto_ready` and the daemon on a disposable repository: an agent parks on a Decision, closing it makes the work Ready, and `quipu daemon --once` takes it and starts the configured command.
+
 `scripts/queue-proof.sh` proves the merge queue on a disposable repository: a clean batch that runs its check once and honours `[skip ci]`, a bad PR returned alone and taken over from a new worktree, and a worker killed during a check. Conflicts, flakes, bisecting a larger batch and a foreign commit are covered by tests against a local origin, not by this script. The worker spends little of the login's hourly GraphQL allowance while it waits: it reads the newest comment over REST and passes over the board only when that changes, at the batch timer, or every 5 minutes.
 
 `scripts/limits-proof.sh` proves `quipu start` against real claims: a second build on a full machine is `Busy` and stays Ready, `--next` takes work that needs no slot, and moving work to review frees its slot.
@@ -117,7 +119,7 @@ Otherwise it runs on every Issue comment and Issue event, on PR events, every fi
 
 `quipu adopt --apply` works in a clone of an existing repository. Its audit counts Issues, not PRs, and the first adoption refuses a repository that already has Issues. Each step reads what GitHub has and changes only what is missing, so it can run any number of times:
 
-- labels (`kind:`, `area:`, `quipu:needs-triage`, `quipu:owner-approved`), Issues and (for `wiki_mode: journal`) the Wiki;
+- labels (`kind:`, `area:`, `quipu:needs-triage`, `quipu:owner-approved`, `quipu:needs-owner`), Issues and (for `wiki_mode: journal`) the Wiki;
 - the Project fields, Status options, and standard views; options are never rewritten on a Project with items;
 - the config, workflows, Issue forms, agent handbook, and hooks; existing files that differ are kept unless `--replace`.
 

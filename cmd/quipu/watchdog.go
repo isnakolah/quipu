@@ -44,6 +44,7 @@ type issueReport struct {
 	Restored     int
 	Triaged      int
 	Rechecked    int
+	AutoReady    int
 	Warnings     []string
 }
 
@@ -93,10 +94,15 @@ func writerReconcileCommand(args []string) error {
 		pass(rescanned)
 		numbers = appendNew(numbers, rescanned...)
 	}
+	if *apply && window == 0 {
+		if err := runNightlySlowChecks(c, now); err != nil {
+			failures = append(failures, "slow checks: "+err.Error())
+		}
+	}
 	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed, "leases_kept_for_open_pr": total.Kept,
 		"merges_queued": total.MergesQueued, "merges_done": total.MergesDone,
 		"issues_reopened": total.Reopened, "drift_restored": total.Restored, "issues_triaged": total.Triaged,
-		"policy_rechecked": total.Rechecked, "warnings": append([]string{}, total.Warnings...), "errors": failures, "apply": *apply}
+		"policy_rechecked": total.Rechecked, "auto_ready": total.AutoReady, "warnings": append([]string{}, total.Warnings...), "errors": failures, "apply": *apply}
 	if err := printValue(result, *asJSON); err != nil {
 		return err
 	}
@@ -159,6 +165,7 @@ func reconcileNumbers(c model.Config, numbers []int, apply bool, trust writer.Tr
 		total.Restored += report.Restored
 		total.Triaged += report.Triaged
 		total.Rechecked += report.Rechecked
+		total.AutoReady += report.AutoReady
 		for _, warning := range report.Warnings {
 			total.Warnings = append(total.Warnings, fmt.Sprintf("#%d: %s", number, warning))
 		}
@@ -418,6 +425,9 @@ func (w *watch) run() error {
 	}
 	reclaimed, err := w.reclaim(&state)
 	if err != nil {
+		return err
+	}
+	if _, err := w.autoReady(&state, inProject); err != nil {
 		return err
 	}
 	merged, err := w.queuedMerge(&state)

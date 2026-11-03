@@ -38,6 +38,7 @@ type statusItem struct {
 	Branch         string `json:"branch,omitempty"`
 	ParentNumber   int    `json:"parent,omitempty"`
 	OpenBlockers   int    `json:"open_blockers,omitempty"`
+	WaitingOn      []int  `json:"waiting_on,omitempty"`
 	ChildTotal     int    `json:"child_total,omitempty"`
 	ChildCompleted int    `json:"child_completed,omitempty"`
 	NeedsTriage    bool   `json:"-"`
@@ -103,7 +104,7 @@ func statusCommand(args []string) error {
 }
 
 func loadStatusItems(c model.Config) ([]statusItem, error) {
-	output, err := issuePages(c, "states:OPEN", `number title parent { number } blockedBy(first:100) { nodes { state } }
+	output, err := issuePages(c, "states:OPEN", `number title parent { number } blockedBy(first:100) { nodes { number state } }
 subIssuesSummary { total completed }
 labels(first:20) { nodes { name } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
@@ -125,7 +126,8 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 						} `json:"parent"`
 						BlockedBy struct {
 							Nodes []struct {
-								State string `json:"state"`
+								Number int    `json:"number"`
+								State  string `json:"state"`
 							} `json:"nodes"`
 						} `json:"blockedBy"`
 						SubIssuesSummary struct {
@@ -170,6 +172,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 		for _, blocker := range node.BlockedBy.Nodes {
 			if blocker.State != "CLOSED" {
 				item.OpenBlockers++
+				item.WaitingOn = append(item.WaitingOn, blocker.Number)
 			}
 		}
 		for _, label := range node.Labels.Nodes {
@@ -347,6 +350,9 @@ type startOptions struct {
 	// instead of switching the current one.
 	Worktree     bool
 	WorktreeRoot string
+	// SkipElsewhere passes over work whose branch another worktree still has, so
+	// the daemon isn't stopped by work parked in a checkout it didn't make.
+	SkipElsewhere bool
 }
 
 func startCommand(args []string) error {
@@ -389,9 +395,19 @@ func startCommand(args []string) error {
 		}
 		return respond(result)
 	}
-	candidates, err := loadWorkCandidates(c)
+	result, err := startNextWork(c, here, o)
 	if err != nil {
 		return err
+	}
+	return respond(result)
+}
+
+// startNextWork takes the top Ready work this machine has room for. Status says
+// Idle or Busy when there is none.
+func startNextWork(c model.Config, here worktree, o startOptions) (flowResult, error) {
+	candidates, err := loadWorkCandidates(c)
+	if err != nil {
+		return flowResult{}, err
 	}
 	ready := nextWork(candidates, time.Now())
 	o.Branch = ""
@@ -399,7 +415,7 @@ func startCommand(args []string) error {
 	found := len(ready) > 0
 	ready, short := openClaimGate(c, here, o.Worktree, time.Now()).outsideBuilds(ready)
 	if found && len(ready) == 0 {
-		return respond(busyResult(0, short))
+		return busyResult(0, short), nil
 	}
 	// Several agents may race for the same top item; the Writer accepts one
 	// claim and rejects the rest, so a rejected claim moves on to the next.
@@ -415,21 +431,30 @@ func startCommand(args []string) error {
 			continue
 		}
 		if err == nil {
-			return respond(result)
+			return result, nil
+		}
+		if o.SkipElsewhere && branchElsewhere(err) {
+			fmt.Fprintf(os.Stderr, "#%d skipped (%v)\n", item.Number, err)
+			continue
 		}
 		if !errors.Is(err, errRejected) {
-			return err
+			return flowResult{}, err
 		}
 		lost++
 		fmt.Fprintf(os.Stderr, "#%d taken (%v); trying next\n", item.Number, err)
 	}
 	if lost == 0 && short != "" && found {
-		return respond(busyResult(0, short))
+		return busyResult(0, short), nil
 	}
 	if lost > 0 {
-		return respond(flowResult{Status: "Busy", Next: fmt.Sprintf("Other agents took the top %d Ready items first. Rerun quipu start --next --json.", lost)})
+		return flowResult{Status: "Busy", Next: fmt.Sprintf("Other agents took the top %d Ready items first. Rerun quipu start --next --json.", lost)}, nil
 	}
-	return respond(flowResult{Status: "Idle", Next: "No Ready, unblocked work. Report that and stop; the owner makes work Ready. quipu status --json shows the board."})
+	return flowResult{Status: "Idle", Next: "No Ready, unblocked work. Report that and stop; the owner makes work Ready. quipu status --json shows the board."}, nil
+}
+
+func branchElsewhere(err error) bool {
+	var coded *flowError
+	return errors.As(err, &coded) && coded.Code == "branch-elsewhere"
 }
 
 // nextWork orders pick-up candidates by priority, then Issue number.

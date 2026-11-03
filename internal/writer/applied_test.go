@@ -148,3 +148,24 @@ func TestQueueEntriesEndAndReturn(t *testing.T) {
 		t.Fatal("a repeated return changes nothing")
 	}
 }
+
+func TestParkLifecycle(t *testing.T) {
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	held := WorkState{Status: "In progress", Lease: Lease{Holder: "claude/me/a", Branch: "1/a", Expires: now.Add(time.Hour)}}
+	next, err := ApplyLifecycle(held, Request{Action: "park", Actor: "claude/me/a", On: 9}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Status != "Blocked" || next.Lease.Holder != "" || next.Lease.Branch != "1/a" {
+		t.Fatalf("next = %+v: the lease goes and the branch stays", next)
+	}
+	if _, err := ApplyLifecycle(held, Request{Action: "park", Actor: "claude/me/a"}, now); err == nil {
+		t.Fatal("park needs a Decision")
+	}
+	if _, err := ApplyLifecycle(held, Request{Action: "park", Actor: "claude/other/b", On: 9}, now); err == nil {
+		t.Fatal("only the holder parks")
+	}
+	if !AlreadyApplied(next, Request{Action: "park", Actor: "claude/me/a", On: 9}, nil, now) {
+		t.Fatal("a rerun of a park that applied must not be stale")
+	}
+}
