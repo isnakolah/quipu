@@ -384,6 +384,7 @@ func quipuLabels(areas []string) []quipuLabel {
 	return append(labels,
 		quipuLabel{triageLabel, "D93F0B", "Created outside the Quipu flow; the owner triages it"},
 		quipuLabel{ownerApprovedLabel, "0E8A16", "The owner approves a PR that changes Quipu's own files"},
+		quipuLabel{needsOwnerLabel, "D93F0B", "auto_ready leaves this Issue for the owner to make Ready"},
 	)
 }
 

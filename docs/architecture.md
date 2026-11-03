@@ -24,6 +24,8 @@ The Writer is the only mutator of lifecycle state. It accepts unedited, hash-ver
 
 Lifecycle: `Backlog → Ready → Claimed → In progress → In review → Evidence pending → Done`, with Blocked, Cancelled, and Archived. A lease lasts two hours.
 
+`quipu daemon` adds no authority: it takes work through `quipu start` and removes worktrees through the same check as `quipu worktree remove`, so the Writer still decides everything. `quipu park` is one Writer request that checks the Decision, adds the blocker and moves the work. `auto_ready` is the Writer moving work once its last blocker closes, and it posts a receipt like any other move.
+
 With `workflows.writer_mode: serial`, one Actions job applies requests in comment order and GitHub events only wake it. Job-level concurrency keeps comments that aren't requests from taking the one pending place. Trust is unchanged, because it is still the Writer in Actions: there is no local Writer, since receipts count only from `github-actions[bot]`.
 
 With `merge: queue`, a local worker per clone tests batches of queued PRs merged onto the latest default branch, lands exactly the tested result through GitHub one merge at a time, and reports each to the Writer, which alone closes the Issues. Writer receipts decide what is queued and GitHub decides what landed, so a restart neither loses nor merges twice.

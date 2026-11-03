@@ -45,6 +45,8 @@ type Request struct {
 	Head string `json:"head,omitempty"`
 	// Reason is why the merge queue returned this work.
 	Reason string `json:"reason,omitempty"`
+	// On is the Decision a park request waits for.
+	On int `json:"on,omitempty"`
 }
 
 // Import records where an imported Issue stood before Quipu. The Writer

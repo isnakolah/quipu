@@ -176,6 +176,20 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if err != nil {
 		return rejectedReceipt(request, err)
 	}
+	if request.Action == "park" {
+		on, err := loadLiveWork(c, request.On)
+		if err != nil {
+			return rejectedReceipt(request, fmt.Errorf("read Decision #%d: %w", request.On, err))
+		}
+		if problem := parkProblem(on, request.On); problem != "" {
+			return rejectedReceipt(request, errors.New(problem))
+		}
+		if !hasBlocker(state, on.IssueID) {
+			if err := addBlocker(c, number, request.On); err != nil {
+				return rejectedReceipt(request, err)
+			}
+		}
+	}
 	if err := updateLiveWork(c, state.ItemID, next); err != nil {
 		return rejectedReceipt(request, err)
 	}
@@ -210,6 +224,9 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if request.Action == "queue.return" {
 		receipt.Detail = "returned by the merge queue: " + request.Reason
 		receipt.EndsQueue = endsQueue
+	}
+	if request.Action == "park" {
+		receipt.Detail = fmt.Sprintf("parked on Decision #%d; lifecycle state changed to Blocked", request.On)
 	}
 	if request.Action == "takeover" {
 		receipt.Detail = "taken over by " + request.Actor + " after the merge queue returned it"

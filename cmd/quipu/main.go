@@ -51,6 +51,10 @@ func run(args []string) error {
 		return worktreeCommand(args[1:])
 	case "queue":
 		return queueCommand(args[1:])
+	case "daemon":
+		return daemonCommand(args[1:])
+	case "park":
+		return parkCommand(args[1:])
 	case "done":
 		return doneCommand(args[1:])
 	case "triage":

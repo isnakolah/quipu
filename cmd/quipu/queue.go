@@ -53,11 +53,14 @@ const (
 	queueLogTail = 2000
 )
 
-var queueValue = regexp.MustCompile(`^None: merge queue at ([0-9a-f]{40}); (check ".*" exited 0 on tree [0-9a-f]{40} \(base [0-9a-f]{40}, \d+ runs, \d+ flaky\)|check result not known to this rerun), as reported by quipu queue$`)
+var queueValue = regexp.MustCompile(`^None: merge queue at ([0-9a-f]{40}); (check ".*" exited 0 on tree [0-9a-f]{40} \(base [0-9a-f]{40}, \d+ runs, \d+ flaky\)|no check ran on tree [0-9a-f]{40} \(base [0-9a-f]{40}\), per scoped_checks|check result not known to this rerun), as reported by quipu queue$`)
 
 // queueEvidence is the CI field of a merge the queue tested. It is the worker's
 // report: the Writer cannot verify a run on another machine.
 func queueEvidence(head string, batch queueBatch, tree string) string {
+	if batch.Command == "" {
+		return fmt.Sprintf("%s%s; no check ran on tree %s (base %s), per scoped_checks, as reported by quipu queue", queuePrefix, head, tree, batch.Base)
+	}
 	return fmt.Sprintf("%s%s; check %q exited 0 on tree %s (base %s, %d runs, %d flaky), as reported by quipu queue", queuePrefix, head, batch.Command, tree, batch.Base, batch.Runs, batch.Flakes)
 }
 
@@ -80,6 +83,9 @@ func checkQueueEvidence(c model.Config, e writer.Evidence, view prView) error {
 	}
 	if match[1] != view.HeadRefOid {
 		return fmt.Errorf("evidence says the queue tested %s, but the PR's head is %s", match[1], view.HeadRefOid)
+	}
+	if strings.HasPrefix(match[2], "no check ran") && len(c.ScopedChecks) == 0 {
+		return errors.New("evidence says scoped_checks skipped the check, but the default branch has none")
 	}
 	if e.Boundary != "local" {
 		return fmt.Errorf("the merge queue verified this locally, so its boundary must be local, not %q", e.Boundary)
@@ -111,11 +117,13 @@ type batchStep struct {
 
 // queueBatch is a tested result on its way onto the default branch.
 type queueBatch struct {
-	Base    string      `json:"base"`
-	Command string      `json:"command"`
-	Runs    int         `json:"runs"`
-	Flakes  int         `json:"flakes"`
-	Steps   []batchStep `json:"steps"`
+	Base    string `json:"base"`
+	Command string `json:"command"`
+	Runs    int    `json:"runs"`
+	Flakes  int    `json:"flakes"`
+	// Scope says what scoped_checks chose, and why.
+	Scope string      `json:"scope,omitempty"`
+	Steps []batchStep `json:"steps"`
 }
 
 // queueResult is what a landed PR's evidence needs.
@@ -151,6 +159,8 @@ type queueOps struct {
 	giveBack   func(m queueMember, reason string) error
 	hold       func() (func(), error)
 	now        func() time.Time
+	// slow starts what runs after a batch lands.
+	slow func()
 }
 
 // queueRun is one worker on one clone.
@@ -298,6 +308,7 @@ func (q *queueRun) evidenceFor(m queueMember, view mergeView) writer.Evidence {
 	}
 	if known {
 		e.CIURL = queueEvidence(m.Head, result.Batch, result.Step.Tree)
+		addRisk(&e, result.Batch.Scope)
 		if result.Batch.Flakes > 0 {
 			addRisk(&e, fmt.Sprintf("the check failed and then passed %d time(s) in this batch: a flaky run, which landed", result.Batch.Flakes))
 		}
@@ -418,6 +429,9 @@ func (q *queueRun) runOnce(batch *queueBatch, log string) (queueVerdict, error) 
 // survives its retries. A pass after a failure is a flake: it counts as a pass, and
 // the evidence and status both say so, so one can't go unnoticed.
 func (q *queueRun) judge(batch *queueBatch, log string) (queueVerdict, error) {
+	if batch.Command == "" {
+		return verdictPass, nil
+	}
 	failed := false
 	for range 1 + q.c.QueueFlakyRetries() {
 		verdict, err := q.runOnce(batch, log)
@@ -487,7 +501,8 @@ func (q *queueRun) runBatch(members []queueMember) (queueOutcome, error) {
 	if len(steps) == 0 {
 		return queueMoved, q.saveJournal()
 	}
-	batch := queueBatch{Base: base, Command: q.c.MergeQueue.Check, Steps: steps}
+	scope := q.scope(base, steps[len(steps)-1].Tree)
+	batch := queueBatch{Base: base, Command: scope.Command, Scope: scope.Reason, Steps: steps}
 	log := q.logFile(steps[len(steps)-1].Tree)
 	verdict, err := q.judge(&batch, log)
 	if err != nil || verdict == verdictNone {
@@ -652,6 +667,9 @@ func (q *queueRun) land(batch queueBatch) (queueOutcome, error) {
 		}
 	}
 	q.current.Batch = nil
+	if q.ops.slow != nil {
+		q.ops.slow()
+	}
 	return queueMoved, q.saveJournal()
 }
 
@@ -676,6 +694,30 @@ func (q *queueRun) proveLanding(sha, tip, tree string) (string, error) {
 		return fmt.Sprintf("merge commit %s has tree %s, not the tested %s, so this exact result was not tested", sha, landed, tree), nil
 	}
 	return "", nil
+}
+
+// scope picks what a batch runs from what it changes. Not being able to tell runs
+// the full check.
+func (q *queueRun) scope(base, tree string) model.ScopeChoice {
+	full := q.c.MergeQueue.Check
+	if len(q.c.ScopedChecks) == 0 {
+		return model.ScopeChoice{Command: full}
+	}
+	changed, err := q.git("diff", "--name-only", base, tree)
+	if err != nil {
+		return model.ScopeChoice{Command: full, Reason: "scoped_checks: could not read what changed, so the full check ran"}
+	}
+	return q.c.ScopedCommand(changedPaths(changed), full)
+}
+
+func changedPaths(output string) []string {
+	var paths []string
+	for _, line := range strings.Split(output, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return paths
 }
 
 // testTip says whether the default branch is good after a landing went wrong.
@@ -814,6 +856,12 @@ func liveQueueOps(c model.Config, tree worktree) queueOps {
 			return prViolations(c, pull, func(n int) (liveWork, error) { return loadLiveWork(c, n) }, time.Now()), nil
 		},
 		land: func(step batchStep, view mergeView, last bool) error { return landQueued(c, step, view, last) },
+		// Its failure reaches the Writer as a Defect, so a refused dispatch is only a log line.
+		slow: func() {
+			if err := dispatchSlowChecks(c, batchSlowChecks(c)); err != nil {
+				fmt.Fprintf(os.Stderr, "%s slow checks: %v\n", time.Now().Format(time.RFC3339), err)
+			}
+		},
 		record: func(m queueMember, e writer.Evidence) error {
 			state, err := loadLiveWork(c, m.Issue)
 			if err != nil {

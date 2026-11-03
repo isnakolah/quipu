@@ -141,6 +141,8 @@ func TestGuardShellCommands(t *testing.T) {
 		{f.a, "curl -X POST -d '{}' https://api.github.com/repos/o/r/issues", "github-write"},
 		{f.a, "quipu writer run --issue-number 1 --apply", "quipu-admin"},
 		{f.a, "quipu writer serve --apply --json", "quipu-admin"},
+		{f.a, "quipu daemon", "quipu-admin"},
+		{f.a, "quipu park 1 --on 2 --json", ""},
 		{f.a, "quipu work claim --issue-number 1", "quipu-admin"},
 		{f.a, "quipu issue create --kind epic", "quipu-admin"},
 		{f.a, "quipu evidence submit", "quipu-admin"},

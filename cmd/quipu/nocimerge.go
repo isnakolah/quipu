@@ -34,11 +34,14 @@ const (
 // noCIAdminNote ends the CI field when the merge used the admin bypass.
 const noCIAdminNote = "; merged with the admin bypass"
 
-var noCIValue = regexp.MustCompile(`^None: merged without CI at ([0-9a-f]{40}); local_check (".*" exited 0|result not known to this rerun), as reported by quipu done(; merged with the admin bypass)?$`)
+var noCIValue = regexp.MustCompile(`^None: merged without CI at ([0-9a-f]{40}); local_check (".*" exited 0|skipped, per scoped_checks|result not known to this rerun), as reported by quipu done(; merged with the admin bypass)?$`)
 
 // noCIEvidence is the CI field of a merge without CI. The exit code is the
 // client's report: the Writer cannot verify a run on another machine.
 func noCIEvidence(head, command string, exit int) string {
+	if command == "" {
+		return noCIPrefix + head + "; local_check skipped, per scoped_checks, as reported by quipu done"
+	}
 	return fmt.Sprintf("%s%s; local_check %q exited %d, as reported by quipu done", noCIPrefix, head, command, exit)
 }
 
@@ -54,6 +57,9 @@ func isNoCIEvidence(ci string) bool { return strings.HasPrefix(ci, noCIPrefix) }
 // A check that had failed by the time of the merge means nobody skipped CI: it
 // ran and said no. One that fails later is what skipping CI gives up.
 func checkNoCIEvidence(c model.Config, e writer.Evidence, view prView) error {
+	if strings.Contains(e.CIURL, "local_check skipped, per scoped_checks") && len(c.ScopedChecks) == 0 {
+		return errors.New("evidence says scoped_checks skipped local_check, but the default branch has none")
+	}
 	if !c.MergesWithoutCI() {
 		return errors.New("evidence says the merge skipped CI, but merge_without_ci is off on the default branch")
 	}
@@ -148,15 +154,17 @@ func waivedChecks(checks []prCheck, required []string) ([]string, error) {
 
 // noCIOps are the outside effects of a merge without CI.
 type noCIOps struct {
-	view          func() (mergeView, error)
-	update        func() (string, error)
-	pause         func()
-	lock          func() (func(), error)
-	hold          func() (func(), error)
-	head          func() (string, error)
-	dirty         func() (string, error)
-	violations    func() ([]string, error)
-	check         func(command string) (int, error)
+	view       func() (mergeView, error)
+	update     func() (string, error)
+	pause      func()
+	lock       func() (func(), error)
+	hold       func() (func(), error)
+	head       func() (string, error)
+	dirty      func() (string, error)
+	violations func() ([]string, error)
+	check      func(command string) (int, error)
+	// changed lists the paths this PR touches, for scoped_checks.
+	changed       func() ([]string, error)
 	record        func(head, value string)
 	forget        func(head string)
 	merge         func(view mergeView, admin bool) error
@@ -169,6 +177,19 @@ func blockedState(view mergeView) error {
 		return flowErr("merge-blocked", "PR %s cannot merge yet (draft %v, state %s)", view.URL, view.IsDraft, view.MergeStateStatus)
 	}
 	return nil
+}
+
+// noCICommand is local_check, narrowed by scoped_checks where they apply. Not being
+// able to tell what changed runs all of it.
+func noCICommand(c model.Config, ops noCIOps) string {
+	if len(c.ScopedChecks) == 0 || ops.changed == nil {
+		return c.LocalCheck
+	}
+	paths, err := ops.changed()
+	if err != nil {
+		return c.LocalCheck
+	}
+	return c.ScopedCommand(paths, c.LocalCheck).Command
 }
 
 // noCIAttempts is how many times one `quipu done` tests against a moving base.
@@ -256,17 +277,21 @@ func mergeWithoutCIOnce(c model.Config, bypass bool, e writer.Evidence, ops noCI
 	if len(violations) > 0 {
 		return "", flowErr("policy-rules", "PR %s breaks the policy rules, which merge_without_ci never waives: %s", view.URL, strings.Join(violations, "; "))
 	}
-	release, err := ops.hold()
-	if err != nil {
-		return "", err
-	}
-	exit, err := ops.check(c.LocalCheck)
-	release()
-	if err != nil {
-		return "", flowErr("local-check-failed", "local_check could not run: %v", err)
-	}
-	if exit != 0 {
-		return "", flowErr("local-check-failed", "local_check %q exited %d, so nothing merged", c.LocalCheck, exit)
+	command := noCICommand(c, ops)
+	exit := 0
+	if command != "" {
+		release, err := ops.hold()
+		if err != nil {
+			return "", err
+		}
+		exit, err = ops.check(command)
+		release()
+		if err != nil {
+			return "", flowErr("local-check-failed", "local_check could not run: %v", err)
+		}
+		if exit != 0 {
+			return "", flowErr("local-check-failed", "local_check %q exited %d, so nothing merged", command, exit)
+		}
 	}
 	// It may have taken a while, and it ran this repository's code.
 	if err := checkCleanAt(ops, view.HeadRefOid); err != nil {
@@ -295,7 +320,7 @@ func mergeWithoutCIOnce(c model.Config, bypass bool, e writer.Evidence, ops noCI
 	if err != nil {
 		return "", err
 	}
-	value := noCIEvidence(head, c.LocalCheck, exit)
+	value := noCIEvidence(head, command, exit)
 	ops.record(head, value)
 	err = ops.merge(view, false)
 	if err != nil && bypass && len(waived) > 0 {
@@ -443,7 +468,11 @@ func liveNoCIOps(c model.Config, w worktree, number int, branch, url string, tes
 			}
 			return prViolations(c, pull, func(n int) (liveWork, error) { return loadLiveWork(c, n) }, time.Now()), nil
 		},
-		check:         func(command string) (int, error) { return runLocalCheck(w.Top, command) },
+		check: func(command string) (int, error) { return runLocalCheck(w.Top, command) },
+		changed: func() ([]string, error) {
+			output, err := w.git("diff", "--name-only", "origin/"+c.DefaultBranch+"...HEAD")
+			return changedPaths(output), err
+		},
 		record:        func(head, value string) { recordLocalCheck(w, head, value) },
 		forget:        func(head string) { _ = os.Remove(localCheckRecord(w, head)) },
 		adminBlockers: func(view mergeView) ([]string, error) { return loadAdminBlockers(c, view) },
