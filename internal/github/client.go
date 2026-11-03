@@ -41,22 +41,44 @@ func authToken() string {
 }
 
 func (c *Client) Do(ctx context.Context, method, path string, input, output any) error {
+	_, _, err := c.do(ctx, method, path, "", input, output)
+	return err
+}
+
+// GetConditional is a GET that sends the ETag from the last answer. When nothing
+// changed it reports so and leaves output alone: a 304 doesn't count against the
+// rate limit, so this is what polling should use.
+func (c *Client) GetConditional(ctx context.Context, path, etag string, output any) (newETag string, unchanged bool, err error) {
+	header, unchanged, err := c.do(ctx, http.MethodGet, path, etag, nil, output)
+	if err != nil {
+		return etag, false, err
+	}
+	if unchanged {
+		return etag, true, nil
+	}
+	return header.Get("ETag"), false, nil
+}
+
+func (c *Client) do(ctx context.Context, method, path, etag string, input, output any) (http.Header, bool, error) {
 	base := strings.TrimRight(c.BaseURL, "/")
 	u, err := url.Parse(base + path)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	var body io.Reader
 	if input != nil {
 		raw, err := json.Marshal(input)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		body = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
-		return err
+		return nil, false, err
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	if input != nil {
@@ -67,20 +89,23 @@ func (c *Client) Do(ctx context.Context, method, path string, input, output any)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified {
+		return resp.Header, true, nil
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("GitHub API %s %s: %s", method, path, strings.TrimSpace(string(data)))
+		return nil, false, fmt.Errorf("GitHub API %s %s: %s", method, path, strings.TrimSpace(string(data)))
 	}
 	if output != nil && len(data) != 0 {
-		return json.Unmarshal(data, output)
+		return resp.Header, false, json.Unmarshal(data, output)
 	}
-	return nil
+	return resp.Header, false, nil
 }
 
 type Comment struct {

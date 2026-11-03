@@ -74,38 +74,11 @@ func writerReconcileCommand(args []string) error {
 		}
 		window = drainWindow(started, now)
 	}
-	output, err := ghOutput("api", "--paginate", "--slurp", reconcileIssuesPath(c, window, now))
+	numbers, err := reconcileTargets(c, window, now)
 	if err != nil {
 		return err
 	}
-	var pages [][]struct {
-		Number      int             `json:"number"`
-		PullRequest json.RawMessage `json:"pull_request"`
-	}
-	if err := json.Unmarshal(output, &pages); err != nil {
-		return err
-	}
-	var numbers []int
-	for _, page := range pages {
-		for _, item := range page {
-			// REST's Issue endpoint also returns pull requests. Writer state is
-			// valid only for canonical Issues, never PR numbers.
-			if len(item.PullRequest) == 0 || string(item.PullRequest) == "null" {
-				numbers = append(numbers, item.Number)
-			}
-		}
-	}
-	// GitHub can lag in listing an Issue a comment just updated. A pass over every
-	// Issue has no need for this: a window is what can miss one.
 	listRequests := func(since time.Time) ([]int, error) { return issuesWithRequests(c, since) }
-	if window > 0 {
-		missed, err := listRequests(now.Add(-window))
-		if err != nil {
-			return err
-		}
-		numbers = appendNew(numbers, missed...)
-		numbers = appendNew(numbers, eventIssue(os.Getenv("GITHUB_EVENT_PATH")))
-	}
 	var total issueReport
 	failures := []string{}
 	pass := func(numbers []int) {
@@ -131,6 +104,42 @@ func writerReconcileCommand(args []string) error {
 		return fmt.Errorf("reconcile failed for %d Issue(s): %s", len(failures), strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+// reconcileTargets lists the Issues a pass covers.
+func reconcileTargets(c model.Config, window time.Duration, now time.Time) ([]int, error) {
+	output, err := ghOutput("api", "--paginate", "--slurp", reconcileIssuesPath(c, window, now))
+	if err != nil {
+		return nil, err
+	}
+	var pages [][]struct {
+		Number      int             `json:"number"`
+		PullRequest json.RawMessage `json:"pull_request"`
+	}
+	if err := json.Unmarshal(output, &pages); err != nil {
+		return nil, err
+	}
+	var numbers []int
+	for _, page := range pages {
+		for _, item := range page {
+			// REST's Issue endpoint also returns pull requests. Writer state is
+			// valid only for canonical Issues, never PR numbers.
+			if len(item.PullRequest) == 0 || string(item.PullRequest) == "null" {
+				numbers = append(numbers, item.Number)
+			}
+		}
+	}
+	// GitHub can lag in listing an Issue a comment just updated. A pass over every
+	// Issue has no need for this: a window is what can miss one.
+	if window > 0 {
+		missed, err := issuesWithRequests(c, now.Add(-window))
+		if err != nil {
+			return nil, err
+		}
+		numbers = appendNew(numbers, missed...)
+		numbers = appendNew(numbers, eventIssue(os.Getenv("GITHUB_EVENT_PATH")))
+	}
+	return numbers, nil
 }
 
 // reconcileNumbers runs one pass over these Issues.
@@ -168,9 +177,11 @@ func appendNew(numbers []int, more ...int) []int {
 
 // issueComment is what finding requests reads from the repository's comments.
 type issueComment struct {
-	Body     string `json:"body"`
-	IssueURL string `json:"issue_url"`
-	HTMLURL  string `json:"html_url"`
+	ID        int64  `json:"id"`
+	CreatedAt string `json:"created_at"`
+	Body      string `json:"body"`
+	IssueURL  string `json:"issue_url"`
+	HTMLURL   string `json:"html_url"`
 }
 
 // requestIssues names the Issues with a request that has no receipt yet, among
@@ -590,6 +601,9 @@ func driftFields(state liveWork, want writer.ReceiptState) []string {
 
 // drift puts back Project fields edited by hand.
 func (w *watch) drift(state *liveWork) (bool, error) {
+	if w.c.Workflows.SerialWriter() && receiptJustPosted(w.receipts, w.now) {
+		return false, nil
+	}
 	want := expectedState(*state, w.receipts, w.trust)
 	if want == nil {
 		return false, nil
@@ -611,6 +625,20 @@ func (w *watch) drift(state *liveWork) (bool, error) {
 		At:     w.now.UTC(), State: want})
 	state.Status, state.Holder, state.Expiry, state.Branch = want.Status, want.Holder, want.Expires, want.Branch
 	return true, err
+}
+
+// readLag is how long the Project's API can go on showing what a Writer update
+// replaced. A serial Writer comes back within it, so a stale read looks like a hand
+// edit, and restoring it would race the work's next move.
+const readLag = 15 * time.Second
+
+func receiptJustPosted(receipts []writer.Receipt, now time.Time) bool {
+	for i := len(receipts) - 1; i >= 0; i-- {
+		if receipts[i].State != nil {
+			return now.Sub(receipts[i].At) < readLag
+		}
+	}
+	return false
 }
 
 func (w *watch) reclaim(state *liveWork) (bool, error) {

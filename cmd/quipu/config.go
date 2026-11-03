@@ -178,6 +178,7 @@ var optionDefaults = map[string]any{
 	"guard_reads":                      "closed",
 	"workflows.runs_on":                map[string][]string{"default": {"ubuntu-latest"}},
 	"workflows.quipu_version":          "main",
+	"workflows.writer_mode":            "none",
 	"workflows.schedule":               model.DefaultSchedule,
 	"workflows.writer_on_pull_request": true,
 	"workflows.defects_from":           []string{"CI"},

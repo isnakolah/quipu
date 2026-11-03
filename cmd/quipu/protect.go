@@ -255,6 +255,8 @@ func doctorChecks() []doctorCheck {
 	checks = append(checks, githubChecks(c)...)
 	checks = append(checks, runnerChecks(c, here)...)
 	checks = append(checks, runnerConfigChecks(c, pathQuipuVersion())...)
+	workflow, workflowErr := os.ReadFile(filepath.Join(here.Top, ".github", "workflows", "quipu-writer.yml"))
+	checks = append(checks, writerModeCheck(c, string(workflow), workflowErr == nil)...)
 	enforced, _, err := loadEnforcedConfig(here, true)
 	if err != nil {
 		enforced = c.WithoutRelaxations()

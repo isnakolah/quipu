@@ -63,3 +63,34 @@ func TestListCommentsPaginates(t *testing.T) {
 		t.Fatalf("comments=%d err=%v", len(comments), err)
 	}
 }
+
+func TestGetConditionalLeavesOutputAloneOn304(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		if r.Header.Get("If-None-Match") != "" {
+			t.Errorf("unexpected ETag %q", r.Header.Get("If-None-Match"))
+		}
+		w.Header().Set("ETag", `"v1"`)
+		_, _ = w.Write([]byte(`[{"id": 1}]`))
+	}))
+	defer server.Close()
+	client := &Client{BaseURL: server.URL, HTTP: server.Client()}
+	var comments []Comment
+	etag, unchanged, err := client.GetConditional(context.Background(), "/x", "", &comments)
+	if err != nil || unchanged || etag != `"v1"` || len(comments) != 1 {
+		t.Fatalf("first: etag %q, unchanged %v, %v, %+v", etag, unchanged, err, comments)
+	}
+	var again []Comment
+	etag, unchanged, err = client.GetConditional(context.Background(), "/x", etag, &again)
+	if err != nil || !unchanged || etag != `"v1"` || again != nil {
+		t.Fatalf("second: etag %q, unchanged %v, %v, %+v", etag, unchanged, err, again)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d", requests)
+	}
+}

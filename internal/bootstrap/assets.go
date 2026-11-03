@@ -31,6 +31,8 @@ type Options struct {
 	// WakeOn names workflows whose finish wakes the Writer, so a queued merge
 	// does not wait for the schedule.
 	WakeOn []string
+	// WriterSerial renders the serial Writer in place of a run per event.
+	WriterSerial bool
 }
 
 // installQuipu uses a quipu already on the runner's PATH (a self-hosted
@@ -48,6 +50,67 @@ const installQuipu = `      - name: Find Quipu on the runner
       - name: Install Quipu [[.QuipuVersion]]
         if: steps.quipu.outputs.found != 'true'
         run: go install github.com/isnakolah/quipu/cmd/quipu@[[.QuipuVersion]]
+`
+
+// serialWriter wakes one job instead of starting competing runs. The condition is on
+// the job, and so is the concurrency, so a comment that isn't a request is skipped
+// without taking the one pending place. Issue and PR events are gone because the
+// Writer's own work would raise them; the schedule's sweep covers what they caught.
+const serialWriter = `name: Quipu Writer
+on:
+  issue_comment:
+    types: [created]
+[[- if .Schedule]]
+  schedule:
+    - cron: '[[.Schedule]]'
+[[- end]]
+[[- if or .DefectsFrom .WakeOn]]
+  workflow_run:
+    workflows: [[quoted (union .DefectsFrom .WakeOn)]]
+    types: [completed]
+[[- end]]
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+jobs:
+  writer:
+    runs-on: [[runner "writer"]]
+    timeout-minutes: 20
+    concurrency:
+      group: quipu-writer-${{ github.repository_id }}
+      cancel-in-progress: false
+    if: >-
+      (github.event_name != 'issue_comment' || (!github.event.issue.pull_request && (contains(github.event.comment.body, '<!-- quipu-request:v1') || contains(github.event.comment.body, '<!-- gfd-request:v1')))) &&
+      (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_branch == '[[.DefaultBranch]]')[[if .WakeOn]] || github.event.workflow_run.head_repository.full_name == github.repository[[end]])
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: [[.DefaultBranch]]}
+` + installQuipu + `      - name: Serial Writer
+        env:
+          # The Writer token changes Project fields; the workflow token posts
+          # receipts, so only github-actions[bot] can write a trusted receipt.
+          GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
+          QUIPU_RECEIPT_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo '::error::QUIPU_WRITER_TOKEN is not configured, so no work can be claimed, reviewed, or finished. Owner: create a classic PAT with the project scope plus public_repo (public repository) or repo (private repository), then run gh secret set QUIPU_WRITER_TOKEN.'
+            # Scheduled runs only annotate, so a missing token does not fail every sweep.
+            [ "$EVENT" = schedule ] && exit 0
+            exit 1
+          fi
+          # Applies requests until idle, and files Defects for failed runs it finds.
+          quipu writer serve --apply --json
+      - name: Validation summary
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}
+        run: |
+          [ -n "$GITHUB_TOKEN" ] || exit 0
+          { echo '## quipu validate'; echo '` + "```" + `'; quipu validate 2>&1 || true; echo '` + "```" + `'; } >> "$GITHUB_STEP_SUMMARY"
 `
 
 var workflows = map[string]string{
@@ -306,6 +369,9 @@ func Render(o Options) (map[string]string, error) {
 	}}
 	all := make(map[string]string, len(workflows)+len(forms)+1)
 	for path, body := range workflows {
+		if o.WriterSerial && path == ".github/workflows/quipu-writer.yml" {
+			body = serialWriter
+		}
 		tmpl, err := template.New(path).Delims("[[", "]]").Funcs(funcs).Parse(body)
 		if err != nil {
 			return nil, err

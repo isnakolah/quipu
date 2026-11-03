@@ -1336,6 +1336,9 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 				e.cause = errRejected
 				return e
 			}
+			if c.Workflows.SerialWriter() {
+				return awaitReceiptState(receipt, func() (liveWork, error) { return loadLiveWork(c, number) }, time.Now, time.Sleep)
+			}
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -1343,7 +1346,39 @@ func sendAndWait(c model.Config, number int, actor string, r writer.Request, wai
 			e.cause = errNoReceipt
 			return e
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(receiptPoll(c))
+	}
+}
+
+// receiptPoll is how often a request looks for its answer. A serial Writer answers
+// in seconds, and each look is a single REST call.
+func receiptPoll(c model.Config) time.Duration {
+	if c.Workflows.SerialWriter() {
+		return 2 * time.Second
+	}
+	return 5 * time.Second
+}
+
+// awaitReceiptState waits for the board to show what the Writer's receipt says. A
+// won claim must not read as Ready, which would look like losing it, and the next
+// request's fingerprint comes from this read. Going on lagging is no-receipt, which
+// says to rerun, never a rejection.
+func awaitReceiptState(receipt writer.Receipt, load func() (liveWork, error), now func() time.Time, sleep func(time.Duration)) error {
+	if receipt.State == nil {
+		return nil
+	}
+	deadline := now().Add(readLag)
+	for {
+		state, err := load()
+		if err == nil && len(driftFields(state, *receipt.State)) == 0 {
+			return nil
+		}
+		if !now().Before(deadline) {
+			e := flowErr("no-receipt", "the Writer accepted request %s, but the board still doesn't show it after %s; rerun the same command", receipt.RequestID, readLag)
+			e.cause = errNoReceipt
+			return e
+		}
+		sleep(time.Second)
 	}
 }
 

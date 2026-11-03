@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -199,5 +201,88 @@ func TestWriterWatchesDefectWorkflows(t *testing.T) {
 	files, _ = Render(o)
 	if strings.Contains(files[".github/workflows/quipu-writer.yml"], "workflow_run:") {
 		t.Fatal("no watched workflows, no workflow_run trigger")
+	}
+}
+
+// The default must render what every adopted repository already has: changing it
+// would rewrite their workflows without their owner.
+func TestWriterModeUnsetRendersTodaysWorkflow(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*Options)
+		want string
+	}{
+		{"defaults", func(*Options) {}, "c64f803f64917fc1bee5350aa7c6ff9cf35a1931374282fa787ace385033fd38"},
+		{"self-hosted, no schedule, no PR trigger", func(o *Options) {
+			o.RunsOn = map[string][]string{"writer": {"self-hosted", "macOS"}}
+			o.Schedule, o.WriterOnPullRequest = "", false
+		}, "48be0023fdc7a25fa1df1458c69ebd5d1579131f37a2f9b90f883942459d8ece"},
+		{"defects and wake", func(o *Options) {
+			o.DefectsFrom, o.WakeOn = []string{"CI"}, []string{"Quipu policy", "CI"}
+		}, "0231dbed2c57dc96f3d0255af00001cc8ff5b70b8254c7e9a23672b0536579b4"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			o := options()
+			test.edit(&o)
+			files, err := Render(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256([]byte(files[".github/workflows/quipu-writer.yml"]))
+			if got := hex.EncodeToString(sum[:]); got != test.want {
+				t.Fatalf("the default Writer workflow changed: sha256 %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSerialWriterShape(t *testing.T) {
+	o := options()
+	o.WriterSerial = true
+	o.Schedule = "*/15 * * * *"
+	o.DefectsFrom = []string{"CI"}
+	files, err := Render(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := files[".github/workflows/quipu-writer.yml"]
+	var parsed struct {
+		On          map[string]any `yaml:"on"`
+		Concurrency any            `yaml:"concurrency"`
+		Jobs        map[string]struct {
+			If          string         `yaml:"if"`
+			Concurrency map[string]any `yaml:"concurrency"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(writer), &parsed); err != nil {
+		t.Fatalf("%v\n%s", err, writer)
+	}
+	for _, trigger := range []string{"issue_comment", "schedule", "workflow_run", "workflow_dispatch"} {
+		if _, ok := parsed.On[trigger]; !ok {
+			t.Fatalf("no %s trigger:\n%s", trigger, writer)
+		}
+	}
+	// The Writer's own work raises these, so they would only start competing runs.
+	for _, trigger := range []string{"issues", "pull_request"} {
+		if _, ok := parsed.On[trigger]; ok {
+			t.Fatalf("still has %s:\n%s", trigger, writer)
+		}
+	}
+	job := parsed.Jobs["writer"]
+	if parsed.Concurrency != nil || job.Concurrency["group"] == nil || job.Concurrency["cancel-in-progress"] != false {
+		t.Fatalf("concurrency must be on the job, so a skipped job holds no place:\n%s", writer)
+	}
+	for _, want := range []string{"quipu-request:v1", "gfd-request:v1", "!github.event.issue.pull_request", "github.event.workflow_run.conclusion == 'failure'"} {
+		if !strings.Contains(job.If, want) {
+			t.Fatalf("condition lacks %q: %s", want, job.If)
+		}
+	}
+	for _, want := range []string{"quipu writer serve --apply --json", "QUIPU_RECEIPT_TOKEN: ${{ github.token }}", "GITHUB_TOKEN: ${{ secrets.QUIPU_WRITER_TOKEN }}", "cron: '*/15 * * * *'", "quipu validate"} {
+		if !strings.Contains(writer, want) {
+			t.Fatalf("lacks %q:\n%s", want, writer)
+		}
+	}
+	if strings.Contains(writer, "quipu writer defect") || strings.Contains(writer, "reconcile") {
+		t.Fatalf("serve does this now:\n%s", writer)
 	}
 }

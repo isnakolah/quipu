@@ -24,6 +24,8 @@ The Writer is the only mutator of lifecycle state. It accepts unedited, hash-ver
 
 Lifecycle: `Backlog → Ready → Claimed → In progress → In review → Evidence pending → Done`, with Blocked, Cancelled, and Archived. A lease lasts two hours.
 
+With `workflows.writer_mode: serial`, one Actions job applies requests in comment order and GitHub events only wake it. Job-level concurrency keeps comments that aren't requests from taking the one pending place. Trust is unchanged, because it is still the Writer in Actions: there is no local Writer, since receipts count only from `github-actions[bot]`.
+
 With `merge: queue`, a local worker per clone tests batches of queued PRs merged onto the latest default branch, lands exactly the tested result through GitHub one merge at a time, and reports each to the Writer, which alone closes the Issues. Writer receipts decide what is queued and GitHub decides what landed, so a restart neither loses nor merges twice.
 
 With `merge_without_ci`, the client merges on its own check and tells the Writer so. Trust stays where it was: the Writer still posts every receipt, and it accepts that evidence only when its own read of the default branch's config allows it. The receipt records a client's report, not a verified run.
