@@ -121,6 +121,8 @@ func newConfig(owner, repo string, info projectInfo) model.Config {
 		Policy:    model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5},
 		Project:   model.Project{ID: info.ID, Number: info.Number, Title: info.Title, Fields: map[string]string{}},
 		Workflows: model.Workflows{QuipuVersion: pinnable(version)},
+		// New repositories get the guard that refuses only what is dangerous.
+		Guard: "deny-list",
 	}
 }
 

@@ -202,7 +202,8 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `pr-body` | a PR must be created from the leased branch with a body saying exactly `Refs #N` for the leased Issue and no closing keywords | run `gh pr create --base <default> --head <leased branch> --title ... --body "Refs #N ..."` |
 | `quipu-admin` | Quipu recovery and admin commands are owner-only | use `quipu start`, `quipu done`, or `quipu propose`; ask the owner for recovery |
 | `quipu-missing` | quipu is not installed, so no call can be checked | ask the owner to install quipu (docs/source-install.md in the Quipu repository) |
-| `unparsable` | the guard could not tell what this command does | rewrite it as plain commands without eval, variables as command names, or computed paths |
+| `unparsable` | the guard could not tell where this part of the command writes; nothing else on the line was refused | this is not a policy refusal: give the path or command literally, or assign the variable earlier in the same command (`L=/tmp/check.log; make check > "$L"`) |
+| `guard-deny` | the repository refuses this command for agents (deploy, publish, spend) | ask the owner, who runs it or opens a Gate; take other work meanwhile |
 
 ## When something fails
 
