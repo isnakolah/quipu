@@ -159,7 +159,7 @@ func TestAgentIssueProblem(t *testing.T) {
 	literal := func(command string) []shellArg {
 		var args []shellArg
 		for _, word := range strings.Fields(command) {
-			args = append(args, shellArg{word, true})
+			args = append(args, shellArg{s: word, ok: true})
 		}
 		return args
 	}
@@ -195,7 +195,7 @@ func TestAgentIssueProblem(t *testing.T) {
 			t.Errorf("%s: want %q, got %q", name, tc.want, got)
 		}
 	}
-	computed := []shellArg{{"--kind", true}, {"", false}, {"--parent", true}, {"1", true}}
+	computed := []shellArg{{s: "--kind", ok: true}, {}, {s: "--parent", ok: true}, {s: "1", ok: true}}
 	if got := agentIssueProblem(issues, computed, parent); got == "" {
 		t.Error("a computed argument must be refused")
 	}

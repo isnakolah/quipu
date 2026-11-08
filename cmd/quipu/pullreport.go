@@ -101,7 +101,7 @@ func describePull(c model.Config, item statusItem, view mergeView, queue queueSt
 		report.Next = "Merged before quipu done moved it to review. Tell the owner: they recover it with quipu pr link and quipu evidence submit."
 		report.owner = "PR merged before it reached review; recover it with quipu pr link and quipu evidence submit"
 	case view.State == "MERGED":
-		report.Next = fmt.Sprintf("Merged, with no evidence recorded yet. Record it: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ... (from another checkout, add --actor %s)", item.Number, item.LeaseHolder)
+		report.Next = fmt.Sprintf("Merged, with no evidence recorded yet. Record it: quipu done %d --json --evidence-file FILE (quipu done --evidence-template prints one) (from another checkout, add --actor %s)", item.Number, item.LeaseHolder)
 	case view.State == "CLOSED":
 		report.Next = fmt.Sprintf("Closed without merging. Open a new PR from %s, then run: quipu done %d --json", item.Branch, item.Number)
 	case queue.State == "rejected":
@@ -118,13 +118,13 @@ func describePull(c model.Config, item statusItem, view mergeView, queue queueSt
 	case queue.State == "queued":
 		report.Next = "Queued: the Writer merges when the checks pass. Nothing to do; take other work."
 	case c.MergesInQueue() && inReview:
-		report.Next = fmt.Sprintf("Queue it with the evidence flags: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary local", item.Number)
+		report.Next = fmt.Sprintf("Queue it with your evidence: quipu done %d --json --evidence-file FILE (## Boundary: local; quipu done --evidence-template prints one)", item.Number)
 	case !inReview && !c.AgentsMerge():
 		report.Next = fmt.Sprintf("Not in review yet. Move it there: quipu done %d --json. The checks need not have finished.", item.Number)
 	case gate != nil:
 		report.Next = "Checks have not finished. Do other work and look again later; no need to wait."
 	case c.AgentsMerge():
-		report.Next = fmt.Sprintf("Checks passed. Merge it: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...", item.Number)
+		report.Next = fmt.Sprintf("Checks passed. Merge it: quipu done %d --json --evidence-file FILE (quipu done --evidence-template prints one)", item.Number)
 	default:
 		report.Next = "Checks passed. The owner reviews and merges."
 	}
