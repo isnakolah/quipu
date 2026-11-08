@@ -41,7 +41,7 @@ func parkCommand(args []string) error {
 	asJSON := jsonFlag(fs)
 	number, err := parseIssueArg(fs, args, false)
 	if err != nil || *on < 1 {
-		return errors.New("usage: quipu park N --on DECISION [--json]")
+		return keepHelp(err, "usage: quipu park N --on DECISION [--json]")
 	}
 	c, err := loadConfig()
 	if err != nil {

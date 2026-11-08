@@ -211,11 +211,16 @@ func guideCommand(args []string) error {
 	fs := flag.NewFlagSet("guide", flag.ContinueOnError)
 	sync := fs.Bool("sync", false, "write the handbook to .agent/rules/quipu.md (and AGENTS.md/CLAUDE.md pointers when missing)")
 	check := fs.Bool("check", false, "exit non-zero when a generated copy is out of date")
+	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if !*sync && !*check {
-		fmt.Print(renderGuideFor(guideConfig(".")))
+		text := renderGuideFor(guideConfig("."))
+		if *asJSON {
+			return printValue(map[string]any{"guide": text}, true)
+		}
+		fmt.Print(text)
 		return nil
 	}
 	here, err := currentWorktree()
@@ -228,14 +233,21 @@ func guideCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	hints := guideHints(readUnder(here.Top))
+	if *check && !*sync && len(changed) > 0 {
+		err = errors.New("agent guides are out of date; the owner runs `quipu guide --sync`")
+	}
+	if *asJSON {
+		if err != nil {
+			return err
+		}
+		return printValue(map[string]any{"changed": append([]string{}, changed...), "notes": append([]string{}, hints...), "written": *sync}, true)
+	}
 	for _, path := range changed {
 		fmt.Println(path)
 	}
-	for _, hint := range guideHints(readUnder(here.Top)) {
+	for _, hint := range hints {
 		fmt.Println("note: " + hint)
 	}
-	if *check && !*sync && len(changed) > 0 {
-		return errors.New("agent guides are out of date; the owner runs `quipu guide --sync`")
-	}
-	return nil
+	return err
 }
