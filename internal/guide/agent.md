@@ -80,13 +80,17 @@ Start one agent per returned `worktree`, with that directory as its working dire
 
 ```text
 You work in <worktree> on Issue #<N> of this Quipu repository. Your lease is
-already claimed for this worktree. First run `quipu start <N> --json` there
-to resume it. Implement only #<N>'s acceptance criteria, run the tests, push
-branch <branch>, open a PR with `gh pr create --base main --head <branch>`
-and a body that says exactly `Refs #<N>`, then run `quipu done <N> --json`
-and report the PR URL. Read `quipu guide` for the rules. Never merge, never
-switch branches, never edit outside <worktree>.
+already claimed for this worktree. Run every shell command as
+`cd <worktree> && ...` and give edit tools absolute paths under <worktree>.
+First run `cd <worktree> && quipu start <N> --json` to resume it. Implement
+only #<N>'s acceptance criteria, run the tests, push branch <branch>, open a
+PR with `gh pr create --base main --head <branch>` and a body that says
+exactly `Refs #<N>`, then run `quipu done <N> --json` and report the PR URL.
+Read `quipu guide` for the rules. Never merge, never switch branches, never
+edit outside <worktree>.
 ```
+
+**Subagents started in the main checkout.** Many tools start a subagent in the folder its parent runs in, usually the main checkout, which holds no lease. That subagent can still implement the leased Issue: the guard judges each change by the worktree it lands in, not by the session's folder. An edit into a worktree is allowed when that worktree's live lease is held by the caller's own GitHub login; a shell command that starts with `cd <worktree> &&` is judged there too. An edit into a worktree leased to a different login is denied `other-worktree`, and so is any edit into another worktree from a session whose own worktree holds a lease. The guard learns your login from `gh` (cached for an hour), so keep `gh` signed in.
 
 - `quipu done N` works from any checkout and finds the worktree holding #N.
 - After Done, remove a worktree with `quipu worktree remove <path> --json` once nothing runs in it. The agent that held it or a dispatcher may do this; it also deletes the merged local branch. Work that is not Done keeps anything found only in that worktree.
