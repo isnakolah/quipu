@@ -403,11 +403,15 @@ func TestNoCLIFlagWaivesTheGate(t *testing.T) {
 }
 
 func TestWriterAcceptsSkippedCIOnlyWithTheFlag(t *testing.T) {
-	value := noCIEvidence(noCIHead, "make check", 0)
+	value := noCIEvidence(noCIHead, "make check", 0, "")
 	good := writer.Evidence{CIURL: value, Boundary: "local"}
 	onHead := prView{HeadRefOid: noCIHead}
 	if err := checkNoCIEvidence(noCIConfig, good, onHead); err != nil {
 		t.Fatal(err)
+	}
+	reused := writer.Evidence{CIURL: noCIEvidence(noCIHead, "make check", 0, strings.Repeat("c", 40)), Boundary: "local"}
+	if err := checkNoCIEvidence(noCIConfig, reused, onHead); err != nil {
+		t.Fatalf("a reused pass is a form quipu done writes: %v", err)
 	}
 	failed := prCheck{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: "2026-11-02T10:00:00Z"}
 	mergedAfter := prView{HeadRefOid: noCIHead, MergedAt: "2026-11-02T11:00:00Z", Checks: []prCheck{failed}}
@@ -431,7 +435,7 @@ func TestWriterAcceptsSkippedCIOnlyWithTheFlag(t *testing.T) {
 		"boundary CI":      {noCIConfig, writer.Evidence{CIURL: value, Boundary: "CI"}, onHead, "boundary must be local"},
 		"not our form":     {noCIConfig, writer.Evidence{CIURL: noCIPrefix + "abc; trust me", Boundary: "local"}, onHead, "not the form"},
 		"free text":        {noCIConfig, writer.Evidence{CIURL: noCIPrefix + noCIHead + "; anything", Boundary: "local"}, onHead, "not the form"},
-		"check failed":     {noCIConfig, writer.Evidence{CIURL: noCIEvidence(noCIHead, "make check", 2), Boundary: "local"}, onHead, "not the form"},
+		"check failed":     {noCIConfig, writer.Evidence{CIURL: noCIEvidence(noCIHead, "make check", 2, ""), Boundary: "local"}, onHead, "not the form"},
 	} {
 		if err := checkNoCIEvidence(tc.c, tc.e, tc.view); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v", name, err)
@@ -553,7 +557,7 @@ func TestRerunAfterTheMergeLands(t *testing.T) {
 	if got := noCIRerunEvidence(agent, noCIHead, "https://run"); got != "https://run" {
 		t.Fatalf("a required check's real run is the evidence: %s", got)
 	}
-	value := noCIEvidence(noCIHead, "make check", 0)
+	value := noCIEvidence(noCIHead, "make check", 0, "")
 	recordLocalCheck(agent, noCIHead, value)
 	if got := noCIRerunEvidence(agent, noCIHead, "https://run"); got != value {
 		t.Fatalf("the record says what happened: %s", got)

@@ -44,6 +44,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu start --next --json` | to take work | `issue`, `status`, `branch`, `holder`, `lease_expires`, `next` |
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
+| `quipu check --json` | before you commit, where the repository sets `local_check` or `merge_queue.check` | runs that check on the worktree as it stands and records `tree`, `command`, `result`, `at`; `reused: true` when this tree already passed it. `quipu done` and the merge queue reuse a pass for the exact tree and command they would test, so commit exactly what you checked |
 | `quipu done N --json` | PR open: move to review | `status: "In review"`, `pr`, `next` |
 | `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` | PR merged: record evidence and close | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |

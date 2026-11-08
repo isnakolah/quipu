@@ -45,6 +45,8 @@ var flowErrors = []flowErrorKind{
 	{"no-record", "no lease record matches, here or for that Issue in any worktree of this clone", "nothing to release; carry on, or take work with `quipu start --next --json`"},
 	{"lease-unverified", "GitHub could not be read and the record has not expired, so the lease may still be live", "rerun the same command in a minute; a record clears itself once its lease expires"},
 	{"not-leaf", "the Issue has sub-issues, so no PR may implement it", "start one of its leaf Issues instead; `next` names the Ready ones"},
+	{"check-failed", "`quipu check` ran the repository's check and it failed or could not run", "fix the cause and rerun `quipu check --json`; a failure is never reused, so `quipu done` runs the check again"},
+	{"no-check", "the default branch sets no `local_check` or `merge_queue.check`, so `quipu check` has nothing to run", "run the tests you need yourself; CI checks the PR"},
 	{"not-implementable", "the Issue is closed, of a kind PRs do not implement, without a parent, without a valid work contract, or blocked", "take other work with `quipu start --next --json`; the message says what is wrong, and the owner fixes the Issue"},
 }
 

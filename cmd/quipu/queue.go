@@ -53,7 +53,7 @@ const (
 	queueLogTail = 2000
 )
 
-var queueValue = regexp.MustCompile(`^None: merge queue at ([0-9a-f]{40}); (check ".*" exited 0 on tree [0-9a-f]{40} \(base [0-9a-f]{40}, \d+ runs, \d+ flaky\)|no check ran on tree [0-9a-f]{40} \(base [0-9a-f]{40}\), per scoped_checks|check result not known to this rerun), as reported by quipu queue$`)
+var queueValue = regexp.MustCompile(`^None: merge queue at ([0-9a-f]{40}); (check ".*" exited 0 on tree [0-9a-f]{40} \(base [0-9a-f]{40}, \d+ runs, \d+ flaky(, \d+ reused)?\)|no check ran on tree [0-9a-f]{40} \(base [0-9a-f]{40}\), per scoped_checks|check result not known to this rerun), as reported by quipu queue$`)
 
 // queueEvidence is the CI field of a merge the queue tested. It is the worker's
 // report: the Writer cannot verify a run on another machine.
@@ -61,7 +61,11 @@ func queueEvidence(head string, batch queueBatch, tree string) string {
 	if batch.Command == "" {
 		return fmt.Sprintf("%s%s; no check ran on tree %s (base %s), per scoped_checks, as reported by quipu queue", queuePrefix, head, tree, batch.Base)
 	}
-	return fmt.Sprintf("%s%s; check %q exited 0 on tree %s (base %s, %d runs, %d flaky), as reported by quipu queue", queuePrefix, head, batch.Command, tree, batch.Base, batch.Runs, batch.Flakes)
+	reused := ""
+	if batch.Reused > 0 {
+		reused = fmt.Sprintf(", %d reused", batch.Reused)
+	}
+	return fmt.Sprintf("%s%s; check %q exited 0 on tree %s (base %s, %d runs, %d flaky%s), as reported by quipu queue", queuePrefix, head, batch.Command, tree, batch.Base, batch.Runs, batch.Flakes, reused)
 }
 
 // queueEvidenceUnknown is the CI field when the journal no longer has the result.
@@ -121,6 +125,9 @@ type queueBatch struct {
 	Command string `json:"command"`
 	Runs    int    `json:"runs"`
 	Flakes  int    `json:"flakes"`
+	// Reused counts verdicts taken from a passing run recorded for the same tree
+	// and command, in place of running it again.
+	Reused int `json:"reused,omitempty"`
 	// Scope says what scoped_checks chose, and why.
 	Scope string      `json:"scope,omitempty"`
 	Steps []batchStep `json:"steps"`
@@ -132,8 +139,8 @@ type queueResult struct {
 	Step  batchStep  `json:"step"`
 }
 
-// queueJournal is what only this machine knows. Losing it costs a retest and an
-// honest "not known" in the evidence, never a PR.
+// queueJournal is what only this machine knows. Losing it costs at most a retest
+// and an honest "not known" in the evidence, never a PR.
 type queueJournal struct {
 	// Hold stops the queue until the owner runs quipu queue resume.
 	Hold       string              `json:"hold,omitempty"`
@@ -427,9 +434,19 @@ func (q *queueRun) runOnce(batch *queueBatch, log string) (queueVerdict, error) 
 
 // judge runs the check until it has a verdict. A failure is a non-zero exit that
 // survives its retries. A pass after a failure is a flake: it counts as a pass, and
-// the evidence and status both say so, so one can't go unnoticed.
+// the evidence and status both say so, so one can't go unnoticed. A passing run
+// already recorded for this tree and command is the verdict, and a new pass is
+// recorded, so nothing runs the same check on the same tree twice.
 func (q *queueRun) judge(batch *queueBatch, log string) (queueVerdict, error) {
 	if batch.Command == "" {
+		return verdictPass, nil
+	}
+	tree, err := q.git("rev-parse", "HEAD^{tree}")
+	if err != nil {
+		tree = ""
+	}
+	if _, ok := passedCheck(q.tree, tree, batch.Command); ok {
+		batch.Reused++
 		return verdictPass, nil
 	}
 	failed := false
@@ -439,6 +456,9 @@ func (q *queueRun) judge(batch *queueBatch, log string) (queueVerdict, error) {
 			return verdictNone, err
 		}
 		if verdict == verdictPass {
+			if tree != "" {
+				_ = saveCheckRecord(q.tree, tree, batch.Command, 0, q.ops.now())
+			}
 			if failed {
 				batch.Flakes++
 				q.current.Flaked = fmt.Sprintf("the check failed and then passed on base %s, in a batch with %s", batch.Base, describeSteps(batch.Steps))
