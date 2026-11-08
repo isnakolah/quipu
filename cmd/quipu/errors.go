@@ -25,7 +25,7 @@ var flowErrors = []flowErrorKind{
 	{"worktree-held", "that worktree still holds a live lease", "finish it with `quipu done N --json` first, or take other work"},
 	{"worktree-dirty", "that worktree has changes or commits found nowhere else, and its Issue is not Done", "commit and push them, or `git restore` them from inside it, then rerun the same command"},
 	{"worktree-missing", "no linked worktree of this clone matches", "check `git worktree list`; the main checkout is never removed"},
-	{"no-receipt", "the Writer did not answer before the wait ran out", "the request stays queued and still applies when the Writer next runs, so rerun the same command later instead of taking other work; it is safe. If it keeps happening, tell the owner what the message says about the Writer and its runner"},
+	{"no-receipt", "the Writer did not answer before the wait ran out", "the request stays queued and still applies when the Writer next runs, so rerun the same command later instead of taking other work; it is safe. After a merge, done never returns this: it says `Merged, receipt pending` and you take other work. If it keeps happening, tell the owner what the message says about the Writer and its runner"},
 	{"rejected-stale", "the work changed while your request was in flight", "rerun the same command"},
 	{"rejected-taken", "another agent claimed the work first", "run `quipu start --next --json` for other work"},
 	{"rejected-blocked", "the work has an open blocker", "take other work with `quipu start --next --json`"},

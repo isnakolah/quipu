@@ -96,6 +96,10 @@ What you give up: `issues` and `pull_request` events no longer start it, because
 
 **A second runner.** Those times hold only while a runner is free. If your only runner is building, builds win and claims wait. `quipu runner setup` explains adding a runner only the Writer can use: register it with `--no-default-labels --labels quipu-writer`, then set `workflows.runs_on.writer: [quipu-writer]`. A runner with its default labels would also take your builds.
 
+**Off your machine.** A Writer on a self-hosted runner stops the whole board while that machine sleeps, and one that shares the runner with your builds makes every claim wait behind a build. `quipu doctor` warns about both (`writer runner`). The fix is `workflows.runs_on.writer: [ubuntu-latest]` with `workflows.writer_mode: serial`; the Writer needs no toolchain, only `go install` of the pinned Quipu. On a private repository hosted minutes count against your plan, which is why Quipu recommends this and never sets it for you.
+
+**A slow Writer never fails a merge.** When `quipu done` has merged the PR and the Writer has not answered within `--wait`, it reports `"status": "Merged, receipt pending"` and exits 0 instead of `no-receipt`: the request stays queued, and the agent moves on. When the Writer accepts the evidence and the agent's own Done request never arrives, the Writer closes the Issue itself ten minutes later.
+
 **To migrate**, through a PR you review:
 
 1. Update `workflows.quipu_version` to a version with `quipu writer serve`, and update the `quipu` on your runner's PATH, because a PATH binary wins over the pin.
