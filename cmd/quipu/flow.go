@@ -381,6 +381,9 @@ type startOptions struct {
 	// SkipElsewhere passes over work whose branch another worktree still has, so
 	// the daemon isn't stopped by work parked in a checkout it didn't make.
 	SkipElsewhere bool
+	// Next is set by start --next: an existing worktree that already holds this
+	// Issue's lease is another dispatcher's work, not this one's to resume.
+	Next bool
 }
 
 func startCommand(args []string) error {
@@ -438,7 +441,7 @@ func startNextWork(c model.Config, here worktree, o startOptions) (flowResult, e
 		return flowResult{}, err
 	}
 	ready := nextWork(candidates, time.Now())
-	o.Branch = ""
+	o.Branch, o.Next = "", true
 	// With no slot free, work outside the build areas can still start.
 	found := len(ready) > 0
 	ready, short := openClaimGate(c, here, o.Worktree, time.Now()).outsideBuilds(ready)
@@ -538,8 +541,18 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 			place = n
 		}
 		path := dispatchPath(here.Top, o.WorktreeRoot, c.Repository, place)
+		// Dispatchers in one clone share the worktree path for an Issue, and so
+		// would share its lease identity: one claims at a time.
+		unlock, ok := here.dispatchLock(number)
+		if !ok {
+			return flowResult{}, claimedHere(number)
+		}
+		defer unlock()
 		created, createdTree, createdBranch, err := here.addWorktree(path, branch, c.DefaultBranch)
 		if err != nil {
+			return flowResult{}, err
+		}
+		if err := reuseRefusal(created, createdTree, o.Next, number); err != nil {
 			return flowResult{}, err
 		}
 		if createdTree {
