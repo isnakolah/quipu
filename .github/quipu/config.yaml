@@ -31,3 +31,4 @@ issues_by: agents
 ready_by: agents
 triage_by: agents
 guard_reads: open
+guard: deny-list
