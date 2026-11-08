@@ -18,6 +18,10 @@ import (
 )
 
 const leaseFileName = "quipu-lease"
+
+// finishedFileName marks a worktree whose work just left it, so its holder may
+// tidy it up for a while with no lease. A new lease replaces it.
+const finishedFileName = "quipu-finished"
 const agentIDFileName = "quipu-agent-id"
 
 // leaseVerifyTTL is how long the guard trusts a live lease check before it
@@ -131,7 +135,36 @@ func (w worktree) writeLease(lease leaseContext) error {
 	if err := os.WriteFile(tmp, raw, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	_ = os.Remove(filepath.Join(w.GitDir, finishedFileName))
+	return nil
+}
+
+// finishedRecord says which work left this worktree and until when its holder
+// may still tidy up there.
+type finishedRecord struct {
+	Issue  int    `json:"issue"`
+	Branch string `json:"branch"`
+	Until  string `json:"until"`
+}
+
+// readFinished returns the worktree's finished record while its window is open.
+func (w worktree) readFinished(now time.Time) (finishedRecord, bool) {
+	raw, err := os.ReadFile(filepath.Join(w.GitDir, finishedFileName))
+	if err != nil {
+		return finishedRecord{}, false
+	}
+	var f finishedRecord
+	if json.Unmarshal(raw, &f) != nil || f.Issue < 1 {
+		return finishedRecord{}, false
+	}
+	until, err := time.Parse(time.RFC3339, f.Until)
+	if err != nil || !until.After(now) {
+		return finishedRecord{}, false
+	}
+	return f, true
 }
 
 // removeLease forgets this worktree's lease on Issue number, and reports whether
@@ -146,10 +179,21 @@ func (w worktree) removeLease(number int) bool {
 }
 
 // release frees this worktree once its work on Issue number has left it, and runs
-// the repository's cleanup there. A second call finds nothing to do. What cleanup
+// the repository's cleanup there. For grace afterwards the holder may still tidy
+// up (see guard_finish.go). A second call finds nothing to do. What cleanup
 // couldn't do is a warning: the work itself is finished.
-func (w worktree) release(number int, cleanup string) []string {
-	if !w.removeLease(number) || cleanup == "" || !w.linked() {
+func (w worktree) release(number int, cleanup string, grace time.Duration) []string {
+	lease, err := w.readLease()
+	if err != nil || lease.Issue != number || !w.removeLease(number) {
+		return nil
+	}
+	if grace > 0 {
+		if raw, err := json.Marshal(finishedRecord{Issue: number, Branch: lease.Branch,
+			Until: time.Now().Add(grace).UTC().Format(time.RFC3339)}); err == nil {
+			_ = os.WriteFile(filepath.Join(w.GitDir, finishedFileName), raw, 0600)
+		}
+	}
+	if cleanup == "" || !w.linked() {
 		return nil
 	}
 	return runCleanup(w.Top, cleanup)

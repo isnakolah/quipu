@@ -3,6 +3,7 @@ package model
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestScopedCommand(t *testing.T) {
@@ -94,5 +95,23 @@ func TestAutonomyConfigValidates(t *testing.T) {
 	off := loaded.WithoutRelaxations()
 	if off.AutoReady || off.Dispatches() || len(off.ScopedChecks) != 0 || len(off.SlowChecks) != 0 {
 		t.Fatalf("not cleared: %+v", off)
+	}
+}
+
+func TestDoneGrace(t *testing.T) {
+	if got := (Config{}).DoneGrace(); got != time.Hour {
+		t.Fatalf("unset means an hour: %v", got)
+	}
+	for minutes, valid := range map[int]bool{0: true, 15: true, 1440: true, -1: false, 1441: false} {
+		c := Config{DoneGraceMinutes: &minutes}
+		if err := c.ValidateAutonomy(); (err == nil) != valid {
+			t.Errorf("done_grace_minutes: %d: %v", minutes, err)
+		}
+		if valid && c.DoneGrace() != time.Duration(minutes)*time.Minute {
+			t.Errorf("done_grace_minutes: %d gives %v", minutes, c.DoneGrace())
+		}
+	}
+	if (Config{DoneGraceMinutes: new(int)}).WithoutRelaxations().DoneGraceMinutes != nil {
+		t.Fatal("an untrusted config keeps the default window")
 	}
 }
