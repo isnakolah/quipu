@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -91,7 +92,7 @@ func findRemovable(entries []worktreeEntry, target string, leaseIssue func(path 
 		}
 		return worktreeEntry{}, flowErr("worktree-missing", "no linked worktree holds #%d", number)
 	}
-	wanted := realPath(target)
+	wanted := worktreePath(target)
 	for i, entry := range entries {
 		if realPath(entry.Path) != wanted {
 			continue
@@ -102,6 +103,20 @@ func findRemovable(entries []worktreeEntry, target string, leaseIssue func(path 
 		return entry, nil
 	}
 	return worktreeEntry{}, flowErr("worktree-missing", "%s is not a worktree of this clone", target)
+}
+
+// worktreePath is the real absolute path a user typed: relative to here, with
+// ~ for home, a trailing slash, or symlinks on the way, as git lists it.
+func worktreePath(target string) string {
+	if target == "~" || strings.HasPrefix(target, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			target = filepath.Join(home, strings.TrimPrefix(target, "~"))
+		}
+	}
+	if abs, err := filepath.Abs(target); err == nil {
+		target = abs
+	}
+	return realPath(filepath.Clean(target))
 }
 
 // removeWorktreeTree takes one linked worktree away. Work that isn't Done keeps
@@ -144,7 +159,9 @@ func removeWorktreeTree(root worktree, entry worktreeEntry, cleanup string, live
 	if cleanup != "" {
 		warnings = runCleanup(target.Top, cleanup)
 	}
-	if _, err := root.git("worktree", "remove", "--force", target.Top); err != nil {
+	// Twice forced, git also removes a worktree a tool locked for its session;
+	// the checks above already said nothing here is still needed.
+	if _, err := root.git("worktree", "remove", "--force", "--force", target.Top); err != nil {
 		return flowResult{}, err
 	}
 	if _, err := root.git("worktree", "prune"); err != nil {

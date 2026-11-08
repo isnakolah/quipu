@@ -537,7 +537,11 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		}
 		w = created
 	} else if w.branch() != branch {
-		// Fail before claiming when another worktree already has the branch.
+		// Fail before claiming when this worktree cannot switch or another
+		// worktree already has the branch.
+		if err := w.requireIdle(branch); err != nil {
+			return flowResult{}, err
+		}
 		if err := w.requireBranchFree(branch); err != nil {
 			return flowResult{}, err
 		}
