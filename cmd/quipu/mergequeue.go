@@ -468,7 +468,7 @@ func (w *watch) recordQueued(state *liveWork, queued writer.Receipt, view mergeV
 		return err
 	}
 	if receipt.Result != "accepted" {
-		return w.endQueue(queued, fmt.Sprintf("PR %s merged, but its evidence was rejected: %s. Record it from any checkout with: quipu done %d --actor %s --json --criteria ... --commands ... --documentation ... --risks ... --boundary ... --ci-url ...", queued.Merge.PR, receipt.Detail, w.number, state.Holder))
+		return w.endQueue(queued, fmt.Sprintf("PR %s merged, but its evidence was rejected: %s. Record it from any checkout with: quipu done %d --actor %s --json --evidence-file FILE --ci-url ...", queued.Merge.PR, receipt.Detail, w.number, state.Holder))
 	}
 	return w.finishQueued(queued)
 }
