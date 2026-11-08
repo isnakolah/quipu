@@ -49,6 +49,8 @@ func run(args []string) error {
 		return startCommand(args[1:])
 	case "worktree":
 		return worktreeCommand(args[1:])
+	case "lease":
+		return leaseCommand(args[1:])
 	case "queue":
 		return queueCommand(args[1:])
 	case "daemon":
@@ -423,6 +425,7 @@ Everyday:
   start --next  claim the highest-priority Ready work (for agents)
   start --next --worktree  claim it into a new git worktree (dispatch a parallel agent)
   done N     link the PR, then after merge record evidence and close #N
+  lease release [N]  give back your own lease, or clear a record left over from an expired one
 
 Setup and advanced:
 Owner:
