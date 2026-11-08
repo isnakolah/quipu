@@ -81,7 +81,7 @@ func TestSyncWritesTheFlagsThisChangeCommits(t *testing.T) {
 	top := gitRepo(t)
 	writeRepoFile(t, top, rootConfigPath, repoConfig(t))
 	gitIn(t, top, "add", "-A")
-	gitIn(t, top, "commit", "-qm", "config")
+	gitIn(t, top, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "config")
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	gitIn(t, top, "init", "-q", "--bare", "-b", "main", bare)
 	gitIn(t, top, "remote", "add", "origin", bare)
