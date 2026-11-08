@@ -36,13 +36,24 @@ func main() {
 }
 
 func run(args []string) error {
+	if path, ok := helpRequest(args); ok {
+		return printHelp(path)
+	}
+	err := dispatch(args)
+	if errors.Is(err, flag.ErrHelp) {
+		// The flag package already printed the usage.
+		return nil
+	}
+	return err
+}
+
+func dispatch(args []string) error {
 	if len(args) == 0 {
 		return usage()
 	}
 	switch args[0] {
 	case "version":
-		fmt.Println(version)
-		return nil
+		return versionCommand(args[1:])
 	case "status":
 		return statusCommand(args[1:])
 	case "start":
@@ -120,7 +131,7 @@ func run(args []string) error {
 
 func prCommand(args []string) error {
 	if len(args) == 0 || args[0] != "link" {
-		return errors.New("usage: quipu pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply")
+		return errors.New("usage: quipu pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply [--json]")
 	}
 	return submitRequest("pr.link", args[1:], nil)
 }
@@ -133,7 +144,7 @@ func issueCommand(args []string) error {
 		return addBlockerCommand(args[1:])
 	}
 	if len(args) == 0 || args[0] != "create" {
-		return errors.New("usage: quipu issue {create|link-parent}")
+		return errors.New("usage: quipu issue {create|link-parent|add-blocker} [--json]")
 	}
 	fs := flag.NewFlagSet("issue create", flag.ContinueOnError)
 	title := fs.String("title", "", "Issue title")
@@ -144,6 +155,7 @@ func issueCommand(args []string) error {
 	priority := fs.String("priority", "P2", "P0|P1|P2|P3")
 	approvedBy := fs.String("approved-by", "", "owner approval identity; required for Epic")
 	apply := applyFlag(fs)
+	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -206,6 +218,10 @@ func issueCommand(args []string) error {
 			return fmt.Errorf("created Epic %s but could not record approval: %w", issueURL, err)
 		}
 	}
+	if *asJSON {
+		return printValue(map[string]any{"issue": number, "url": issueURL, "kind": *kind, "parent": *parent, "status": "Backlog",
+			"next": fmt.Sprintf("#%d is in Backlog; the owner makes it Ready", number)}, true)
+	}
 	fmt.Println(issueURL)
 	return nil
 }
@@ -245,6 +261,7 @@ func addBlockerCommand(args []string) error {
 	issue := fs.Int("issue", 0, "blocked Issue number")
 	blocker := fs.Int("blocker", 0, "blocking Issue number")
 	apply := applyFlag(fs)
+	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -258,7 +275,20 @@ func addBlockerCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	return addBlocker(c, *issue, *blocker)
+	if err := addBlocker(c, *issue, *blocker); err != nil {
+		return err
+	}
+	return printLinked(*asJSON, map[string]any{"issue": *issue, "blocker": *blocker, "status": "Linked",
+		"next": fmt.Sprintf("#%d waits for #%d to close", *issue, *blocker)})
+}
+
+// printLinked reports a native link that was made. Without --json it stays
+// quiet, as it always has.
+func printLinked(asJSON bool, report map[string]any) error {
+	if asJSON {
+		return printValue(report, true)
+	}
+	return nil
 }
 
 // addBlocker records a native "blocked by" link.
@@ -295,6 +325,7 @@ func linkParentCommand(args []string) error {
 	parent := fs.Int("parent", 0, "parent Issue number")
 	child := fs.Int("child", 0, "child Issue number")
 	apply := applyFlag(fs)
+	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -308,7 +339,11 @@ func linkParentCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	return linkParent(c, *parent, *child)
+	if err := linkParent(c, *parent, *child); err != nil {
+		return err
+	}
+	return printLinked(*asJSON, map[string]any{"parent": *parent, "child": *child, "status": "Linked",
+		"next": fmt.Sprintf("#%d is a sub-issue of #%d", *child, *parent)})
 }
 
 func linkParent(c model.Config, parent, child int) error {
@@ -418,8 +453,9 @@ func configuredFieldIDsFromMap(projectNumber int, fields map[string]projectField
 	}
 	return ids, nil
 }
-func usage() error {
-	return errors.New(`usage: quipu <command>
+func usage() error { return errors.New(usageText) }
+
+const usageText = `usage: quipu <command>
 
 Everyday:
   status     what is in progress, in review, ready, and needs attention
@@ -430,7 +466,6 @@ Everyday:
   check      run the merge check here and record it, so quipu done reuses a pass for the same tree
   lease release [N]  give back your own lease, or clear a record left over from an expired one
 
-Setup and advanced:
 Owner:
   ready N    make #N Ready for agents
   move N S   move #N to backlog, ready, blocked, or archived
@@ -438,8 +473,11 @@ Owner:
   hooks      install the agent guard hooks in this repository (--apply)
 
 Setup and advanced:
-  init|adopt|import|verify-commit|doctor|guide|config|context|validate|runner|issue|triage|work|pr|evidence|request|writer|journal|policy|configure|guard|propose|version`)
-}
+  propose|park|worktree|queue|daemon|init|adopt|import|verify-commit|doctor|guide|config|context|validate|runner|issue|triage|work|pr|evidence|request|writer|journal|policy|configure|guard|version
+
+Every command takes --json, and prints {"error": {"code", "message", "next"}} when it fails.
+Run quipu <command> --help, or quipu help <command>, for its flags.`
+
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")
 }
@@ -454,6 +492,7 @@ func initCommand(args []string) error {
 	setup := addSetupFlags(fs)
 	apply := applyFlag(fs)
 	yes := fs.Bool("yes", false, "confirm bootstrap")
+	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -484,12 +523,21 @@ func initCommand(args []string) error {
 	if err := initializeBootstrapRepository(*owner, *repo, c.DefaultBranch); err != nil {
 		return fmt.Errorf("GitHub repository and Project were provisioned, but local bootstrap push failed: %w", err)
 	}
-	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, created.Number, rootConfigPath)
+	next := "set the QUIPU_WRITER_TOKEN secret, then run `quipu doctor`"
 	// Protect only after the bootstrap push: protection forbids direct pushes.
+	warnings := []string{}
 	if err := protectRepository(c, false); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\nGitHub does not enforce the flow yet; run `quipu protect --apply` (private repositories need a paid plan)\n", err)
+		warnings = append(warnings, fmt.Sprintf("%v; GitHub does not enforce the flow yet; run `quipu protect --apply` (private repositories need a paid plan)", err))
 	}
-	fmt.Println("next: set the QUIPU_WRITER_TOKEN secret, then run `quipu doctor`")
+	if *asJSON {
+		return printValue(map[string]any{"repository": *owner + "/" + *repo, "project": created.Number, "config": rootConfigPath,
+			"protected": len(warnings) == 0, "warnings": warnings, "next": next}, true)
+	}
+	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, created.Number, rootConfigPath)
+	for _, warning := range warnings {
+		fmt.Fprintln(os.Stderr, "warning: "+warning)
+	}
+	fmt.Println("next: " + next)
 	return nil
 }
 
@@ -881,7 +929,7 @@ func epicApprovalEvidence(owner string, comments []struct {
 
 func requestCommand(args []string) error {
 	if len(args) == 0 || args[0] != "status" {
-		return errors.New("usage: quipu request status --issue-number N [--request-id ID] [--json] | --issue-id ID --fingerprint SHA --status STATUS --apply")
+		return errors.New("usage: quipu request status --issue-number N [--request-id ID] [--json] | --issue-id ID --fingerprint SHA --status STATUS --apply [--json]")
 	}
 	if contains(args[1:], "--apply") {
 		return submitRequest("status", args[1:], nil)
@@ -1150,6 +1198,7 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	branch := fs.String("branch", "", "NNN/short-description branch")
 	status := fs.String("status", "", "requested Project Status")
 	pr := fs.String("pr", "", "pull request URL")
+	asJSON := jsonFlag(fs)
 	var finalSHA, ciURL, commands, environments, criteria, artifacts, documentation, risks, boundary *string
 	if evidence != nil {
 		finalSHA = fs.String("final-sha", "", "final merged commit SHA")
@@ -1202,6 +1251,10 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	if err != nil {
 		return err
 	}
+	if *asJSON {
+		return printValue(map[string]any{"request_id": r.ID, "action": action, "issue": *number, "comment_id": comment.ID, "status": "Posted",
+			"next": fmt.Sprintf("the Writer answers it; read its receipt with quipu request status --issue-number %d --request-id %s --json", *number, r.ID)}, true)
+	}
 	fmt.Printf("request %s posted as comment %d\n", r.ID, comment.ID)
 	return nil
 }
@@ -1235,10 +1288,11 @@ func journalCommand(args []string) error {
 
 func configureCommand(args []string) error {
 	if len(args) == 0 || args[0] != "writer-token" {
-		return errors.New("usage: quipu configure writer-token --apply < token")
+		return errors.New("usage: quipu configure writer-token --apply [--json] < token")
 	}
 	fs := flag.NewFlagSet("configure writer-token", flag.ContinueOnError)
 	apply := applyFlag(fs)
+	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -1253,8 +1307,15 @@ func configureCommand(args []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if *asJSON {
+		// stdout carries only the JSON report.
+		cmd.Stdout = os.Stderr
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("set QUIPU_WRITER_TOKEN: %w", err)
+	}
+	if *asJSON {
+		return printValue(map[string]any{"secret": "QUIPU_WRITER_TOKEN", "status": "Configured", "next": "run `quipu doctor --json`"}, true)
 	}
 	fmt.Println("QUIPU_WRITER_TOKEN configured; token was not read, printed, or persisted locally")
 	return nil

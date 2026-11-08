@@ -38,7 +38,7 @@ quipu done N --json --evidence-file ../evidence-N.md
 
 Then go back to `quipu status --json`. If `start --next` returns `"status": "Idle"`, there is no Ready work: say so and stop. If it returns `"status": "Busy"`, other agents won every race: run it again.
 
-**Never wait on a runner or on checks.** Take other work, then look once with `quipu status --json`: `pull_requests` gives each active PR's check results and `next`. When a runner the repository needs is down, `quipu start` and `quipu done` say so in a `runner` field and on stderr, and start it themselves if the owner set a command for that. Carry on either way.
+**Never wait on a runner or on checks.** Take other work, then look once with `quipu status --json`: `pull_requests` gives each active PR's check results and `next`. When a runner the repository needs is down, `quipu start` and `quipu done` say so in a `runner` field every time (and on stderr once per worktree every six hours), and start it themselves if the owner set a command for that. Carry on either way.
 
 Use the repository's default branch for `--base` (`main` here unless `quipu status` says otherwise).
 
@@ -59,6 +59,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu worktree remove N --json` | to free a finished worktree, by Issue number or path | `status: "Removed"`, `worktree`, `warnings`, `next` |
 | `quipu lease release [N] --json` | to give back your own live lease, or clear a record left over from one that is over | `status: "Released"` (back to Ready, branch kept) or `"Cleared"` (record only), `next` |
 | `quipu guide` | to read this handbook | this text |
+| `quipu <command> --help`, `quipu help <command>` | to see a command's flags | its usage; help never runs the command, and the guard always allows it |
 | `quipu runner status --json` | a check won't start, or work seems stuck | each runner's state and labels, what is queued for it, when the Writer last ran |
 | `quipu runner setup` | the owner asks how to set a runner up | the steps, printed for the owner |
 | `quipu doctor --json` | something seems misconfigured | a list of checks with fixes |
@@ -67,7 +68,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 
 Reading is always allowed: `git status/log/diff/show`, `gh issue|pr|run view/list`, `gh api` GET requests, `ls`, `cat`, `grep`, `rg`, `go test`, and the like.
 
-When a command fails with `--json` it prints `{"error": {"code", "message", "next"}}`. Do what `next` says. The codes are listed under [When something fails](#when-something-fails).
+Every command takes `--json`. When a command fails with `--json` it prints `{"error": {"code", "message", "next"}}`. Do what `next` says. The codes are listed under [When something fails](#when-something-fails).
 
 ## Many agents in parallel
 

@@ -1078,6 +1078,10 @@ var quipuAgentCommands = setOf("status", "start", "done", "doctor", "config", "c
 	"help", "-h", "--help", "propose", "park", "guard", "policy", "verify-commit", "check")
 
 func (g *guard) quipu(rest []shellArg, dir string) error {
+	// Help prints usage and runs nothing; the CLI answers exactly these shapes.
+	if quipuHelp(rest) {
+		return nil
+	}
 	if len(rest) > 0 && rest[0].s == "guide" && hasFlag(rest, "--sync") {
 		return deny("quipu-admin", "quipu guide --sync")
 	}
@@ -1114,6 +1118,19 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 	default:
 		return deny("quipu-admin", "quipu "+sub)
 	}
+}
+
+// quipuHelp reports whether the literal arguments only ask quipu for help.
+func quipuHelp(rest []shellArg) bool {
+	words := make([]string, len(rest))
+	for i, arg := range rest {
+		if !arg.ok {
+			return false
+		}
+		words[i] = arg.s
+	}
+	_, ok := helpRequest(words)
+	return ok
 }
 
 // enforcedConfigIn reads the config in force for dir's repository.
