@@ -462,7 +462,47 @@ func runnerConfigChecks(c model.Config, pathVersion string) []doctorCheck {
 	if c.MergesInBackground() && c.Workflows.Cron() == "" {
 		checks = append(checks, doctorCheck{"merge_wait", "warn", "merge_wait: background with workflows.schedule off: unless the Writer workflow has been regenerated to run when checks finish, a queued merge waits for an Issue event", "owner: quipu adopt --apply --replace, or set a schedule"})
 	}
+	if check, ok := writerPlacementCheck(c.Workflows); ok {
+		checks = append(checks, check)
+	}
 	return checks
+}
+
+// writerPlacementCheck warns when the Writer runs on a self-hosted runner. Every
+// claim, review and close waits for it, so a sleeping machine stops the board,
+// and one shared with build jobs makes a claim wait behind a whole build.
+// Moving it is the owner's call: hosted minutes can cost money on a private
+// repository.
+func writerPlacementCheck(w model.Workflows) (doctorCheck, bool) {
+	writer := w.Runner("writer")
+	if !hasRunnerLabel(writer, "self-hosted") {
+		return doctorCheck{}, false
+	}
+	detail := "the Writer runs on a self-hosted runner (" + strings.Join(writer, ",") + "), so the board stops while that machine sleeps"
+	for _, job := range []string{"test", "policy"} {
+		if sameLabels(writer, w.Runner(job)) {
+			detail += ", and it shares the runner with the " + job + " job, so a claim can wait behind a build"
+			break
+		}
+	}
+	fix := "owner: set workflows.runs_on.writer: [ubuntu-latest]"
+	if !w.SerialWriter() {
+		fix += " and workflows.writer_mode: serial"
+	}
+	return doctorCheck{"writer runner", "warn", detail, fix + ", then regenerate quipu-writer.yml with quipu adopt --apply --replace and merge it through a PR"}, true
+}
+
+// sameLabels reports whether two jobs land on the same runners.
+func sameLabels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, label := range a {
+		if !hasRunnerLabel(b, label) {
+			return false
+		}
+	}
+	return true
 }
 
 // writerModeCheck warns when the committed Writer workflow isn't the one the config

@@ -434,6 +434,11 @@ func (w *watch) run() error {
 	if err != nil {
 		return err
 	}
+	if !merged {
+		if merged, err = w.closeEvidenced(&state); err != nil {
+			return err
+		}
+	}
 	if w.apply && (changed || reclaimed || merged) {
 		for _, branch := range uniqueBranches(before.Branch, state.Branch) {
 			w.recheckPolicy(branch)
