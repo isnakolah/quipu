@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/isnakolah/quipu/internal/model"
+	"github.com/isnakolah/quipu/internal/writer"
 )
 
 // guardRule is one reason the guard denies. The agent guide renders this
@@ -32,7 +33,7 @@ type guardRule struct {
 var guardRules = []guardRule{
 	{"no-lease", "changes need an active lease in this worktree", "run `quipu start --next --json` (or `quipu start N --json`), then retry"},
 	{"wrong-branch", "this worktree is not on its leased branch", "run `quipu start N --json` with the leased Issue; it switches to the branch. A record left over from other work clears itself once its lease is over, or now with `quipu lease release N --json`"},
-	{"other-worktree", "agents change only the worktree that holds their own lease", "work inside your own worktree; dispatch other work with `quipu start --next --worktree --json`"},
+	{"other-worktree", "agents change only their own leased worktree, or, holding no lease themselves, a worktree leased to their own login", "work inside your own worktree; dispatch other work with `quipu start --next --worktree --json`"},
 	{"lease-inactive", "the live lease is expired, held by someone else, or no longer active", "run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder. The leftover record is cleared, so nothing else is blocked"},
 	{"git-internals", "files under .git hold git and Quipu state (lease, identity)", "use git and quipu commands; never edit .git directly"},
 	{"quipu-config", "Quipu's config, workflows, and agent hooks are owner-only", "ask the owner in a comment on your PR"},
@@ -48,7 +49,8 @@ var guardRules = []guardRule{
 	{"pr-body", "a PR must be created from the leased branch with a body saying exactly `Refs #N` for the leased Issue and no closing keywords", "run `gh pr create --base <default> --head <leased branch> --title ... --body \"Refs #N ...\"`"},
 	{"quipu-admin", "Quipu recovery and admin commands are owner-only", "use `quipu start`, `quipu done`, or `quipu propose`; ask the owner for recovery"},
 	{"quipu-missing", "quipu is not installed, so no call can be checked", "ask the owner to install quipu (docs/source-install.md in the Quipu repository)"},
-	{"unparsable", "the guard could not tell what this command does", "rewrite it as plain commands without eval, variables as command names, or computed paths"},
+	{"unparsable", "the guard could not tell where this part of the command writes; nothing else on the line was refused", "this is not a policy refusal: give the path or command literally, or assign the variable earlier in the same command (`L=/tmp/check.log; make check > \"$L\"`)"},
+	{"guard-deny", "the repository refuses this command for agents (deploy, publish, spend)", "ask the owner, who runs it or opens a Gate; take other work meanwhile"},
 }
 
 func ruleFor(code string) guardRule {
@@ -64,6 +66,8 @@ func ruleFor(code string) guardRule {
 type denial struct {
 	guardRule
 	Detail string
+	// Command is the simple command that was refused, out of the whole line.
+	Command string
 }
 
 func (d denial) Error() string {
@@ -71,10 +75,13 @@ func (d denial) Error() string {
 	if d.Detail != "" {
 		text += " (" + d.Detail + ")"
 	}
+	if d.Command != "" {
+		text += "; denied: `" + d.Command + "`"
+	}
 	return text + ". Do instead: " + d.Instead + ". Rules: `quipu guide`."
 }
 
-func deny(code, detail string) error { return denial{ruleFor(code), detail} }
+func deny(code, detail string) error { return denial{guardRule: ruleFor(code), Detail: detail} }
 
 // hookInput is the PreToolUse payload from Claude Code or Codex.
 type hookInput struct {
@@ -116,8 +123,18 @@ type guard struct {
 	// an agent may then change no other worktree.
 	sessionLeased bool
 	verified      map[string]leaseContext
+	// configs caches each worktree's enforced config for this tool call.
+	configs map[string]configEntry
+	// vars holds shell variables the command assigned a literal so far.
+	vars map[string]string
 	// live reads an Issue's state from GitHub.
 	live func(c model.Config, number int) (liveWork, error)
+	// caller names who makes the call, as a login or provider/login/id. The
+	// guard asks only when a change reaches into a worktree that is not the
+	// session's own, and asks at most once.
+	caller   func(now time.Time) (string, error)
+	callerID string
+	callerOK bool
 }
 
 func newGuard(cwd string, now time.Time) *guard {
@@ -127,7 +144,7 @@ func newGuard(cwd string, now time.Time) *guard {
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
 	}
-	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}, live: loadLiveWork}
+	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}, configs: map[string]configEntry{}, live: loadLiveWork, caller: callerActor}
 	if w, err := openWorktree(cwd); err == nil {
 		g.session = w
 		if hasConfig(w.Top) {
@@ -338,6 +355,13 @@ func (g *guard) writeIn(dir string) error {
 	if err != nil {
 		return deny("no-lease", "worktree "+w.Top)
 	}
+	// A session started elsewhere, such as a subagent in the main checkout,
+	// may change a leased worktree only when the lease is its own login's.
+	if g.session.Top != w.Top && !lease.expired(g.now) {
+		if err := g.sameHolder(w, lease); err != nil {
+			return err
+		}
+	}
 	// A record left behind never blocks: one whose lease ran out, or that
 	// GitHub says is no longer live, is cleared before the branch is judged.
 	if lease.expired(g.now) {
@@ -361,6 +385,57 @@ func (g *guard) writeIn(dir string) error {
 	}
 	g.verified[w.Top] = lease
 	return nil
+}
+
+// sameHolder allows a change into w from another session only when the
+// caller's GitHub login holds w's lease. Not knowing who calls proves nothing,
+// so it denies.
+func (g *guard) sameHolder(w worktree, lease leaseContext) error {
+	if !g.callerOK {
+		actor, err := g.caller(g.now)
+		if err != nil {
+			return deny("other-worktree", fmt.Sprintf("target %s is leased to %q and your GitHub login is unknown: %v", w.Top, lease.Holder, err))
+		}
+		g.callerID, g.callerOK = actor, true
+	}
+	if !writer.SameLogin(lease.Holder, g.callerID) {
+		return deny("other-worktree", fmt.Sprintf("target %s is leased to %q, not to %q", w.Top, lease.Holder, g.callerID))
+	}
+	return nil
+}
+
+// callerLoginTTL is how long the guard trusts its cached GitHub login.
+const callerLoginTTL = time.Hour
+
+// callerActor is QUIPU_ACTOR when set, else the GitHub login gh is signed in
+// as. The login is cached on this machine so a subagent's every edit stays
+// off the API.
+func callerActor(now time.Time) (string, error) {
+	if actor := strings.TrimSpace(os.Getenv("QUIPU_ACTOR")); actor != "" {
+		return actor, nil
+	}
+	m, err := openMachine()
+	if err != nil {
+		return "", err
+	}
+	cache := filepath.Join(m.dir, "login")
+	if info, err := os.Stat(cache); err == nil && now.Sub(info.ModTime()) < callerLoginTTL {
+		if raw, err := os.ReadFile(cache); err == nil && strings.TrimSpace(string(raw)) != "" {
+			return strings.TrimSpace(string(raw)), nil
+		}
+	}
+	output, err := ghOutput("api", "user", "--jq", ".login")
+	if err != nil {
+		return "", err
+	}
+	login := strings.TrimSpace(string(output))
+	if login == "" {
+		return "", errors.New("gh api user gave no login")
+	}
+	if os.MkdirAll(m.dir, 0o755) == nil {
+		_ = os.WriteFile(cache, []byte(login+"\n"), 0o644)
+	}
+	return login, nil
 }
 
 // verifyLive checks the lease against GitHub and caches the result in the
