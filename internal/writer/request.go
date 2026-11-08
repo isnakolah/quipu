@@ -47,6 +47,10 @@ type Request struct {
 	Reason string `json:"reason,omitempty"`
 	// On is the Decision a park request waits for.
 	On int `json:"on,omitempty"`
+	// Assignee is the login an assign chore adds to the Issue.
+	Assignee string `json:"assignee,omitempty"`
+	// Body is the Issue body an edit chore puts in place.
+	Body string `json:"body,omitempty"`
 }
 
 // Import records where an imported Issue stood before Quipu. The Writer

@@ -166,3 +166,27 @@ func (c *Client) AddLabels(ctx context.Context, owner, repo string, number int, 
 func (c *Client) RemoveLabel(ctx context.Context, owner, repo string, number int, label string) error {
 	return c.Do(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s", owner, repo, number, url.PathEscape(label)), nil, nil)
 }
+
+// SetIssueBody replaces an Issue's body.
+func (c *Client) SetIssueBody(ctx context.Context, owner, repo string, number int, body string) error {
+	return c.Do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]string{"body": body}, nil)
+}
+
+// AddAssignee assigns login to an Issue. GitHub ignores a login it cannot
+// assign without failing, so this reads the result and says so.
+func (c *Client) AddAssignee(ctx context.Context, owner, repo string, number int, login string) error {
+	var issue struct {
+		Assignees []struct {
+			Login string `json:"login"`
+		} `json:"assignees"`
+	}
+	if err := c.Do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/assignees", owner, repo, number), map[string][]string{"assignees": {login}}, &issue); err != nil {
+		return err
+	}
+	for _, assignee := range issue.Assignees {
+		if strings.EqualFold(assignee.Login, login) {
+			return nil
+		}
+	}
+	return fmt.Errorf("GitHub did not assign %s: the login cannot be assigned in %s/%s", login, owner, repo)
+}

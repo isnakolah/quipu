@@ -1112,7 +1112,22 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 		return nil
 	case sub == "queue" && len(rest) > 1 && rest[1].s == "status":
 		return nil
-	case sub == "ready" && agentsMakeReady(dir):
+	case sub == "ready" || sub == "move":
+		c, err := enforcedConfigIn(dir)
+		if err != nil {
+			return deny("quipu-admin", "quipu "+sub+": "+err.Error())
+		}
+		if problem := agentMoveProblem(c, sub, rest[1:], func(number int) (string, error) { return guardIssueKind(c, number) }); problem != "" {
+			return deny("quipu-admin", "quipu "+sub+": "+problem)
+		}
+		return nil
+	case sub == "pr" && len(rest) > 1 && rest[1].s == "close":
+		return nil
+	case sub == "issue" && len(rest) > 1 && (rest[1].s == "assign" || rest[1].s == "edit"):
+		c, err := enforcedConfigIn(dir)
+		if err != nil || !c.AgentsCreateIssues() {
+			return deny("quipu-admin", "quipu issue "+rest[1].s+": agents assign and edit Issues only with issues_by: agents on the default branch")
+		}
 		return nil
 	case sub == "triage" && agentsTriage(dir):
 		return nil
@@ -1154,12 +1169,6 @@ func enforcedConfigIn(dir string) (model.Config, error) {
 	}
 	c, _, err := loadEnforcedConfig(w, false)
 	return c, err
-}
-
-// agentsMakeReady reports whether dir's repository lets agents make work Ready.
-func agentsMakeReady(dir string) bool {
-	c, err := enforcedConfigIn(dir)
-	return err == nil && c.AgentsMakeReady()
 }
 
 // agentsTriage reports whether dir's repository lets agents triage Issues.

@@ -130,8 +130,11 @@ func dispatch(args []string) error {
 }
 
 func prCommand(args []string) error {
+	if len(args) > 0 && args[0] == "close" {
+		return prCloseCommand(args[1:])
+	}
 	if len(args) == 0 || args[0] != "link" {
-		return errors.New("usage: quipu pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply [--json]")
+		return errors.New("usage: quipu pr {close PR|link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply} [--json]")
 	}
 	return submitRequest("pr.link", args[1:], nil)
 }
@@ -143,8 +146,14 @@ func issueCommand(args []string) error {
 	if len(args) > 0 && args[0] == "add-blocker" {
 		return addBlockerCommand(args[1:])
 	}
+	if len(args) > 0 && args[0] == "assign" {
+		return issueAssignCommand(args[1:])
+	}
+	if len(args) > 0 && args[0] == "edit" {
+		return issueEditCommand(args[1:])
+	}
 	if len(args) == 0 || args[0] != "create" {
-		return errors.New("usage: quipu issue {create|link-parent|add-blocker} [--json]")
+		return errors.New("usage: quipu issue {create|assign|edit|link-parent|add-blocker} [--json]")
 	}
 	fs := flag.NewFlagSet("issue create", flag.ContinueOnError)
 	title := fs.String("title", "", "Issue title")
@@ -468,7 +477,7 @@ Everyday:
 
 Owner:
   ready N    make #N Ready for agents
-  move N S   move #N to backlog, ready, blocked, or archived
+  move N S   move #N to backlog, ready, blocked, or archived (agents: backlog or ready, with ready_by: agents)
   protect    make GitHub enforce the flow (--apply)
   hooks      install the agent guard hooks in this repository (--apply)
 
