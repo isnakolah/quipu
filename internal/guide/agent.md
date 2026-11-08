@@ -27,7 +27,8 @@ gh pr create --base main --head NNN/short-description --title "feat: ..." --body
 What changed and why."
 quipu done N --json                 # moves the work to In review; the owner reviews
 # after the owner merges the PR:
-quipu done N --json --criteria "..." --commands "..." --documentation "..." --risks "..." --boundary CI
+quipu done --evidence-template > ../evidence-N.md   # fill it in, outside the worktree
+quipu done N --json --evidence-file ../evidence-N.md
 ```
 
 Then go back to `quipu status --json`. If `start --next` returns `"status": "Idle"`, there is no Ready work: say so and stop. If it returns `"status": "Busy"`, other agents won every race: run it again.
@@ -45,7 +46,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
 | `quipu done N --json` | PR open: move to review | `status: "In review"`, `pr`, `next` |
-| `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` | PR merged: record evidence and close | `status: "Done"`, `next` |
+| `quipu done N --json --evidence-file FILE` | PR merged: record evidence and close (or the `--criteria ... --boundary ...` flags) | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
@@ -109,7 +110,7 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
-**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with your evidence file (or every evidence flag), and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
 
 **When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
 
@@ -122,14 +123,21 @@ Refs: #42
 ```
 
 - **Changes requested:** push more commits to the same branch. If the guard says the lease expired, run `quipu start N --json` to renew it first.
-- **Merged:** run `quipu done N --json` with the evidence flags below.
+- **Merged:** run `quipu done N --json --evidence-file FILE` with the evidence below.
 - **Closed without merging:** open a new PR from the same branch with `Refs #N`, then run `quipu done N --json` again.
 
 ## Evidence
 
-After the merge, `quipu done N` records evidence. The PR URL, merge SHA, and CI run come from GitHub. You supply:
+After the merge, `quipu done N` records evidence. The PR URL, merge SHA, and CI run come from GitHub. You supply the rest in a file, so none of it is on the command line:
 
-| Flag | What to write | Example |
+```sh
+quipu done --evidence-template > ../evidence-N.md
+quipu done N --json --evidence-file ../evidence-N.md
+```
+
+The file has one `## Section` per field below (`## Criteria`, `## Commands`, `## Documentation`, `## Risks`, `## Boundary`, and optionally `## Environments`, `## Artifacts`, `## CI URL`), or is a JSON object with the keys `criteria`, `commands`, `documentation`, `risks`, `boundary`, `environments`, `artifacts`, `ci_url`. Lines in a section are joined with `; `. A missing section is named in the error. The flags still work, and a flag given with a file overrides that field.
+
+| Flag / section | What to write | Example |
 |---|---|---|
 | `--criteria` | each acceptance criterion and its result | `"All 3 criteria met: login rejects bad tokens (test TestLogin), ..."` |
 | `--commands` | the exact commands you ran to verify | `"go test ./... ; go vet ./..."` |

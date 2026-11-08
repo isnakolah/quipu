@@ -722,17 +722,23 @@ func doneCommand(args []string) error {
 	prFlag := fs.String("pr", "", "pull request URL; found from the work branch when omitted")
 	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for each Writer receipt")
 	e := writer.Evidence{}
-	fs.StringVar(&e.Criteria, "criteria", "", "acceptance-criteria result")
-	fs.StringVar(&e.Commands, "commands", "", "exact verification commands")
-	fs.StringVar(&e.Documentation, "documentation", "", "documentation changes; None: reason")
-	fs.StringVar(&e.Risks, "risks", "", "known residual risks; None")
-	fs.StringVar(&e.Boundary, "boundary", "", "local|CI|target host|provider|staging|production|release")
-	fs.StringVar(&e.Environments, "environments", defaultEnvironments, "verified environments")
-	fs.StringVar(&e.Artifacts, "artifacts", defaultArtifacts, "artifact, screenshot, or log URLs; None: reason")
-	fs.StringVar(&e.CIURL, "ci-url", "", "CI run URL; read from the PR checks when omitted")
+	evidenceFlags(fs, &e)
+	evidenceFile := fs.String("evidence-file", "", "Markdown or JSON file with the evidence; flags override its fields")
+	template := fs.Bool("evidence-template", false, "print an evidence file template and exit")
+	for _, arg := range args {
+		if arg == "--evidence-template" || arg == "-evidence-template" {
+			fmt.Print(evidenceTemplate)
+			return nil
+		}
+	}
 	number, err := parseIssueArg(fs, args, false)
-	if err != nil {
-		return errors.New("usage: quipu done N [--pr URL] [--criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]")
+	if err != nil || *template {
+		return errors.New("usage: quipu done N [--pr URL] [--evidence-file FILE | --criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]; quipu done --evidence-template")
+	}
+	if *evidenceFile != "" {
+		if err := applyEvidenceFile(&e, *evidenceFile, fs); err != nil {
+			return err
+		}
 	}
 	here, err := currentWorktree()
 	if err != nil {
@@ -824,7 +830,7 @@ func doneCommand(args []string) error {
 		if pull.State != "MERGED" && !c.AgentsMerge() {
 			// Waiting on a person takes no build. Review work resumes with quipu start.
 			freeWorkSlot(c, w)
-			return respond(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("The owner reviews and merges %s; never merge it yourself. Address review comments by pushing to %s (rerun quipu start %d first if the guard reports the lease). After the merge, run: quipu done %d --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...", pull.URL, state.Branch, number, number)})
+			return respond(flowResult{Issue: number, Status: "In review", Branch: state.Branch, PR: pull.URL, Next: fmt.Sprintf("The owner reviews and merges %s; never merge it yourself. Address review comments by pushing to %s (rerun quipu start %d first if the guard reports the lease). After the merge, run: quipu done %d --json --evidence-file FILE (quipu done --evidence-template prints one)", pull.URL, state.Branch, number, number)})
 		}
 		if pull.State != "MERGED" {
 			// merge: agent. Collect the evidence first, so a merged PR never
