@@ -233,6 +233,8 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `not-active` | the Issue is not in progress, in review, or awaiting evidence | check `quipu status --json`; start work with `quipu start N --json` |
 | `no-record` | no lease record matches, here or for that Issue in any worktree of this clone | nothing to release; carry on, or take work with `quipu start --next --json` |
 | `lease-unverified` | GitHub could not be read and the record has not expired, so the lease may still be live | rerun the same command in a minute; a record clears itself once its lease expires |
+| `not-leaf` | the Issue has sub-issues, so no PR may implement it | start one of its leaf Issues instead; `next` names the Ready ones |
+| `not-implementable` | the Issue is closed, of a kind PRs do not implement, without a parent, without a valid work contract, or blocked | take other work with `quipu start --next --json`; the message says what is wrong, and the owner fixes the Issue |
 
 ## What GitHub undoes
 
