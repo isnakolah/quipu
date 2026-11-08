@@ -98,6 +98,10 @@ func writerReconcileCommand(args []string) error {
 		if err := runNightlySlowChecks(c, now); err != nil {
 			failures = append(failures, "slow checks: "+err.Error())
 		}
+		// The digest is a convenience: failing to write it never fails the Writer.
+		if err := keepDigestIssue(c, now); err != nil {
+			total.Warnings = append(total.Warnings, "digest: "+err.Error())
+		}
 	}
 	result := map[string]any{"window": window.String(), "issues_scanned": len(numbers), "requests_receipted": total.Receipted, "leases_reclaimed": total.Reclaimed, "leases_kept_for_open_pr": total.Kept,
 		"merges_queued": total.MergesQueued, "merges_done": total.MergesDone,
@@ -398,6 +402,9 @@ func (w *watch) run() error {
 			return err
 		}
 		state.IssueState, changed = "OPEN", true
+	}
+	if !inProject && isDigestIssue(state.Labels, state.Body) {
+		return nil
 	}
 	problems := triageProblems(state, inProject)
 	if err := w.triage(state, problems); err != nil {

@@ -64,6 +64,9 @@ type statusReport struct {
 	Queue *queueReport `json:"queue,omitempty"`
 	// Cleared names lease records this look found expired and removed.
 	Cleared []string `json:"cleared,omitempty"`
+	// Digest is the digest's headline: what merged, what waits on the owner,
+	// and which workflows changed in the last day. `quipu digest` has the rest.
+	Digest []string `json:"digest"`
 }
 
 func statusCommand(args []string) error {
@@ -102,6 +105,7 @@ func statusCommand(args []string) error {
 			ensureQueueWorker(enforced, here)
 		}
 	}
+	report.Digest = statusDigest(c, report.OwnerQueue, time.Now())
 	if *asJSON {
 		return printValue(report, true)
 	}
@@ -181,13 +185,19 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 				item.WaitingOn = append(item.WaitingOn, blocker.Number)
 			}
 		}
+		digest := false
 		for _, label := range node.Labels.Nodes {
+			digest = digest || label.Name == digestLabel
 			if strings.HasPrefix(label.Name, "kind:") {
 				item.Kind = titleCase(strings.TrimPrefix(label.Name, "kind:"))
 			}
 			if label.Name == triageLabel {
 				item.NeedsTriage = true
 			}
+		}
+		if digest {
+			// The Writer's digest Issue is a report, not work.
+			continue
 		}
 		for _, projectItem := range node.ProjectItems.Nodes {
 			if projectItem.Project.ID != c.Project.ID {
@@ -264,6 +274,12 @@ func priorityRank(priority string) int {
 func renderStatus(report statusReport, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", report.Repository)
+	if len(report.Digest) > 0 {
+		fmt.Fprintf(&b, "\nDigest (quipu digest for more)\n")
+		for _, line := range report.Digest {
+			fmt.Fprintf(&b, "  %s\n", line)
+		}
+	}
 	section := func(title string, items []statusItem, detail func(statusItem) string) {
 		if len(items) == 0 {
 			return
@@ -982,6 +998,7 @@ func proposeCommand(args []string) error {
 	title := fs.String("title", "", "proposed work title")
 	body := fs.String("body", "", "why, scope, and acceptance criteria")
 	bodyFile := fs.String("body-file", "", "file with the proposal body")
+	patchFile := fs.String("patch", "", "unified diff to attach, for a file only the owner may change")
 	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -994,10 +1011,22 @@ func proposeCommand(args []string) error {
 		*body = string(raw)
 	}
 	if *parent < 1 || strings.TrimSpace(*title) == "" || strings.TrimSpace(*body) == "" {
-		return errors.New("usage: quipu propose --parent N --title TEXT (--body TEXT | --body-file FILE) [--json]")
+		return errors.New("usage: quipu propose --parent N --title TEXT (--body TEXT | --body-file FILE) [--patch FILE] [--json]")
 	}
-	if strings.Contains(*body, "quipu-request") || strings.Contains(*body, "quipu-receipt") {
-		return errors.New("a proposal cannot contain Quipu request or receipt markers")
+	if strings.Contains(*body, "quipu-request") || strings.Contains(*body, "quipu-receipt") || strings.Contains(*body, patchMarker) || strings.Contains(*body, patchEnd) {
+		return errors.New("a proposal cannot contain Quipu request, receipt or patch markers")
+	}
+	attached := ""
+	if *patchFile != "" {
+		raw, err := os.ReadFile(*patchFile)
+		if err != nil {
+			return err
+		}
+		files, err := patchFiles(string(raw))
+		if err != nil {
+			return err
+		}
+		attached = "\n" + patchSection(string(raw), files)
 	}
 	c, err := loadConfig()
 	if err != nil {
@@ -1011,11 +1040,16 @@ func proposeCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	comment := fmt.Sprintf("<!-- quipu-proposal:v1 -->\n**Proposed work:** %s\n\n_Proposed by %s. The owner decides whether it becomes an Issue._\n\n%s\n", strings.TrimSpace(*title), actor, strings.TrimSpace(*body))
-	if _, err := github.NewClient().CreateComment(context.Background(), c.Owner, c.Repository, *parent, comment); err != nil {
+	comment := fmt.Sprintf("<!-- quipu-proposal:v1 -->\n**Proposed work:** %s\n\n_Proposed by %s. The owner decides whether it becomes an Issue._\n\n%s\n%s", strings.TrimSpace(*title), actor, strings.TrimSpace(*body), attached)
+	posted, err := github.NewClient().CreateComment(context.Background(), c.Owner, c.Repository, *parent, comment)
+	if err != nil {
 		return err
 	}
-	return printFlowResult(flowResult{Issue: *parent, Status: "Proposed", Next: "The owner decides. Continue your current work, or run quipu start --next --json."}, *asJSON)
+	next := "The owner decides. Continue your current work, or run quipu start --next --json."
+	if attached != "" {
+		next = fmt.Sprintf("The digest lists the patch for the owner as quipu patch apply %d. Continue your current work, or run quipu start --next --json.", posted.ID)
+	}
+	return printFlowResult(flowResult{Issue: *parent, Status: "Proposed", Next: next}, *asJSON)
 }
 
 // ownerMoves are the board moves the owner makes through the Writer, so the

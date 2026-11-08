@@ -100,7 +100,7 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 	var violations []string
 	add := func(format string, args ...any) { violations = append(violations, fmt.Sprintf(format, args...)) }
 	if exemptBot(c, pull) {
-		if file := unapprovedProtectedChange(pull); file != "" {
+		if file := unapprovedProtectedChange(c, pull); file != "" {
 			add("PR changes %s, which governs how agents work. Fix: the owner reviews it and adds the %s label", file, ownerApprovedLabel)
 		}
 		return violations
@@ -135,7 +135,7 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 	default:
 		add("branch %q is not NNN/short-description. Fix: work comes from `quipu start N`, which names the branch", pull.Head)
 	}
-	if file := unapprovedProtectedChange(pull); file != "" {
+	if file := unapprovedProtectedChange(c, pull); file != "" {
 		add("PR changes %s, which governs how agents work. Fix: the owner reviews it and adds the %s label", file, ownerApprovedLabel)
 	}
 	if len(issues) == 0 || (!batch && len(issues) != 1) {
@@ -279,13 +279,14 @@ func exemptBot(c model.Config, pull pullFacts) bool {
 }
 
 // unapprovedProtectedChange is the first of Quipu's own files the PR changes
-// without the owner's approval label, or "".
-func unapprovedProtectedChange(pull pullFacts) string {
+// without the owner's approval label, or "". With workflow_changes: flagged,
+// workflows other than Quipu's own don't count; the digest lists them instead.
+func unapprovedProtectedChange(c model.Config, pull pullFacts) string {
 	if hasLabel(pull.Labels, ownerApprovedLabel) {
 		return ""
 	}
 	for _, file := range pull.Files {
-		if protectedFile(file) {
+		if ownerOnlyFile(c, file) {
 			return file
 		}
 	}
@@ -308,6 +309,17 @@ func hasLabel(labels []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// printFlagged notes the workflow changes the owner will see in the digest.
+func printFlagged(files []string) {
+	prefix := ""
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		prefix = "::notice::"
+	}
+	for _, file := range files {
+		fmt.Printf("%sflagged for the owner (workflow_changes: flagged): %s is listed in the digest\n", prefix, file)
+	}
 }
 
 func orUnknown(kind string) string {
@@ -339,13 +351,15 @@ func policyCommand(args []string) error {
 		return err
 	}
 	violations := prViolations(c, pull, func(n int) (liveWork, error) { return loadLiveWork(c, n) }, time.Now())
-	report := map[string]any{"valid": len(violations) == 0, "pr": pull.URL, "branch": pull.Head, "violations": append([]string{}, violations...)}
+	flagged := append([]string{}, flaggedWorkflowFiles(c, pull.Files)...)
+	report := map[string]any{"valid": len(violations) == 0, "pr": pull.URL, "branch": pull.Head, "violations": append([]string{}, violations...), "flagged": flagged}
 	if *asJSON {
 		if err := printValue(report, true); err != nil {
 			return err
 		}
 	} else if len(violations) == 0 {
 		fmt.Printf("%s follows the Quipu flow\n", pull.URL)
+		printFlagged(flagged)
 	} else {
 		prefix := ""
 		if os.Getenv("GITHUB_ACTIONS") == "true" {

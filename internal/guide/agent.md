@@ -49,6 +49,8 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu done N --json` | PR open: move to review | `status: "In review"`, `pr`, `next` |
 | `quipu done N --json --evidence-file FILE` | PR merged: record evidence and close (or the `--criteria ... --boundary ...` flags) | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
+| `quipu propose --parent N --title ... --body-file FILE --patch DIFF --json` | the work is a change to an enforcement file you may not edit | the proposal with the exact patch, which the owner applies in one command |
+| `quipu digest --json` | to see the owner's day | `headline`, `merged` (Issue, PR, boundary), `owner_queue`, `patches`, `workflow_changes`; changes nothing |
 | `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
 | `quipu worktree remove N --json` | to free a finished worktree, by Issue number or path | `status: "Removed"`, `worktree`, `warnings`, `next` |
@@ -108,7 +110,7 @@ The required `policy` check fails the PR unless all of these hold. It lists ever
 - The base is the default branch.
 - The Issue is open, a Story, Task, Defect, or Contract, has a parent and a valid work contract, has no sub-issues, and has no open blockers.
 - The Issue is In progress or In review, leased to you on this branch, and the PR author matches the lease holder's login.
-- The PR changes none of Quipu's enforcement files (`quipu.yml`, `.github/quipu/`, `.github/workflows/`, `.claude/settings.json`, `.codex/`, plugin hooks) unless the owner added the `quipu:owner-approved` label. You cannot add labels.
+- The PR changes none of Quipu's enforcement files (`quipu.yml`, `.github/quipu/`, `.github/workflows/`, `.claude/settings.json`, `.codex/`, plugin hooks) unless the owner added the `quipu:owner-approved` label. You cannot add labels. To propose a change to one, see [Proposing work](#proposing-work).
 
 The check re-runs by itself when the work under it changes, for example when your lease is renewed.
 
@@ -177,6 +179,8 @@ quipu propose --parent N --title "Short title" --body-file proposal.md --json
 ```
 
 `N` is the Epic or Story it belongs under. Explain the why, the scope, and the acceptance criteria. Then carry on with your own work. The owner turns proposals into Issues and makes them Ready.
+
+When the change is to one of Quipu's enforcement files, which you cannot edit, attach the exact patch: write a unified diff with repository paths (`a/PATH`, `b/PATH`), for example with `diff -u` on copies outside the repository, and add `--patch FILE`. The digest lists it for the owner as `quipu patch apply ID`. Never try to make the change another way.
 
 ## What the guard blocks
 

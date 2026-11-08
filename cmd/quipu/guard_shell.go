@@ -350,7 +350,7 @@ func (g *guard) judge(args []shellArg, dir *string) error {
 	}
 	if !args[0].ok {
 		if open {
-			return g.unknownCommand(args)
+			return g.unknownCommand(args, *dir)
 		}
 		return g.unparsable(*dir, "command name is not a literal")
 	}
@@ -405,7 +405,7 @@ func (g *guard) judge(args []shellArg, dir *string) error {
 			}
 		}
 		if open {
-			return g.unknownCommand(rest)
+			return g.unknownCommand(rest, *dir)
 		}
 		return g.writeIn(*dir)
 	case "eval":
@@ -469,7 +469,7 @@ func (g *guard) judge(args []shellArg, dir *string) error {
 		return g.writeArgs(rest, *dir)
 	}
 	if open {
-		return g.unknownCommand(rest)
+		return g.unknownCommand(rest, *dir)
 	}
 	return g.genericWrite(rest, *dir)
 }
@@ -533,7 +533,7 @@ func (g *guard) genericWrite(args []shellArg, dir string) error {
 		if arg.ok && mentionsQuipuState(arg.s) {
 			return deny("git-internals", arg.s)
 		}
-		if arg.ok && mentionsProtectedPath(arg.s) {
+		if arg.ok && g.ownerOnlyArg(arg.s, dir) {
 			return deny("quipu-config", arg.s)
 		}
 	}
@@ -1088,7 +1088,7 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 // ---- quipu, go, curl ----
 
 var quipuAgentCommands = setOf("status", "start", "done", "doctor", "config", "context", "validate", "guide", "version",
-	"help", "-h", "--help", "propose", "park", "guard", "policy", "verify-commit", "check")
+	"help", "-h", "--help", "propose", "park", "guard", "policy", "verify-commit", "check", "digest")
 
 func (g *guard) quipu(rest []shellArg, dir string) error {
 	// Help prints usage and runs nothing; the CLI answers exactly these shapes.

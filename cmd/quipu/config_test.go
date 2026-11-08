@@ -146,11 +146,11 @@ func TestQuipuYmlIsProtected(t *testing.T) {
 		t.Fatal("policy protects the root quipu.yml only")
 	}
 	pull := pullFacts{Files: []string{"README.md", rootConfigPath}}
-	if got := unapprovedProtectedChange(pull); got != rootConfigPath {
+	if got := unapprovedProtectedChange(model.Config{}, pull); got != rootConfigPath {
 		t.Fatalf("changing quipu.yml needs the owner's label, got %q", got)
 	}
 	pull.Labels = []string{ownerApprovedLabel}
-	if got := unapprovedProtectedChange(pull); got != "" {
+	if got := unapprovedProtectedChange(model.Config{}, pull); got != "" {
 		t.Fatalf("the owner's label allows it, got %q", got)
 	}
 }

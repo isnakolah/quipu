@@ -184,6 +184,8 @@ var optionDefaults = map[string]any{
 	"batches":                          "none",
 	"guard":                            "allow-list",
 	"guard_deny":                       []string{},
+	"workflow_changes":                 "owner",
+	"digest":                           "none",
 	"workflows.runs_on":                map[string][]string{"default": {"ubuntu-latest"}},
 	"workflows.quipu_version":          "main",
 	"workflows.writer_mode":            "none",

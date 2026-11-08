@@ -93,7 +93,14 @@ type Config struct {
 	Guard string `yaml:"guard,omitempty" json:"guard,omitempty"`
 	// GuardDeny lists commands the guard always refuses (deploy, publish,
 	// spend), by their leading words, such as "fly deploy" or "npm publish".
-	GuardDeny []string  `yaml:"guard_deny,omitempty" json:"guard_deny,omitempty"`
+	GuardDeny []string `yaml:"guard_deny,omitempty" json:"guard_deny,omitempty"`
+	// WorkflowChanges "flagged" lets agents change .github/workflows/ files other
+	// than Quipu's own in a normal PR; the digest lists each change for the owner.
+	// Unset or "owner" keeps them behind the owner's approval label.
+	WorkflowChanges string `yaml:"workflow_changes,omitempty" json:"workflow_changes,omitempty"`
+	// Digest "issue" has the Writer keep one pinned "Quipu digest" Issue up to
+	// date, at most hourly. Unset or "none" keeps the digest to quipu digest.
+	Digest    string    `yaml:"digest,omitempty" json:"digest,omitempty"`
 	Workflows Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
 }
 
@@ -598,6 +605,13 @@ func (c Config) GuardDenyList() bool { return c.Guard == "deny-list" }
 // GuardReadsOpen reports whether the guard allows its wider read-only list.
 func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 
+// FlagsWorkflowChanges reports whether agents may change workflows other than
+// Quipu's own without the owner's label, flagged in the digest instead.
+func (c Config) FlagsWorkflowChanges() bool { return c.WorkflowChanges == "flagged" }
+
+// KeepsDigestIssue reports whether the Writer keeps the pinned digest Issue.
+func (c Config) KeepsDigestIssue() bool { return c.Digest == "issue" }
+
 // WithoutRelaxations turns off every setting that relaxes enforcement, for a
 // config that cannot be trusted to have come from the default branch.
 func (c Config) WithoutRelaxations() Config {
@@ -608,6 +622,7 @@ func (c Config) WithoutRelaxations() Config {
 	c.MergeQueue = MergeQueue{}
 	c.AutoReady, c.Dispatch, c.ScopedChecks, c.SlowChecks = false, Dispatch{}, nil, nil
 	c.Workflows.RunnerStart = ""
+	c.WorkflowChanges = ""
 	return c
 }
 
@@ -726,6 +741,12 @@ func (c Config) Validate() error {
 	}
 	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {
 		return fmt.Errorf("guard_reads must be closed or open")
+	}
+	if c.WorkflowChanges != "" && c.WorkflowChanges != "owner" && c.WorkflowChanges != "flagged" {
+		return fmt.Errorf("workflow_changes must be owner or flagged")
+	}
+	if c.Digest != "" && c.Digest != "none" && c.Digest != "issue" {
+		return fmt.Errorf("digest must be none or issue")
 	}
 	if err := c.Workflows.validate(); err != nil {
 		return err

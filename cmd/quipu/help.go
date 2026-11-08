@@ -19,6 +19,7 @@ var subcommands = map[string][]string{
 	"evidence":  {"submit"},
 	"issue":     {"create", "link-parent", "add-blocker"},
 	"journal":   {"render"},
+	"patch":     {"apply"},
 	"lease":     {"release"},
 	"policy":    {"pr"},
 	"pr":        {"link"},
@@ -31,7 +32,7 @@ var subcommands = map[string][]string{
 }
 
 // leafCommands is every top-level command without subcommands.
-var leafCommands = []string{"adopt", "check", "config", "context", "daemon", "doctor", "done", "guard", "guide", "hooks",
+var leafCommands = []string{"adopt", "check", "config", "context", "daemon", "digest", "doctor", "done", "guard", "guide", "hooks",
 	"import", "init", "move", "park", "propose", "protect", "ready", "start", "status", "triage", "validate",
 	"verify-commit", "version"}
 

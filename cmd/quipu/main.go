@@ -78,6 +78,10 @@ func dispatch(args []string) error {
 		return runnerCommand(args[1:])
 	case "propose":
 		return proposeCommand(args[1:])
+	case "digest":
+		return digestCommand(args[1:])
+	case "patch":
+		return patchCommand(args[1:])
 	case "config":
 		return configCommand(args[1:])
 	case "ready":
@@ -468,6 +472,8 @@ Everyday:
 
 Owner:
   ready N    make #N Ready for agents
+  digest     what merged, what waits on you, and which workflows agents changed
+  patch apply ID  apply an enforcement patch an agent proposed, without committing
   move N S   move #N to backlog, ready, blocked, or archived
   protect    make GitHub enforce the flow (--apply)
   hooks      install the agent guard hooks in this repository (--apply)
@@ -863,6 +869,10 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 			if strings.HasPrefix(label.Name, "area:") {
 				area = strings.TrimPrefix(label.Name, "area:")
 			}
+		}
+		if isDigestIssue(labels, node.Body) {
+			// The Writer's digest Issue is a report, not work.
+			continue
 		}
 		status, projectKind, projectArea, branch := "", "", "", ""
 		for _, item := range node.ProjectItems.Nodes {

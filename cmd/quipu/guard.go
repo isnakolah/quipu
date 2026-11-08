@@ -326,7 +326,9 @@ func (g *guard) writePath(path string) error {
 	dir := existingDir(path)
 	if w, err := openWorktree(dir); err == nil {
 		if rel, err := filepath.Rel(w.Top, path); err == nil && protectedFile(filepath.ToSlash(rel)) {
-			return deny("quipu-config", filepath.ToSlash(rel))
+			if c, _ := g.configFor(dir); !flaggedWorkflow(c, filepath.ToSlash(rel)) {
+				return deny("quipu-config", filepath.ToSlash(rel))
+			}
 		}
 	}
 	return g.writeIn(dir)
