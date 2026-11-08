@@ -111,6 +111,14 @@ func printError(err error, args []string, stdout, stderr io.Writer) {
 	if d := (denial{}); errors.As(err, &d) {
 		// Agents read this line as the hook's reason; keep it exactly as documented.
 		fmt.Fprintln(stderr, d.Error())
+		if wantsJSON(args) {
+			message := d.Why
+			if d.Detail != "" {
+				message += " (" + d.Detail + ")"
+			}
+			raw, _ := json.MarshalIndent(map[string]*flowError{"error": {Code: d.Code, Message: message, Next: d.Instead}}, "", "  ")
+			fmt.Fprintln(stdout, string(raw))
+		}
 		return
 	}
 	if !wantsJSON(args) {

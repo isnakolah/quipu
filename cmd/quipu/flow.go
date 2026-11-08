@@ -378,7 +378,7 @@ func startCommand(args []string) error {
 	asJSON := jsonFlag(fs)
 	number, err := parseIssueArg(fs, args, true)
 	if err != nil || (number == 0) != *next {
-		return errors.New("usage: quipu start (N | --next) [--worktree [--worktree-root DIR]] [--branch NNN/slug] [--actor ID] [--json]")
+		return keepHelp(err, "usage: quipu start (N | --next) [--worktree [--worktree-root DIR]] [--branch NNN/slug] [--actor ID] [--json]")
 	}
 	here, err := currentWorktree()
 	if err != nil {
@@ -733,7 +733,7 @@ func doneCommand(args []string) error {
 	}
 	number, err := parseIssueArg(fs, args, false)
 	if err != nil || *template {
-		return errors.New("usage: quipu done N [--pr URL] [--evidence-file FILE | --criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]; quipu done --evidence-template")
+		return keepHelp(err, "usage: quipu done N [--pr URL] [--evidence-file FILE | --criteria TEXT --commands TEXT --documentation TEXT --risks TEXT --boundary TEXT] [--json]; quipu done --evidence-template")
 	}
 	if *evidenceFile != "" {
 		if err := applyEvidenceFile(&e, *evidenceFile, fs); err != nil {
@@ -1000,9 +1000,6 @@ func moveCommand(args []string) error {
 		}
 		rest = append(rest, arg)
 	}
-	if status == "" {
-		return errors.New("usage: quipu move N backlog|ready|blocked|archived [--json]  (owner only)")
-	}
 	return moveTo("move", status, rest)
 }
 
@@ -1011,8 +1008,15 @@ func moveTo(name, status string, args []string) error {
 	wait := fs.Duration("wait", 3*time.Minute, "how long to wait for the Writer receipt")
 	asJSON := jsonFlag(fs)
 	number, err := parseIssueArg(fs, args, false)
+	usage := fmt.Sprintf("usage: quipu %s N [--json]  (owner only)", name)
+	if name == "move" {
+		usage = "usage: quipu move N backlog|ready|blocked|archived [--json]  (owner only)"
+	}
 	if err != nil {
-		return fmt.Errorf("usage: quipu %s N [--json]  (owner only): %w", name, err)
+		return fmt.Errorf("%s: %w", usage, err)
+	}
+	if status == "" {
+		return errors.New(usage)
 	}
 	c, err := loadConfig()
 	if err != nil {
@@ -1290,18 +1294,28 @@ func isTerminal(in io.Reader) bool {
 
 // ---- shared helpers ----
 
-func parseIssueArg(fs *flag.FlagSet, args []string, optional bool) (int, error) {
-	// Accept the Issue number before or after flags: `quipu start 12 --wait 1m`.
+// parsePositional parses flags placed before, between, or after the
+// positional arguments, and returns those arguments.
+func parsePositional(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
 	for len(args) > 0 {
 		if err := fs.Parse(args); err != nil {
-			return 0, err
+			return nil, err
 		}
 		args = fs.Args()
 		if len(args) > 0 {
 			positional = append(positional, args[0])
 			args = args[1:]
 		}
+	}
+	return positional, nil
+}
+
+func parseIssueArg(fs *flag.FlagSet, args []string, optional bool) (int, error) {
+	// Accept the Issue number before or after flags: `quipu start 12 --wait 1m`.
+	positional, err := parsePositional(fs, args)
+	if err != nil {
+		return 0, err
 	}
 	if optional && len(positional) == 0 {
 		return 0, nil

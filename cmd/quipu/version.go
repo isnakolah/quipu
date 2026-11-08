@@ -1,9 +1,25 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"runtime/debug"
 	"strings"
 )
+
+// versionCommand is `quipu version [--json]`.
+func versionCommand(args []string) error {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *asJSON {
+		return printValue(map[string]string{"version": version}, true)
+	}
+	fmt.Println(version)
+	return nil
+}
 
 // version is the module version of `go install ...@v0.2.0`, or the version
 // Go stamps on a source build: a pseudo-version naming its commit.

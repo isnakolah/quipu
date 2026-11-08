@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,9 @@ const (
 	// runnerStartGrace is how long a start may fail fast and be reported.
 	// After it the command keeps running, and nothing waits for it.
 	runnerStartGrace = 2 * time.Second
+	// runnerWarnEvery is how often one worktree hears about down runners on
+	// stderr. The JSON runner field carries the news every time.
+	runnerWarnEvery = 6 * time.Hour
 )
 
 // runnerStarter is what starting a runner needs, so each step can be faked.
@@ -156,9 +160,10 @@ func runDetached(dir, command, logPath string, grace time.Duration) error {
 }
 
 // ensureRunner is runnerStarter against live GitHub. It reports on stderr too,
-// because a failing command prints only its error on stdout.
+// because a failing command prints only its error on stdout, but only once per
+// worktree per runnerWarnEvery, so agents are not told on every call.
 func ensureRunner(c model.Config, w worktree) string {
-	note := runnerStarter{
+	return announceRunner(runnerStarter{
 		down: func() []doctorCheck {
 			var down []doctorCheck
 			for _, check := range runnerChecks(c, w) {
@@ -182,11 +187,35 @@ func ensureRunner(c model.Config, w worktree) string {
 			}
 			return err
 		},
-	}.ensure()
-	if note != "" {
-		fmt.Fprintln(os.Stderr, note)
+	}, w, time.Now(), os.Stderr)
+}
+
+// announceRunner runs s and returns its note for the runner field, printing it
+// on stderr when this worktree has not heard it within runnerWarnEvery.
+func announceRunner(s runnerStarter, w worktree, now time.Time, stderr io.Writer) string {
+	note := s.ensure()
+	if note != "" && runnerWarnDue(w, now) {
+		fmt.Fprintln(stderr, note)
 	}
 	return note
+}
+
+// runnerWarnDue reports whether the warning is due in w, and if so records
+// that it was given. The marker lives in the worktree's git dir, out of the
+// working tree.
+func runnerWarnDue(w worktree, now time.Time) bool {
+	if w.GitDir == "" {
+		return true
+	}
+	path := filepath.Join(w.GitDir, "quipu-runner-warned")
+	if raw, err := os.ReadFile(path); err == nil {
+		last, err := time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
+		if since := now.Sub(last); err == nil && since >= 0 && since < runnerWarnEvery {
+			return false
+		}
+	}
+	_ = os.WriteFile(path, []byte(now.UTC().Format(time.RFC3339)+"\n"), 0o644)
+	return true
 }
 
 // queuedJob is a job waiting for a runner.
