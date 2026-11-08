@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/model"
@@ -251,6 +252,9 @@ func doctorChecks() []doctorCheck {
 		add("this worktree", "ok", fmt.Sprintf("holds #%d on %s as %s", lease.Issue, lease.Branch, lease.Holder), "")
 	} else {
 		add("this worktree", "ok", "no lease; start work with quipu start --next --json", "")
+	}
+	if window, open := here.bootstrapFor(time.Now()); open {
+		add("bootstrap window", "ok", "open until "+window.Expires+": this worktree may finish adoption setup without a lease", "")
 	}
 	checks = append(checks, githubChecks(c)...)
 	checks = append(checks, runnerChecks(c, here)...)

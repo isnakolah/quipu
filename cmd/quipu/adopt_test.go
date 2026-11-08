@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/isnakolah/quipu/internal/model"
@@ -156,5 +157,21 @@ func TestConfigValidatesWorkflows(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%s: expected a validation error", name)
 		}
+	}
+}
+
+func TestAdoptPrintsTheOneOwnerStep(t *testing.T) {
+	c := model.Config{Owner: "octo", Repository: "calla", DefaultBranch: "main"}
+	if got := ownerStep(c); got != "gh secret set QUIPU_WRITER_TOKEN --repo octo/calla" {
+		t.Fatalf("owner step = %q", got)
+	}
+	before := adoptNext(c, false)
+	for _, want := range []string{"git push -u origin HEAD:quipu-adoption", "PR into main", "owner_step", "quipu import"} {
+		if !strings.Contains(before, want) {
+			t.Errorf("next before the config lands lacks %q: %s", want, before)
+		}
+	}
+	if after := adoptNext(c, true); strings.Contains(after, "git push") || !strings.Contains(after, "owner_step") {
+		t.Errorf("next once the config landed: %s", after)
 	}
 }
