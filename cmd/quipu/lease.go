@@ -62,7 +62,13 @@ func leaseCommand(args []string) error {
 		w = here.holding(number)
 	}
 	record, err := w.readLease()
-	if err != nil || (number > 0 && record.Issue != number) {
+	if number > 0 {
+		var ok bool
+		if record, ok = w.leaseFor(number); !ok {
+			err = errors.New("no record")
+		}
+	}
+	if err != nil {
 		what := "this worktree"
 		if number > 0 {
 			what = fmt.Sprintf("#%d in any worktree of this clone", number)

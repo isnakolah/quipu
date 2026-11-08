@@ -47,11 +47,14 @@ var flowErrors = []flowErrorKind{
 	{"lease-unverified", "GitHub could not be read and the record has not expired, so the lease may still be live", "rerun the same command in a minute; a record clears itself once its lease expires"},
 	{"not-leaf", "the Issue has sub-issues, so no PR may implement it", "start one of its leaf Issues instead; `next` names the Ready ones"},
 	{"not-implementable", "the Issue is closed, of a kind PRs do not implement, without a parent, without a valid work contract, or blocked", "take other work with `quipu start --next --json`; the message says what is wrong, and the owner fixes the Issue"},
+	{"batch-off", "`quipu done` named several Issues, but this repository does not set `batches: epic`", "finish one Issue at a time: `quipu done N --json`"},
 }
 
 // flagErrors are the failures only a flag can cause. The handbook lists them
 // only when that flag is on.
 var flagErrors = []flowErrorKind{
+	{"batch-mixed", "with `batches: epic`, the Issues named are not all on one rolling Epic branch", "finish each branch's Issues with their own `quipu done A B ... --json`"},
+	{"batch-empty", "with `batches: epic`, no commit in the PR references any of the Issues named", "commit with `Refs #N` in each message for the leaf it implements, push, then rerun"},
 	{"local-check-failed", "with `merge_without_ci`, `local_check` did not pass, so nothing merged", "fix the cause, commit, push, then rerun the same `quipu done N --json ...`"},
 	{"worktree-unclean", "with `merge_without_ci`, the worktree has changes or is not at the PR's head, so a check here would not be checking what merges", "commit and push, or `git restore` the changes, then rerun the same `quipu done N --json ...`"},
 	{"policy-rules", "with `merge_without_ci` or `merge: queue`, the PR breaks a policy rule, and those are never waived", "fix each problem it lists, then rerun the same `quipu done N --json ...`; what only the owner can do, such as the `quipu:owner-approved` label, ask the owner for"},

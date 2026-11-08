@@ -1346,17 +1346,20 @@ type liveWork struct {
 	UpdatedAt   string
 	ClosedAt    string
 	ParentID    string
-	Children    int
-	Blockers    []liveBlocker
-	ItemID      string
-	Status      string
-	Holder      string
-	Expiry      string
-	Branch      string
-	Kind        string
-	Area        string
-	Priority    string
-	Proof       string
+	// ParentNumber and ParentTitle name the native parent, when there is one.
+	ParentNumber int
+	ParentTitle  string
+	Children     int
+	Blockers     []liveBlocker
+	ItemID       string
+	Status       string
+	Holder       string
+	Expiry       string
+	Branch       string
+	Kind         string
+	Area         string
+	Priority     string
+	Proof        string
 }
 
 type liveBlocker struct{ ID, State string }
@@ -1401,7 +1404,7 @@ func loadLiveWork(c model.Config, number int) (liveWork, error) {
 	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issue(number:%d) {
 id state stateReason body createdAt updatedAt closedAt labels(first:50) { nodes { name } }
 timelineItems(itemTypes:[CLOSED_EVENT], last:1) { nodes { ... on ClosedEvent { actor { login } } } }
-parent { id } subIssuesSummary { total } blockedBy(first:100) { nodes { id state } }
+parent { id number title } subIssuesSummary { total } blockedBy(first:100) { nodes { id state } }
 projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
@@ -1435,7 +1438,9 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 						} `json:"nodes"`
 					} `json:"timelineItems"`
 					Parent *struct {
-						ID string `json:"id"`
+						ID     string `json:"id"`
+						Number int    `json:"number"`
+						Title  string `json:"title"`
 					} `json:"parent"`
 					SubIssues struct {
 						Total int `json:"total"`
@@ -1482,7 +1487,7 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 		state.ClosedBy = nodes[len(nodes)-1].Actor.Login
 	}
 	if issue.Parent != nil {
-		state.ParentID = issue.Parent.ID
+		state.ParentID, state.ParentNumber, state.ParentTitle = issue.Parent.ID, issue.Parent.Number, issue.Parent.Title
 	}
 	for _, blocker := range issue.BlockedBy.Nodes {
 		state.Blockers = append(state.Blockers, liveBlocker{ID: blocker.ID, State: blocker.State})

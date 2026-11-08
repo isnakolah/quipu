@@ -11,6 +11,44 @@ import (
 // numbered 1000 and up still map to a branch.
 var Branch = regexp.MustCompile(`^[0-9]{3,}/[a-z0-9][a-z0-9-]*$`)
 
+// EpicBranch is epic-NNN/short-description: a rolling branch on which the
+// leaf Issues of Epic NNN are worked together, with batches: epic.
+var EpicBranch = regexp.MustCompile(`^epic-[0-9]{3,}/[a-z0-9][a-z0-9-]*$`)
+
+// BranchEpic returns the Epic number an epic-NNN/slug branch maps to.
+func BranchEpic(branch string) (int, bool) {
+	if !EpicBranch.MatchString(branch) {
+		return 0, false
+	}
+	prefix, _, _ := strings.Cut(strings.TrimPrefix(branch, "epic-"), "/")
+	number, err := strconv.Atoi(prefix)
+	return number, err == nil && number > 0
+}
+
+// ReferencedIssueSet accepts one or more distinct `Refs #N` references and no
+// closing keyword, for a PR from a rolling Epic branch. Order is kept.
+func ReferencedIssueSet(body string) ([]int, error) {
+	if err := NoClosingKeywords(body, "PR body"); err != nil {
+		return nil, err
+	}
+	var issues []int
+	seen := map[int]bool{}
+	for _, match := range IssueRef.FindAllStringSubmatch(body, -1) {
+		number, err := strconv.Atoi(match[1])
+		if err != nil || number < 1 {
+			return nil, fmt.Errorf("PR body has invalid Issue reference")
+		}
+		if !seen[number] {
+			seen[number] = true
+			issues = append(issues, number)
+		}
+	}
+	if len(issues) == 0 {
+		return nil, fmt.Errorf("PR body must reference at least one Issue as `Refs #N`")
+	}
+	return issues, nil
+}
+
 // IssueRef is the one reference form a PR may use. Closing keywords are not
 // accepted: GitHub would close the Issue on merge, before evidence exists.
 var IssueRef = regexp.MustCompile(`(?mi)\bRefs\s+#([0-9]+)\b`)
