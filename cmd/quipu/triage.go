@@ -1,8 +1,9 @@
 package main
 
 // triage_by: agents and issues_by: agents. Agents may bring Issues into the
-// flow, but never finish work or decide anything: `quipu triage` cannot close
-// an Issue, and Ready still needs ready_by: agents.
+// flow, and sort those already in the Project, but never finish work or decide
+// anything: `quipu triage` cannot close an Issue, never moves an Epic, Decision or
+// Gate, and Ready still needs ready_by: agents.
 
 import (
 	"errors"
@@ -40,8 +41,10 @@ func checkTriage(c model.Config, number int, o triageOptions, state liveWork, in
 	if !c.AgentsTriage() {
 		return errors.New("triage needs triage_by: agents on the default branch")
 	}
-	if !hasLabel(labels, triageLabel) {
-		return fmt.Errorf("#%d does not have the %s label, so it needs no triage", number, triageLabel)
+	// An Issue already in the Project needs no label to be sorted; one outside it
+	// joins only through the label the Writer gives it.
+	if !inProject && !hasLabel(labels, triageLabel) {
+		return fmt.Errorf("#%d is not in the Project and does not have the %s label, so it needs no triage", number, triageLabel)
 	}
 	if o.Kind != "" {
 		if !triageKinds[o.Kind] {
@@ -52,6 +55,13 @@ func checkTriage(c model.Config, number int, o triageOptions, state liveWork, in
 		}
 	}
 	current := triageCurrentStatus(state, inProject)
+	kind := strings.ToLower(labelKind(labels))
+	if kind == "" {
+		kind = strings.ToLower(o.Kind)
+	}
+	if o.Status != "" && ownerDecidedKinds[kind] {
+		return fmt.Errorf("#%d is a %s, and the owner moves Epics, Decisions and Gates", number, titleCase(kind))
+	}
 	if o.Status != "" {
 		status, ok := triageStatuses[strings.ToLower(o.Status)]
 		if !ok {
@@ -83,6 +93,9 @@ func checkTriage(c model.Config, number int, o triageOptions, state liveWork, in
 		if o.Area == "" && labelValue(labels, "area:") == "" {
 			return fmt.Errorf("#%d has no area; pass --area so it can join the Project", number)
 		}
+	}
+	if o.Parent > 0 && state.ParentNumber > 0 && o.Parent != state.ParentNumber {
+		return fmt.Errorf("#%d already has parent #%d; only the owner moves it", number, state.ParentNumber)
 	}
 	if o.Parent > 0 {
 		kind, err := parentKind(o.Parent)

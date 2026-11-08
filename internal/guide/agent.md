@@ -9,7 +9,7 @@ Read this once. Then follow the `next` field that every `quipu ... --json` resul
 1. **Start before you touch anything.** Until `quipu start` succeeds you can read, search, and run tests, but every edit, commit, and push is denied.
 2. **One Issue, one branch, one PR.** `quipu start` picks the branch (`NNN/short-description`). Never create or switch branches yourself.
 3. **Your PR body says `Refs #N`.** Never write `Closes`, `Fixes`, or `Resolves` (in any form) in a PR title, body, or commit message. Only the Writer closes Issues.
-4. **You never merge, approve, or close.** The owner reviews and merges. You finish with `quipu done N`.
+4. **You never merge, approve, or close.** The owner reviews and merges. You finish with `quipu done N`. The one close you may ask for is a PR nothing needs any more, with `quipu pr close`.
 5. **You never edit the board.** Status, lease, and branch fields change only through `quipu`. Hand edits are put back within minutes.
 6. **You never create Epics or new Issues.** Suggest work with `quipu propose`; the owner decides.
 7. **Stay in your worktree.** An agent holding a lease changes only its own worktree.
@@ -50,7 +50,8 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu done N --json --evidence-file FILE` | PR merged: record evidence and close (or the `--criteria ... --boundary ...` flags) | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
-| `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
+| `quipu ready N --json`, `quipu move N ready --json`, `quipu move N backlog --json` | only where the config says `ready_by: agents`, and never for an Epic, Decision, or Gate | `status: "Ready"` or `"Backlog"` |
+| `quipu pr close PR --json` | a PR, by number or URL, that nothing needs any more: every Issue it references is Done or Cancelled, or has a different merged PR | `status: "Closed"`, `pr`; the Writer posts the reason on the PR. It refuses while an Issue the PR references is still in progress |
 | `quipu worktree remove N --json` | to free a finished worktree, by Issue number or path | `status: "Removed"`, `worktree`, `warnings`, `next` |
 | `quipu lease release [N] --json` | to give back your own live lease, or clear a record left over from one that is over | `status: "Released"` (back to Ready, branch kept) or `"Cleared"` (record only), `next` |
 | `quipu guide` | to read this handbook | this text |
@@ -221,7 +222,7 @@ Even past the guard, GitHub keeps the flow intact. The Writer runs every few min
 - Edit, commit, or push before `quipu start` succeeds.
 - Create, switch, rename, or delete branches, tags, or worktrees by hand.
 - Push anything but your leased branch, force-push without `--force-with-lease`, or skip hooks with `--no-verify`.
-- Merge, approve, or close a PR or Issue, or add labels.
+- Merge, approve, or close a PR or Issue, or add labels. (`quipu pr close` may close a PR nothing needs.)
 - Edit the board, `.git/`, `quipu.yml`, `.github/quipu/`, workflows, or agent hooks.
 - Create Issues or Epics, or approve your own work.
 - Keep local plans or task lists; GitHub is the only record.

@@ -17,11 +17,11 @@ import (
 var subcommands = map[string][]string{
 	"configure": {"writer-token"},
 	"evidence":  {"submit"},
-	"issue":     {"create", "link-parent", "add-blocker"},
+	"issue":     {"create", "assign", "edit", "link-parent", "add-blocker"},
 	"journal":   {"render"},
 	"lease":     {"release"},
 	"policy":    {"pr"},
-	"pr":        {"link"},
+	"pr":        {"close", "link"},
 	"queue":     {"status", "run", "resume"},
 	"request":   {"status"},
 	"runner":    {"status", "setup"},

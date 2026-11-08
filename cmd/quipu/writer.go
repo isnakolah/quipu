@@ -115,6 +115,9 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if err != nil {
 		return writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "rejected", Detail: err.Error(), At: time.Now().UTC()}
 	}
+	if writer.IsChore(request.Action) {
+		return applyChore(c, number, state, request, actual, liveChoreOps(c))
+	}
 	if request.Action == "claim" || (request.Action == "status" && request.Status == "Done") {
 		for _, blocker := range state.Blockers {
 			if blocker.State != "CLOSED" {
