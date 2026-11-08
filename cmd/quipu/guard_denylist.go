@@ -32,6 +32,16 @@ func (g *guard) configFor(dir string) (model.Config, bool) {
 	return c, ok
 }
 
+// ownerOnlyArg reports whether arg names an enforcement file that dir's
+// repository keeps owner-only; workflow_changes: flagged opens some workflows.
+func (g *guard) ownerOnlyArg(arg, dir string) bool {
+	if !mentionsProtectedPath(arg) {
+		return false
+	}
+	c, _ := g.configFor(dir)
+	return mentionsOwnerOnlyPath(c, arg)
+}
+
 type configEntry struct {
 	c  model.Config
 	ok bool
@@ -104,12 +114,12 @@ func helpForm(args []shellArg) bool {
 
 // unknownCommand judges, in deny-list mode, a command the guard has no rule
 // for: it passes unless it names Quipu's own state or enforcement files.
-func (g *guard) unknownCommand(args []shellArg) error {
+func (g *guard) unknownCommand(args []shellArg, dir string) error {
 	for _, arg := range args {
 		if arg.ok && mentionsQuipuState(arg.s) {
 			return deny("git-internals", arg.s)
 		}
-		if arg.ok && mentionsProtectedPath(arg.s) {
+		if arg.ok && g.ownerOnlyArg(arg.s, dir) {
 			return deny("quipu-config", arg.s)
 		}
 	}

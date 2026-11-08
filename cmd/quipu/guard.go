@@ -334,7 +334,9 @@ func (g *guard) writePath(path string) error {
 				return nil
 			}
 			if protectedFile(rel) {
-				return deny("quipu-config", rel)
+				if c, _ := g.configFor(dir); !flaggedWorkflow(c, rel) {
+					return deny("quipu-config", rel)
+				}
 			}
 		}
 	}

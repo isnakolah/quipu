@@ -115,3 +115,40 @@ func TestDoneGrace(t *testing.T) {
 		t.Fatal("an untrusted config keeps the default window")
 	}
 }
+
+func TestWorkflowChangesAndDigestSettings(t *testing.T) {
+	base := Config{SchemaVersion: ConfigVersion, Owner: "o", Repository: "r", DefaultBranch: "main", WikiMode: "off", Areas: []string{"core"}, AuthorizedActors: []string{"o"}}
+	if base.FlagsWorkflowChanges() || base.KeepsDigestIssue() {
+		t.Fatal("both are off by default")
+	}
+	for _, edit := range []func(*Config){
+		func(c *Config) { c.WorkflowChanges = "owner" },
+		func(c *Config) { c.WorkflowChanges = "flagged" },
+		func(c *Config) { c.Digest = "none" },
+		func(c *Config) { c.Digest = "issue" },
+	} {
+		c := base
+		edit(&c)
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, edit := range []func(*Config){
+		func(c *Config) { c.WorkflowChanges = "agents" },
+		func(c *Config) { c.Digest = "email" },
+	} {
+		c := base
+		edit(&c)
+		if err := c.Validate(); err == nil {
+			t.Fatalf("invalid value accepted: %+v", c)
+		}
+	}
+	flagged := base
+	flagged.WorkflowChanges, flagged.Digest = "flagged", "issue"
+	if !flagged.FlagsWorkflowChanges() || !flagged.KeepsDigestIssue() {
+		t.Fatal("not on")
+	}
+	if off := flagged.WithoutRelaxations(); off.FlagsWorkflowChanges() {
+		t.Fatal("a copy not from the default branch cannot flag workflow changes in")
+	}
+}

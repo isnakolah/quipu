@@ -436,6 +436,10 @@ func writerServeCommand(args []string) error {
 				if err := runNightlySlowChecks(c, now); err != nil {
 					failures = append(failures, "slow checks: "+err.Error())
 				}
+				// The digest is a convenience: failing to write it never stops the Writer.
+				if err := keepDigestIssue(c, now); err != nil {
+					fmt.Fprintln(os.Stderr, "digest: "+err.Error())
+				}
 			}
 			if len(failures) > 0 {
 				return errors.New(strings.Join(failures, "; "))
