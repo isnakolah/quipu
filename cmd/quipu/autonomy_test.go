@@ -718,18 +718,17 @@ func TestMergeDefaultInReturnsConflictsToTheAgent(t *testing.T) {
 }
 
 func TestGuideWithEveryFlagOffIsTheHandbook(t *testing.T) {
-	committed, err := os.ReadFile(filepath.Join("..", "..", guideRule))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The handbook is rendered, not read from this repository's own rules
+	// file: that file follows this repository's flags, which the owner may turn on.
+	handbook := renderGuide()
 	// Settings that predate the flags change nothing either.
 	for _, c := range []model.Config{{}, {IssuesBy: "owner", TriageBy: "owner", UpdateBehind: "off", MergeWait: "foreground", GuardReads: "closed"}, {Merge: "agent", ReadyBy: "agents", CommitFormat: "issue-prefix"}} {
-		if got := renderGuideFor(c); got != string(committed) || got != renderGuide() {
+		if renderGuideFor(c) != handbook {
 			t.Errorf("%+v: the guide differs from the handbook", c)
 		}
 	}
 	for _, flagOnly := range []string{"merge-conflict", "issues_by", "triage_by", "update_behind", "merge_wait", "guard_reads", "quipu triage", "Flags on in this repository"} {
-		if strings.Contains(string(committed), flagOnly) {
+		if strings.Contains(handbook, flagOnly) {
 			t.Errorf("with every flag off the handbook must not mention %q", flagOnly)
 		}
 	}

@@ -102,6 +102,13 @@ func (l leaseContext) fresh(now time.Time) bool {
 	return err == nil && expires.After(now)
 }
 
+// expired reports whether the lease's own expiry has passed. A renewal rewrites
+// the record, so a record past its expiry holds nothing.
+func (l leaseContext) expired(now time.Time) bool {
+	expires, err := time.Parse(time.RFC3339, l.Expires)
+	return err == nil && !expires.After(now)
+}
+
 func (w worktree) readLease() (leaseContext, error) {
 	raw, err := os.ReadFile(filepath.Join(w.GitDir, leaseFileName))
 	if err != nil {

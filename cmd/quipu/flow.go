@@ -61,6 +61,8 @@ type statusReport struct {
 	Machine *machineReport `json:"machine,omitempty"`
 	// Queue is the merge queue, in merge: queue.
 	Queue *queueReport `json:"queue,omitempty"`
+	// Cleared names lease records this look found expired and removed.
+	Cleared []string `json:"cleared,omitempty"`
 }
 
 func statusCommand(args []string) error {
@@ -89,6 +91,9 @@ func statusCommand(args []string) error {
 		titles[item.Number] = item.Title
 	}
 	report.OwnerQueue, report.Attention = addPullsToQueues(report.OwnerQueue, report.Attention, report.PullRequests, titles)
+	if here, err := currentWorktree(); err == nil {
+		report.Cleared = clearExpiredRecords(here, time.Now().UTC())
+	}
 	if here, err := currentWorktree(); err == nil {
 		report.Machine = loadMachineReport(enforcedLimits(c, here, false), here.Top, time.Now())
 		if enforced, source, err := loadEnforcedConfig(here, false); err == nil && source != configSourceWorktree {
@@ -317,6 +322,12 @@ func renderStatus(report statusReport, now time.Time) string {
 		}
 		for _, reason := range reasons {
 			fmt.Fprintf(&b, "  %s: %s\n", reason, strings.Join(numbers[reason], " "))
+		}
+	}
+	if len(report.Cleared) > 0 {
+		fmt.Fprintf(&b, "\nCleared leftover lease records\n")
+		for _, line := range report.Cleared {
+			fmt.Fprintf(&b, "  %s\n", line)
 		}
 	}
 	b.WriteString(renderMachine(report.Machine))

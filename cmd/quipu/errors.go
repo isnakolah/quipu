@@ -42,6 +42,8 @@ var flowErrors = []flowErrorKind{
 	{"merge-blocked", "GitHub cannot merge the PR: it is a draft, behind the default branch, conflicting, or refused by a rule", "update the branch (`git fetch origin && git merge origin/<default>`), resolve conflicts, push, then rerun the same `quipu done N --json ...`"},
 	{"commit-format", "a commit message breaks the repository's `commit_format`", "write it as `#NNN type(scope): summary` with a `Refs: #N` footer line (`git commit --amend` for the last commit), and title the PR `type(scope): summary`"},
 	{"not-active", "the Issue is not in progress, in review, or awaiting evidence", "check `quipu status --json`; start work with `quipu start N --json`"},
+	{"no-record", "no lease record matches, here or for that Issue in any worktree of this clone", "nothing to release; carry on, or take work with `quipu start --next --json`"},
+	{"lease-unverified", "GitHub could not be read and the record has not expired, so the lease may still be live", "rerun the same command in a minute; a record clears itself once its lease expires"},
 }
 
 // flagErrors are the failures only a flag can cause. The handbook lists them

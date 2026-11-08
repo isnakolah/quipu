@@ -31,9 +31,9 @@ type guardRule struct {
 
 var guardRules = []guardRule{
 	{"no-lease", "changes need an active lease in this worktree", "run `quipu start --next --json` (or `quipu start N --json`), then retry"},
-	{"wrong-branch", "this worktree is not on its leased branch", "run `quipu start N --json` with the leased Issue; it switches to the branch"},
+	{"wrong-branch", "this worktree is not on its leased branch", "run `quipu start N --json` with the leased Issue; it switches to the branch. A record left over from other work clears itself once its lease is over, or now with `quipu lease release N --json`"},
 	{"other-worktree", "agents change only the worktree that holds their own lease", "work inside your own worktree; dispatch other work with `quipu start --next --worktree --json`"},
-	{"lease-inactive", "the live lease is expired, held by someone else, or no longer active", "run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder"},
+	{"lease-inactive", "the live lease is expired, held by someone else, or no longer active", "run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder. The leftover record is cleared, so nothing else is blocked"},
 	{"git-internals", "files under .git hold git and Quipu state (lease, identity)", "use git and quipu commands; never edit .git directly"},
 	{"quipu-config", "Quipu's config, workflows, and agent hooks are owner-only", "ask the owner in a comment on your PR"},
 	{"branch-change", "the work branch is chosen by quipu start", "run `quipu start N --json`; restore files with `git restore <file>` or `git checkout -- <file>`"},
@@ -131,8 +131,11 @@ func newGuard(cwd string, now time.Time) *guard {
 	if w, err := openWorktree(cwd); err == nil {
 		g.session = w
 		if hasConfig(w.Top) {
-			_, err := w.readLease()
-			g.sessionLeased = err == nil
+			// A record whose lease has run out holds nothing: it must not make
+			// this session count as leased, or every worktree it drives is
+			// "another" worktree. writeIn clears it on the next change here.
+			lease, err := w.readLease()
+			g.sessionLeased = err == nil && !lease.expired(now)
 		}
 	}
 	return g
@@ -335,7 +338,20 @@ func (g *guard) writeIn(dir string) error {
 	if err != nil {
 		return deny("no-lease", "worktree "+w.Top)
 	}
+	// A record left behind never blocks: one whose lease ran out, or that
+	// GitHub says is no longer live, is cleared before the branch is judged.
+	if lease.expired(g.now) {
+		w.removeLease(lease.Issue)
+		if w.branch() != lease.Branch {
+			return deny("no-lease", fmt.Sprintf("worktree %s; its expired record for #%d was cleared", w.Top, lease.Issue))
+		}
+		return deny("lease-inactive", fmt.Sprintf("#%d lease expired and this worktree's record was cleared; `quipu start %d` renews it", lease.Issue, lease.Issue))
+	}
 	if branch := w.branch(); branch != lease.Branch {
+		if !lease.fresh(g.now) && g.leaseDead(c, lease) {
+			w.removeLease(lease.Issue)
+			return deny("no-lease", fmt.Sprintf("worktree %s; its record for #%d was no longer live and was cleared", w.Top, lease.Issue))
+		}
 		return deny("wrong-branch", fmt.Sprintf("on %q, lease #%d is for %q", branch, lease.Issue, lease.Branch))
 	}
 	if !lease.fresh(g.now) {
@@ -352,23 +368,46 @@ func (g *guard) writeIn(dir string) error {
 func (g *guard) verifyLive(c model.Config, w worktree, lease leaseContext) error {
 	state, err := g.live(c, lease.Issue)
 	if err != nil {
+		// No answer proves nothing either way, so the record stays.
 		return deny("lease-inactive", "could not verify #"+fmt.Sprint(lease.Issue)+": "+err.Error())
 	}
+	// Each answer below is GitHub saying the lease is over, so the record
+	// no longer means anything and is cleared.
+	inactive := func(detail string) error {
+		w.removeLease(lease.Issue)
+		return deny("lease-inactive", detail+"; this worktree's record was cleared")
+	}
 	if state.Holder != lease.Holder || state.Branch != lease.Branch {
-		return deny("lease-inactive", fmt.Sprintf("#%d is held by %q on %q", lease.Issue, state.Holder, state.Branch))
+		return inactive(fmt.Sprintf("#%d is held by %q on %q", lease.Issue, state.Holder, state.Branch))
 	}
 	expires, err := time.Parse(time.RFC3339, state.Expiry)
 	if err != nil || !expires.After(g.now) {
-		return deny("lease-inactive", fmt.Sprintf("#%d lease expired", lease.Issue))
+		return inactive(fmt.Sprintf("#%d lease expired", lease.Issue))
 	}
 	switch state.Status {
 	case "Claimed", "In progress", "In review", "Evidence pending":
 	default:
-		return deny("lease-inactive", fmt.Sprintf("#%d is %s", lease.Issue, state.Status))
+		return inactive(fmt.Sprintf("#%d is %s", lease.Issue, state.Status))
 	}
 	lease.Expires, lease.VerifiedAt = state.Expiry, g.now.Format(time.RFC3339)
 	_ = w.writeLease(lease)
 	return nil
+}
+
+// leaseDead reports whether GitHub says lease is over: held by someone else,
+// on another branch, expired, or finished. No answer is not an answer.
+func (g *guard) leaseDead(c model.Config, lease leaseContext) bool {
+	state, err := g.live(c, lease.Issue)
+	if errors.Is(err, errNotInProject) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	if expires, err := time.Parse(time.RFC3339, state.Expiry); err != nil || !expires.After(g.now) {
+		return true
+	}
+	return !leaseStillHeld(lease, state)
 }
 
 // leaseIn returns the verified lease of dir's worktree after writeIn passed.

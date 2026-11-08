@@ -55,6 +55,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
 | `quipu worktree remove N --json` | to free a finished worktree, by Issue number or path | `status: "Removed"`, `worktree`, `warnings`, `next` |
+| `quipu lease release [N] --json` | to give back your own live lease, or clear a record left over from one that is over | `status: "Released"` (back to Ready, branch kept) or `"Cleared"` (record only), `next` |
 | `quipu guide` | to read this handbook | this text |
 | `quipu runner status --json` | a check won't start, or work seems stuck | each runner's state and labels, what is queued for it, when the Writer last ran |
 | `quipu runner setup` | the owner asks how to set a runner up | the steps, printed for the owner |
@@ -151,6 +152,7 @@ The Writer rejects evidence unless the PR is merged from your leased branch with
 - An expired lease that nobody else took can be re-taken with `quipu start N --json`.
 - Claimed and In progress work whose lease expires returns to Ready, so another agent may take it, unless its branch has an open PR: that work stays yours, and `quipu start N --json` renews it. Work In review keeps its holder.
 - The guard checks your lease against GitHub at most every five minutes, so it stays fast with many agents.
+- A lease record never outlives its lease. Once a lease has expired, or GitHub says its Issue is finished or held by someone else, the guard clears that worktree's record on the next change and judges the change as if there were none; `quipu status` clears expired records in every worktree of the clone. To give back work you are not going to finish, run `quipu lease release N --json`: it returns your live lease to Ready and keeps the branch. It never touches someone else's live lease.
 
 ## Parking on a Decision
 
@@ -179,9 +181,9 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | Code | Why | Do instead |
 |---|---|---|
 | `no-lease` | changes need an active lease in this worktree | run `quipu start --next --json` (or `quipu start N --json`), then retry |
-| `wrong-branch` | this worktree is not on its leased branch | run `quipu start N --json` with the leased Issue; it switches to the branch |
+| `wrong-branch` | this worktree is not on its leased branch | run `quipu start N --json` with the leased Issue; it switches to the branch. A record left over from other work clears itself once its lease is over, or now with `quipu lease release N --json` |
 | `other-worktree` | agents change only the worktree that holds their own lease | work inside your own worktree; dispatch other work with `quipu start --next --worktree --json` |
-| `lease-inactive` | the live lease is expired, held by someone else, or no longer active | run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder |
+| `lease-inactive` | the live lease is expired, held by someone else, or no longer active | run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder. The leftover record is cleared, so nothing else is blocked |
 | `git-internals` | files under .git hold git and Quipu state (lease, identity) | use git and quipu commands; never edit .git directly |
 | `quipu-config` | Quipu's config, workflows, and agent hooks are owner-only | ask the owner in a comment on your PR |
 | `branch-change` | the work branch is chosen by quipu start | run `quipu start N --json`; restore files with `git restore <file>` or `git checkout -- <file>` |
@@ -228,6 +230,8 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `merge-blocked` | GitHub cannot merge the PR: it is a draft, behind the default branch, conflicting, or refused by a rule | update the branch (`git fetch origin && git merge origin/<default>`), resolve conflicts, push, then rerun the same `quipu done N --json ...` |
 | `commit-format` | a commit message breaks the repository's `commit_format` | write it as `#NNN type(scope): summary` with a `Refs: #N` footer line (`git commit --amend` for the last commit), and title the PR `type(scope): summary` |
 | `not-active` | the Issue is not in progress, in review, or awaiting evidence | check `quipu status --json`; start work with `quipu start N --json` |
+| `no-record` | no lease record matches, here or for that Issue in any worktree of this clone | nothing to release; carry on, or take work with `quipu start --next --json` |
+| `lease-unverified` | GitHub could not be read and the record has not expired, so the lease may still be live | rerun the same command in a minute; a record clears itself once its lease expires |
 
 ## What GitHub undoes
 
