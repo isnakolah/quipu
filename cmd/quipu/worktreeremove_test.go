@@ -41,6 +41,7 @@ func TestLeaseStillHeld(t *testing.T) {
 func removalCode(t *testing.T, cwd, target string, live func(model.Config, int) (liveWork, error)) error {
 	t.Helper()
 	g := newGuard(cwd, time.Now().UTC())
+	g.caller = fixtureCaller
 	g.live = live
 	raw, err := json.Marshal(map[string]any{"command": "git worktree remove " + target})
 	if err != nil {
