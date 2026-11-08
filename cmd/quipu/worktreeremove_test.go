@@ -468,3 +468,70 @@ func TestRescanLooksAgainAfterGitHubCatchesUp(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestFindRemovableTakesAnyPathForm(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := filepath.Join(dir, "repo")
+	wt := filepath.Join(dir, "repo-worktrees", "repo-042")
+	x := filepath.Join(main, "x")
+	for _, path := range []string{main, wt, x} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Join(dir, "repo-worktrees"), link); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(wt, filepath.Join(home, "wt")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	before, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(before) })
+	if err := os.Chdir(main); err != nil {
+		t.Fatal(err)
+	}
+	entries := []worktreeEntry{{main, "main"}, {wt, "042/a"}, {x, "043/x"}}
+	none := func(string) int { return 0 }
+	for target, want := range map[string]string{
+		wt:                              wt,
+		"../repo-worktrees/repo-042":    wt,
+		"../repo-worktrees/repo-042/":   wt,
+		wt + "/":                        wt,
+		filepath.Join(link, "repo-042"): wt,
+		"~/wt":                          wt,
+		"./x/":                          x,
+		"x":                             x,
+		x:                               x,
+	} {
+		entry, err := findRemovable(entries, target, none)
+		if err != nil || entry.Path != want {
+			t.Errorf("%s: %+v, %v", target, entry, err)
+		}
+	}
+	if _, err := findRemovable(entries, ".", none); flowCode(err) != "worktree-missing" {
+		t.Errorf("the main checkout, named relatively, is never removed: %v", err)
+	}
+}
+
+func TestRemoveTakesALockedWorktree(t *testing.T) {
+	root, agent, entry := finishedWorktree(t)
+	gitIn(t, root.Top, "worktree", "lock", "--reason", "claude agent session", agent.Top)
+	if _, err := removeWorktreeTree(root, entry, "", liveStatus("Done")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(agent.Top); !os.IsNotExist(err) {
+		t.Fatalf("a locked worktree whose work is Done goes too: %v", err)
+	}
+}

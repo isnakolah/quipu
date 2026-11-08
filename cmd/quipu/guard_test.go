@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/isnakolah/quipu/internal/model"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -307,5 +308,129 @@ func TestCommandTextAcceptsArgv(t *testing.T) {
 		if got := commandText(json.RawMessage(raw)); got != want {
 			t.Fatalf("commandText(%s) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+// conflicted leaves worktree wt part way through `git <op> main`, stopped on a
+// conflict in conflict.txt.
+func conflicted(t *testing.T, f guardFixture, wt string, op ...string) {
+	t.Helper()
+	gitIdentity(t)
+	writeRepoFile(t, f.top, "conflict.txt", []byte("main\n"))
+	commitAll(t, f.top)
+	writeRepoFile(t, wt, "conflict.txt", []byte("branch\n"))
+	commitAll(t, wt)
+	if output, err := exec.Command("git", append([]string{"-C", wt}, append(op, "main")...)...).CombinedOutput(); err == nil {
+		t.Fatalf("git %v must stop on the conflict: %s", op, output)
+	}
+}
+
+func bash(command string) map[string]any { return map[string]any{"command": command} }
+
+func TestGuardLetsTheLeasedBranchFinishOrAbortARebase(t *testing.T) {
+	f := newGuardFixture(t)
+	conflicted(t, f, f.a, "rebase")
+	a, err := openWorktree(f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.branch(); got != "001/a" {
+		t.Fatalf("mid-rebase the branch is still the one being rebased, got %q", got)
+	}
+	for _, command := range []string{"git rebase --abort", "git rebase --continue", "git rebase --skip", "git add conflict.txt"} {
+		if got := guardCode(t, f.a, "Bash", bash(command)); got != "" {
+			t.Errorf("%s: %s", command, got)
+		}
+	}
+	if got := guardCode(t, f.a, "Edit", map[string]any{"file_path": filepath.Join(f.a, "conflict.txt")}); got != "" {
+		t.Errorf("resolving the conflict: %s", got)
+	}
+}
+
+func TestGuardLetsTheLeasedBranchFinishOrAbortAMerge(t *testing.T) {
+	f := newGuardFixture(t)
+	conflicted(t, f, f.a, "merge", "--no-edit")
+	if got := guardCode(t, f.a, "Edit", map[string]any{"file_path": filepath.Join(f.a, "conflict.txt")}); got != "" {
+		t.Errorf("resolving the conflict: %s", got)
+	}
+	for _, command := range []string{"git add conflict.txt", "git merge --continue", "git merge --abort"} {
+		if got := guardCode(t, f.a, "Bash", bash(command)); got != "" {
+			t.Errorf("%s: %s", command, got)
+		}
+	}
+}
+
+func TestGuardLetsAWorktreeWithNoLiveLeaseBackOut(t *testing.T) {
+	f := newGuardFixture(t)
+	conflicted(t, f, f.b, "rebase")
+	cases := []struct{ cwd, command, want string }{
+		{f.b, "git rebase --abort", ""},
+		{f.b, "git rebase --continue", ""},
+		{f.b, "git merge --abort", ""},
+		{f.b, "git cherry-pick --abort", ""},
+		// Only finishing or backing out; anything else still needs a lease.
+		{f.b, "git commit -m x", "no-lease"},
+		{f.b, "git rebase main", "no-lease"},
+		{f.b, "git cherry-pick --continue", "no-lease"},
+		// A leased agent may back another worktree out when nothing holds it.
+		{f.a, "git -C " + f.b + " rebase --abort", ""},
+	}
+	for _, c := range cases {
+		if got := guardCode(t, c.cwd, "Bash", bash(c.command)); got != c.want {
+			t.Errorf("%s in %s: got %q, want %q", c.command, c.cwd, got, c.want)
+		}
+	}
+	b, err := openWorktree(f.b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	if err := b.writeLease(leaseContext{Issue: 3, Holder: "claude/octo/cccc3333", Branch: "003/c", Expires: expired, VerifiedAt: expired}); err != nil {
+		t.Fatal(err)
+	}
+	if got := guardCode(t, f.b, "Bash", bash("git rebase --abort")); got != "" {
+		t.Errorf("an expired record holds nothing: %s", got)
+	}
+}
+
+func TestGuardKeepsALiveLeaseOnAnotherBranchFromBackingOut(t *testing.T) {
+	f := newGuardFixture(t)
+	conflicted(t, f, f.b, "rebase")
+	b, err := openWorktree(f.b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	live := leaseContext{Issue: 3, Holder: "claude/octo/cccc3333", Branch: "003/c",
+		Expires: now.Add(time.Hour).Format(time.RFC3339), VerifiedAt: now.Format(time.RFC3339)}
+	if err := b.writeLease(live); err != nil {
+		t.Fatal(err)
+	}
+	if got := guardCode(t, f.b, "Bash", bash("git rebase --abort")); got != "wrong-branch" {
+		t.Errorf("a live lease for another branch: %q", got)
+	}
+	live.Branch = "002/b"
+	if err := b.writeLease(live); err != nil {
+		t.Fatal(err)
+	}
+	if got := guardCode(t, f.a, "Bash", bash("git -C "+f.b+" rebase --abort")); got != "other-worktree" {
+		t.Errorf("another agent's live worktree: %q", got)
+	}
+}
+
+func TestStartRefusesToSwitchMidRebase(t *testing.T) {
+	f := newGuardFixture(t)
+	conflicted(t, f, f.a, "rebase")
+	a, err := openWorktree(f.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.switchBranch("001/a", "main"); err != nil {
+		t.Fatalf("already on the branch being rebased: %v", err)
+	}
+	err = a.switchBranch("009/other", "main")
+	var coded *flowError
+	if !errors.As(err, &coded) || coded.Code != "git-busy" || !strings.Contains(coded.Next, "git rebase --abort") {
+		t.Fatalf("got %v", err)
 	}
 }

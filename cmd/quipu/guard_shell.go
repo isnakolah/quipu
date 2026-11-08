@@ -520,6 +520,8 @@ subcommand:
 			return g.writeIn(dir)
 		}
 		return deny("branch-change", "git checkout "+joinArgs(rest))
+	case gitUnwinding(sub, rest):
+		return g.gitUnwind(dir)
 	case sub == "worktree":
 		return g.gitWorktree(rest, dir)
 	case sub == "push":
@@ -527,6 +529,48 @@ subcommand:
 	default:
 		return g.writeIn(dir)
 	}
+}
+
+// gitUnwinding recognizes the commands that finish or back out of a rebase,
+// merge, or cherry-pick already under way.
+func gitUnwinding(sub string, rest []shellArg) bool {
+	if len(rest) != 1 || !rest[0].ok {
+		return false
+	}
+	switch flag := rest[0].s; sub {
+	case "rebase":
+		return flag == "--abort" || flag == "--continue" || flag == "--skip"
+	case "merge":
+		return flag == "--abort" || flag == "--continue"
+	case "cherry-pick":
+		return flag == "--abort"
+	}
+	return false
+}
+
+// gitUnwind lets an agent finish or back out of a git operation in a worktree
+// whose recorded lease names the branch under way, or that holds no live lease.
+// Otherwise a worktree stuck mid-rebase could be neither fixed nor switched.
+func (g *guard) gitUnwind(dir string) error {
+	err := g.writeIn(dir)
+	if err == nil {
+		return nil
+	}
+	w, openErr := openWorktree(existingDir(dir))
+	if openErr != nil {
+		return err
+	}
+	// writeIn clears a record that holds nothing, so one still here is live
+	// or could not be checked.
+	lease, leaseErr := w.readLease()
+	if leaseErr != nil || lease.expired(g.now) {
+		return nil
+	}
+	// A live lease is its holder's: another leased agent stays out.
+	if lease.Branch == w.branch() && (!g.sessionLeased || g.session.Top == w.Top) {
+		return nil
+	}
+	return err
 }
 
 // openGitRead recognizes the listing forms of git commands whose other forms
