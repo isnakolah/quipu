@@ -316,7 +316,7 @@ func TestCleanupRunsAfterTheCheckNeedsIt(t *testing.T) {
 	if err := agent.writeLease(leaseContext{Issue: 1, Holder: "h", Branch: "001/a"}); err != nil {
 		t.Fatal(err)
 	}
-	if warnings := agent.release(1, "rm -rf node_modules"); len(warnings) != 0 {
+	if warnings := agent.release(1, "rm -rf node_modules", 0); len(warnings) != 0 {
 		t.Fatal(warnings)
 	}
 	if _, err := os.Stat(filepath.Join(agent.Top, "node_modules")); !os.IsNotExist(err) {
@@ -336,12 +336,12 @@ func TestReleaseRunsCleanupOnce(t *testing.T) {
 	if err := agent.writeLease(lease); err != nil {
 		t.Fatal(err)
 	}
-	agent.release(2, command)
+	agent.release(2, command, 0)
 	if _, err := agent.readLease(); err != nil {
 		t.Fatal("another Issue's release must leave this lease alone")
 	}
-	agent.release(1, command)
-	agent.release(1, command) // a rerun of quipu done
+	agent.release(1, command, 0)
+	agent.release(1, command, 0) // a rerun of quipu done
 	raw, err := os.ReadFile(counter)
 	if err != nil || strings.Count(string(raw), "x") != 1 {
 		t.Fatalf("got %q, %v", raw, err)
@@ -350,7 +350,7 @@ func TestReleaseRunsCleanupOnce(t *testing.T) {
 	if err := agent.writeLease(lease); err != nil {
 		t.Fatal(err)
 	}
-	if warnings := agent.release(1, "exit 3"); len(warnings) != 1 || !strings.Contains(warnings[0], "exited 3") {
+	if warnings := agent.release(1, "exit 3", 0); len(warnings) != 1 || !strings.Contains(warnings[0], "exited 3") {
 		t.Fatalf("a failure is a warning: %v", warnings)
 	}
 	if _, err := agent.readLease(); err == nil {
@@ -364,7 +364,7 @@ func TestReleaseRunsCleanupOnce(t *testing.T) {
 	if err := main.writeLease(lease); err != nil {
 		t.Fatal(err)
 	}
-	if warnings := main.release(1, "exit 3"); warnings != nil {
+	if warnings := main.release(1, "exit 3", 0); warnings != nil {
 		t.Fatalf("the main checkout is never cleaned: %v", warnings)
 	}
 	if _, err := main.readLease(); err == nil {

@@ -714,7 +714,7 @@ func doneCommand(args []string) error {
 	// Writer, and the worktree is still free to go.
 	var warnings []string
 	if terminalIssueStatus(state.Status) {
-		warnings = w.release(number, cleanup)
+		warnings = w.release(number, cleanup, c.DoneGrace())
 	}
 	if state.Status == "Done" {
 		return printFlowResult(doneResult(w, number, "", warnings), *asJSON)
@@ -865,7 +865,7 @@ func doneCommand(args []string) error {
 	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: "Done"}, *wait); err != nil {
 		return err
 	}
-	return respond(doneResult(w, number, pull.URL, append(warnings, w.release(number, cleanup)...)))
+	return respond(doneResult(w, number, pull.URL, append(warnings, w.release(number, cleanup, c.DoneGrace())...)))
 }
 
 // doneResult is what finished work reports, however it got there.
