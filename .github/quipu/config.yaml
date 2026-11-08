@@ -27,3 +27,7 @@ policy:
 # count only when the Writer bot (github-actions[bot]) posted them.
 receipts_trusted_before: "2026-10-29T15:08:21Z"
 merge: agent
+issues_by: agents
+ready_by: agents
+triage_by: agents
+guard_reads: open

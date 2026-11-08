@@ -16,12 +16,41 @@ import (
 // checkout without a lease.
 type guardFixture struct{ top, a, b string }
 
+// guardFixtureConfig is the config every guard fixture starts from. It is
+// fixed here, not read from this repository's own config, so the owner can
+// change what Quipu's own agents may do without changing what the tests mean.
+// Every agent permission is at its owner-only default.
+const guardFixtureConfig = `schema_version: 1
+owner: octo
+repository: repo
+project:
+  id: PVT_test
+  number: 1
+  title: Test
+  fields:
+    status: F_status
+    kind: F_kind
+    area: F_area
+    priority: F_priority
+    proof: F_proof
+    lease_holder: F_holder
+    lease_expires: F_expires
+    branch: F_branch
+    state_fingerprint: F_fingerprint
+areas: [stable]
+wiki_mode: journal
+default_branch: main
+writer_version: 0.0.0-dev
+authorized_actors: [octo]
+policy:
+  lease_ttl_minutes: 120
+  reconcile_minutes: 5
+merge: agent
+`
+
 func newGuardFixture(t *testing.T) guardFixture {
 	t.Helper()
-	config, err := os.ReadFile(filepath.Join("..", "..", configPath))
-	if err != nil {
-		t.Fatal(err)
-	}
+	config := []byte(guardFixtureConfig)
 	top := gitRepo(t)
 	if err := os.MkdirAll(filepath.Join(top, filepath.Dir(configPath)), 0755); err != nil {
 		t.Fatal(err)
