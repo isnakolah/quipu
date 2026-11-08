@@ -14,9 +14,18 @@ func TestGuidesInSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed, err := syncGuides(top, false)
+	// The committed config, not the enforced one: a CI checkout has no
+	// origin/main, so the enforced config there would turn every flag off.
+	c, err := loadConfigAt(top)
 	if err != nil {
 		t.Fatal(err)
+	}
+	read := readUnder(top)
+	var changed []string
+	for path, body := range guideFilesFor(c, top, read) {
+		if current, _ := read(path); current != body {
+			changed = append(changed, path)
+		}
 	}
 	sort.Strings(changed)
 	if len(changed) > 0 {
