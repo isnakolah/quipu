@@ -59,9 +59,56 @@ func (w worktree) git(args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+// branch is the branch this worktree works on. Mid-rebase HEAD is detached, so
+// the branch being rebased comes from the rebase's own record of it.
 func (w worktree) branch() string {
-	branch, _ := w.git("branch", "--show-current")
-	return branch
+	if branch, _ := w.git("branch", "--show-current"); branch != "" {
+		return branch
+	}
+	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
+		if raw, err := os.ReadFile(filepath.Join(w.GitDir, dir, "head-name")); err == nil {
+			if branch, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "refs/heads/"); ok {
+				return branch
+			}
+		}
+	}
+	return ""
+}
+
+// gitOperation is the git operation this worktree is in the middle of, as the
+// git subcommand that finishes or abandons it, or "" when there is none.
+func (w worktree) gitOperation() string {
+	exists := func(name string) bool {
+		_, err := os.Stat(filepath.Join(w.GitDir, name))
+		return err == nil
+	}
+	switch {
+	case exists("rebase-merge"):
+		return "rebase"
+	case exists(filepath.Join("rebase-apply", "applying")):
+		return "am"
+	case exists("rebase-apply"):
+		return "rebase"
+	case exists("MERGE_HEAD"):
+		return "merge"
+	case exists("CHERRY_PICK_HEAD"):
+		return "cherry-pick"
+	case exists("REVERT_HEAD"):
+		return "revert"
+	}
+	return ""
+}
+
+// requireIdle refuses to move this worktree to branch while a git operation
+// is unfinished there, naming the command that backs out of it.
+func (w worktree) requireIdle(branch string) error {
+	op := w.gitOperation()
+	if op == "" {
+		return nil
+	}
+	e := flowErr("git-busy", "%s is in the middle of a git %s, so it cannot switch to %s", w.Top, op, branch)
+	e.Next = fmt.Sprintf("in %s, finish it with `git %s --continue` or back out with `git %s --abort`, then rerun the same command", w.Top, op, op)
+	return e
 }
 
 // agentID returns this worktree's stable identity, creating it on first use.
@@ -297,6 +344,9 @@ func (w worktree) hasBranch(branch string) bool {
 func (w worktree) switchBranch(branch, base string) error {
 	if w.branch() == branch {
 		return nil
+	}
+	if err := w.requireIdle(branch); err != nil {
+		return err
 	}
 	if err := w.requireBranchFree(branch); err != nil {
 		return err
