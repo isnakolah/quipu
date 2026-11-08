@@ -238,7 +238,7 @@ func queueMerge(c model.Config, w worktree, number int, actor, branch, url, head
 	if _, err := postRequest(c, number, actor, writer.Request{Action: "merge.queue", PR: url, Head: head, Evidence: &e}); err != nil {
 		return err
 	}
-	warnings := w.release(number, cleanup)
+	warnings := w.release(number, cleanup, c.DoneGrace())
 	var coded *flowError
 	reason, owner := why.Error(), ""
 	if errors.As(why, &coded) {

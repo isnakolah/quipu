@@ -1250,7 +1250,7 @@ func queueForBatch(c model.Config, w worktree, number int, actor string, pull pu
 	if _, err := postRequest(c, number, actor, writer.Request{Action: "merge.batch", PR: pull.URL, Head: view.HeadRefOid, Evidence: &e}); err != nil {
 		return err
 	}
-	warnings := w.release(number, cleanup)
+	warnings := w.release(number, cleanup, c.DoneGrace())
 	freeWorkSlot(c, w)
 	ensureQueueWorker(c, w)
 	return respond(flowResult{Issue: number, Status: "In review", PR: pull.URL, Warnings: warnings, Next: fmt.Sprintf("Queued. The merge queue tests %s in a batch, lands it, and the Writer closes #%d; or it returns #%d to In review with the failure attached. Do not wait: take other work with quipu start --next --json, and look again later with quipu status --json.", pull.URL, number, number)})

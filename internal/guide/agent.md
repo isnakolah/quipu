@@ -89,6 +89,7 @@ switch branches, never edit outside <worktree>.
 
 - `quipu done N` works from any checkout and finds the worktree holding #N.
 - After Done, remove a worktree with `quipu worktree remove <path> --json` once nothing runs in it. The agent that held it or a dispatcher may do this; it also deletes the merged local branch. Work that is not Done keeps anything found only in that worktree.
+- For an hour after `quipu done` frees your worktree (`done_grace_minutes`), you may still tidy it up there: the repository's cleanup, `cargo clean`, `go clean`, `make clean`, `git clean`, and `rm` of files git does not track. Commits, pushes, and edits are denied as before. `git branch -d NNN/...` deletes a merged work branch that no worktree has checked out, at any time.
 - If `start` says the branch is checked out in another worktree, continue there.
 
 ## Pull requests

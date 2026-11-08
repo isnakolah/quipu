@@ -7,6 +7,7 @@ package main
 // lease, and the never-allowed actions are denied outright.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,11 @@ type shellArg struct {
 }
 
 func (g *guard) shell(command, dir string) error {
+	// The configured cleanup may be a compound line; in a finished worktree it
+	// passes whole.
+	if _, ok := g.finishing(dir); ok && cleanupLine(command, dir) {
+		return nil
+	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil {
 		return g.unparsable(dir, err.Error())
@@ -231,6 +237,16 @@ var fileArgCommands = setOf("rm", "rmdir", "mv", "cp", "touch", "mkdir", "chmod"
 	"truncate", "install", "unlink", "rsync", "patch")
 
 func (g *guard) call(args []shellArg, dir *string) error {
+	err := g.simple(args, dir)
+	var d denial
+	if errors.As(err, &d) && d.Code == "no-lease" && g.tidyUp(args, *dir) {
+		return nil
+	}
+	return err
+}
+
+// simple judges one simple command.
+func (g *guard) simple(args []shellArg, dir *string) error {
 	if !args[0].ok {
 		return g.unparsable(*dir, "command name is not a literal")
 	}
@@ -490,6 +506,8 @@ subcommand:
 	case sub == "config" && hasAnyFlag(rest, "--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin", "--show-scope"):
 		return nil
 	case openGitRead(sub, rest) && g.readsOpen(dir):
+		return nil
+	case sub == "branch" && safeBranchDelete(rest, dir):
 		return nil
 	case sub == "branch":
 		return deny("branch-change", "git branch "+joinArgs(rest))
