@@ -1,6 +1,6 @@
 # Importing existing work
 
-`quipu import --manifest FILE` turns a repository's existing backlog and history into Quipu Issues in one repeatable command. Run it after `quipu adopt`, from a clone of the repository. It is an owner command; agents are blocked from it.
+`quipu import --manifest FILE` turns a repository's existing backlog and history into Quipu Issues in one repeatable command. Run it after `quipu adopt`, from a clone of the repository. It is an owner command; agents are blocked from it, except the agent that adopted, in its worktree, while the [bootstrap window](owner-guide.md#the-bootstrap-window) is open.
 
 ```sh
 quipu import --manifest quipu-import/backlog.yaml           # plan: which keys it creates, which exist
@@ -102,4 +102,5 @@ items:
 
 - Import is meant for a freshly adopted repository: `quipu adopt` refuses one that already has Issues, and import never touches Issues without its key marker.
 - GitHub limits how fast Issues can be created; import paces itself at about one Issue per second.
+- A GitHub 5xx does not leave duplicates or orphans. Each Issue is linked to the Project and its parent as soon as it is created, a call that meets a 5xx is tried again after 2, 5, 15 and 30 seconds, and a create that failed is first looked up by its key, since GitHub often makes the Issue before answering 502. If GitHub stays down, import stops and says so; rerun the same command and it resumes where it stopped, matching every Issue by key.
 - The Writer needs the `QUIPU_WRITER_TOKEN` secret to apply the requests. Until it is set, imported Issues stay in Backlog with their requests pending, and nothing is lost.

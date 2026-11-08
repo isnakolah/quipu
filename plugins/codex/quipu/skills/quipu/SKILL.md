@@ -184,6 +184,15 @@ quipu propose --parent N --title "Short title" --body-file proposal.md --json
 
 `N` is the Epic or Story it belongs under. Explain the why, the scope, and the acceptance criteria. Then carry on with your own work. The owner turns proposals into Issues and makes them Ready.
 
+## Adopting a repository
+
+If you ran `quipu adopt --apply` yourself, it opened a bootstrap window for your worktree (two hours unless the owner chose otherwise; `quipu doctor` shows it). While it is open, in that worktree only, the guard lets you finish setup without a lease:
+
+- reads of every kind, `--help`, the dry runs of `quipu adopt`, `quipu protect`, `quipu hooks`, and `quipu runner setup`, and `quipu import` with or without `--apply`;
+- until the config is on the default branch: editing Quipu's own files (`quipu.yml`, workflows, Issue forms, hooks, the handbook), `quipu guide --sync`, `quipu hooks --apply`, `git add` and `git commit`, pushing to a branch of its own (`git push -u origin HEAD:quipu-adoption`), and `gh pr create --base main --head quipu-adoption --title ... --body ...`.
+
+Never push to the default branch, force-push, or merge: the owner merges the setup PR. Ask the owner to run the `owner_step` that adopt printed (the Writer's token). Once the PR lands, `git fetch origin`, and editing, committing and pushing follow the normal rules. When the window closes, every rule here applies again.
+
 ## What the guard blocks
 
 The guard runs before every tool call. A denial looks like this:

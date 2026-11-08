@@ -8,16 +8,13 @@ package main
 // importing again creates nothing twice.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/model"
@@ -416,11 +413,17 @@ func importCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	changes, requests, err := runImport(c, here, items, numbers)
+	ops, cleanup, err := liveImportOps(c, here)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	changes, requests, err := runImport(ops, c, items, numbers)
 	report["changes"], report["import_requests"] = changes, requests
 	report["changed"] = len(changes) > 0
 	if err != nil {
 		report["error"] = err.Error()
+		report["next"] = "rerun the same command: it matches every Issue by key, so it creates nothing twice and links what this run left unlinked"
 		_ = printValue(report, *asJSON)
 		return errReported
 	}
@@ -428,103 +431,4 @@ func importCommand(args []string) error {
 		report["next"] = "the Writer records each status beyond Backlog and closes Done and Cancelled work; watch with quipu status, or run gh workflow run quipu-writer.yml"
 	}
 	return printValue(report, *asJSON)
-}
-
-func runImport(c model.Config, here worktree, items []importItem, numbers map[string]int) ([]string, []string, error) {
-	var changes, requests []string
-	ctx := context.Background()
-	client := github.NewClient()
-	scratch, err := os.MkdirTemp("", "quipu-import")
-	if err != nil {
-		return nil, nil, err
-	}
-	defer os.RemoveAll(scratch)
-	for _, item := range items {
-		if _, ok := numbers[item.Key]; ok {
-			continue
-		}
-		bodyFile := filepath.Join(scratch, item.Key+".md")
-		if err := os.WriteFile(bodyFile, []byte(importBody(item)), 0o600); err != nil {
-			return changes, requests, err
-		}
-		output, err := ghOutput("issue", "create", "--repo", c.Owner+"/"+c.Repository, "--title", item.Title, "--label", "kind:"+item.Kind, "--label", "area:"+item.Area, "--body-file", bodyFile)
-		if err != nil {
-			return changes, requests, fmt.Errorf("%s: %w", item.Key, err)
-		}
-		number, err := issueNumberFromURL(strings.TrimSpace(string(output)))
-		if err != nil {
-			return changes, requests, err
-		}
-		numbers[item.Key] = number
-		changes = append(changes, fmt.Sprintf("created #%d %s", number, item.Key))
-		if item.Kind == "epic" {
-			approval := item.ApprovedBy
-			if approval == "" {
-				approval = "@" + c.Owner + " (import manifest)"
-			}
-			if _, err := client.CreateComment(ctx, c.Owner, c.Repository, number, "Owner approval evidence: "+approval); err != nil {
-				return changes, requests, fmt.Errorf("%s: record approval: %w", item.Key, err)
-			}
-		}
-		// GitHub limits how fast content is created.
-		time.Sleep(time.Second)
-	}
-	for _, item := range items {
-		number := numbers[item.Key]
-		links, err := readImportLinks(c, number)
-		if err != nil {
-			return changes, requests, fmt.Errorf("%s: %w", item.Key, err)
-		}
-		if !links.InProject {
-			url := fmt.Sprintf("https://github.com/%s/%s/issues/%d", c.Owner, c.Repository, number)
-			if err := addIssueToProject(c, url, titleCase(item.Kind), titleCase(item.Area), item.Priority); err != nil {
-				return changes, requests, fmt.Errorf("%s: add to Project: %w", item.Key, err)
-			}
-			changes = append(changes, fmt.Sprintf("#%d added to the Project", number))
-		}
-		if item.Parent != "" && links.Parent != numbers[item.Parent] {
-			if links.Parent != 0 {
-				return changes, requests, fmt.Errorf("%s: #%d already has parent #%d, not #%d", item.Key, number, links.Parent, numbers[item.Parent])
-			}
-			if err := linkParent(c, numbers[item.Parent], number); err != nil {
-				return changes, requests, fmt.Errorf("%s: link parent: %w", item.Key, err)
-			}
-			changes = append(changes, fmt.Sprintf("#%d parent #%d", number, numbers[item.Parent]))
-		}
-		for _, blocker := range item.Blockers {
-			if links.Blockers[numbers[blocker]] {
-				continue
-			}
-			if err := addBlocker(c, number, numbers[blocker]); err != nil {
-				return changes, requests, fmt.Errorf("%s: blocker %s: %w", item.Key, blocker, err)
-			}
-			changes = append(changes, fmt.Sprintf("#%d blocked by #%d", number, numbers[blocker]))
-		}
-	}
-	for _, item := range items {
-		if item.Status == "Backlog" {
-			continue
-		}
-		number := numbers[item.Key]
-		comments, err := client.ListComments(ctx, c.Owner, c.Repository, number)
-		if err != nil {
-			return changes, requests, err
-		}
-		if importRequested(comments, receiptTrust(c).Receipts(comments)) {
-			continue
-		}
-		actor, err := resolveActor(here, "", number)
-		if err != nil {
-			return changes, requests, err
-		}
-		record := writer.Import{Key: item.Key, Status: item.Status, Source: item.Source, Commits: item.Commits, Reason: item.Reason}
-		id, err := postRequest(c, number, actor, writer.Request{Action: "import", Branch: importBranch(number, item.Branch), Import: &record})
-		if err != nil {
-			return changes, requests, fmt.Errorf("%s: %w", item.Key, err)
-		}
-		changes = append(changes, fmt.Sprintf("#%d import as %s requested", number, item.Status))
-		requests = append(requests, id)
-		time.Sleep(time.Second)
-	}
-	return changes, requests, nil
 }
