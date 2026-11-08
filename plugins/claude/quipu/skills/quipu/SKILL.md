@@ -32,7 +32,8 @@ gh pr create --base main --head NNN/short-description --title "feat: ..." --body
 What changed and why."
 quipu done N --json                 # moves the work to In review; the owner reviews
 # after the owner merges the PR:
-quipu done N --json --criteria "..." --commands "..." --documentation "..." --risks "..." --boundary CI
+quipu done --evidence-template > ../evidence-N.md   # fill it in, outside the worktree
+quipu done N --json --evidence-file ../evidence-N.md
 ```
 
 Then go back to `quipu status --json`. If `start --next` returns `"status": "Idle"`, there is no Ready work: say so and stop. If it returns `"status": "Busy"`, other agents won every race: run it again.
@@ -50,7 +51,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
 | `quipu done N --json` | PR open: move to review | `status: "In review"`, `pr`, `next` |
-| `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` | PR merged: record evidence and close | `status: "Done"`, `next` |
+| `quipu done N --json --evidence-file FILE` | PR merged: record evidence and close (or the `--criteria ... --boundary ...` flags) | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
 | `quipu ready N --json` | only where the config says `ready_by: agents` | `status: "Ready"` |
@@ -83,13 +84,17 @@ Start one agent per returned `worktree`, with that directory as its working dire
 
 ```text
 You work in <worktree> on Issue #<N> of this Quipu repository. Your lease is
-already claimed for this worktree. First run `quipu start <N> --json` there
-to resume it. Implement only #<N>'s acceptance criteria, run the tests, push
-branch <branch>, open a PR with `gh pr create --base main --head <branch>`
-and a body that says exactly `Refs #<N>`, then run `quipu done <N> --json`
-and report the PR URL. Read `quipu guide` for the rules. Never merge, never
-switch branches, never edit outside <worktree>.
+already claimed for this worktree. Run every shell command as
+`cd <worktree> && ...` and give edit tools absolute paths under <worktree>.
+First run `cd <worktree> && quipu start <N> --json` to resume it. Implement
+only #<N>'s acceptance criteria, run the tests, push branch <branch>, open a
+PR with `gh pr create --base main --head <branch>` and a body that says
+exactly `Refs #<N>`, then run `quipu done <N> --json` and report the PR URL.
+Read `quipu guide` for the rules. Never merge, never switch branches, never
+edit outside <worktree>.
 ```
+
+**Subagents started in the main checkout.** Many tools start a subagent in the folder its parent runs in, usually the main checkout, which holds no lease. That subagent can still implement the leased Issue: the guard judges each change by the worktree it lands in, not by the session's folder. An edit into a worktree is allowed when that worktree's live lease is held by the caller's own GitHub login; a shell command that starts with `cd <worktree> &&` is judged there too. An edit into a worktree leased to a different login is denied `other-worktree`, and so is any edit into another worktree from a session whose own worktree holds a lease. The guard learns your login from `gh` (cached for an hour), so keep `gh` signed in.
 
 - `quipu done N` works from any checkout and finds the worktree holding #N.
 - After Done, remove a worktree with `quipu worktree remove <path> --json` once nothing runs in it. The agent that held it or a dispatcher may do this; it also deletes the merged local branch. Work that is not Done keeps anything found only in that worktree.
@@ -114,7 +119,7 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
-**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with every evidence flag, and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with your evidence file (or every evidence flag), and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
 
 **When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
 
@@ -127,14 +132,21 @@ Refs: #42
 ```
 
 - **Changes requested:** push more commits to the same branch. If the guard says the lease expired, run `quipu start N --json` to renew it first.
-- **Merged:** run `quipu done N --json` with the evidence flags below.
+- **Merged:** run `quipu done N --json --evidence-file FILE` with the evidence below.
 - **Closed without merging:** open a new PR from the same branch with `Refs #N`, then run `quipu done N --json` again.
 
 ## Evidence
 
-After the merge, `quipu done N` records evidence. The PR URL, merge SHA, and CI run come from GitHub. You supply:
+After the merge, `quipu done N` records evidence. The PR URL, merge SHA, and CI run come from GitHub. You supply the rest in a file, so none of it is on the command line:
 
-| Flag | What to write | Example |
+```sh
+quipu done --evidence-template > ../evidence-N.md
+quipu done N --json --evidence-file ../evidence-N.md
+```
+
+The file has one `## Section` per field below (`## Criteria`, `## Commands`, `## Documentation`, `## Risks`, `## Boundary`, and optionally `## Environments`, `## Artifacts`, `## CI URL`), or is a JSON object with the keys `criteria`, `commands`, `documentation`, `risks`, `boundary`, `environments`, `artifacts`, `ci_url`. Lines in a section are joined with `; `. A missing section is named in the error. The flags still work, and a flag given with a file overrides that field.
+
+| Flag / section | What to write | Example |
 |---|---|---|
 | `--criteria` | each acceptance criterion and its result | `"All 3 criteria met: login rejects bad tokens (test TestLogin), ..."` |
 | `--commands` | the exact commands you ran to verify | `"go test ./... ; go vet ./..."` |
@@ -183,7 +195,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 |---|---|---|
 | `no-lease` | changes need an active lease in this worktree | run `quipu start --next --json` (or `quipu start N --json`), then retry |
 | `wrong-branch` | this worktree is not on its leased branch | run `quipu start N --json` with the leased Issue; it switches to the branch. A record left over from other work clears itself once its lease is over, or now with `quipu lease release N --json` |
-| `other-worktree` | agents change only the worktree that holds their own lease | work inside your own worktree; dispatch other work with `quipu start --next --worktree --json` |
+| `other-worktree` | agents change only their own leased worktree, or, holding no lease themselves, a worktree leased to their own login | work inside your own worktree; dispatch other work with `quipu start --next --worktree --json` |
 | `lease-inactive` | the live lease is expired, held by someone else, or no longer active | run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder. The leftover record is cleared, so nothing else is blocked |
 | `git-internals` | files under .git hold git and Quipu state (lease, identity) | use git and quipu commands; never edit .git directly |
 | `quipu-config` | Quipu's config, workflows, and agent hooks are owner-only | ask the owner in a comment on your PR |
@@ -199,7 +211,8 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `pr-body` | a PR must be created from the leased branch with a body saying exactly `Refs #N` for the leased Issue and no closing keywords | run `gh pr create --base <default> --head <leased branch> --title ... --body "Refs #N ..."` |
 | `quipu-admin` | Quipu recovery and admin commands are owner-only | use `quipu start`, `quipu done`, or `quipu propose`; ask the owner for recovery |
 | `quipu-missing` | quipu is not installed, so no call can be checked | ask the owner to install quipu (docs/source-install.md in the Quipu repository) |
-| `unparsable` | the guard could not tell what this command does | rewrite it as plain commands without eval, variables as command names, or computed paths |
+| `unparsable` | the guard could not tell where this part of the command writes; nothing else on the line was refused | this is not a policy refusal: give the path or command literally, or assign the variable earlier in the same command (`L=/tmp/check.log; make check > "$L"`) |
+| `guard-deny` | the repository refuses this command for agents (deploy, publish, spend) | ask the owner, who runs it or opens a Gate; take other work meanwhile |
 
 ## When something fails
 
@@ -224,7 +237,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `pr-missing` | no PR exists from the work branch | push the branch and run `gh pr create --base <default> --head <branch> --title ... --body "Refs #N"`, then rerun `quipu done N --json` |
 | `pr-closed` | the PR was closed without merging | open a new PR from the same branch with `Refs #N`, then rerun `quipu done N --json` |
 | `pr-merged-early` | the PR merged before `quipu done` moved the work to review | tell the owner; they recover it with `quipu pr link` and `quipu evidence submit` |
-| `evidence-missing` | recording evidence after merge needs every evidence field | rerun `quipu done N --json --criteria ... --commands ... --documentation ... --risks ... --boundary ...` (add `--ci-url URL` if checks have not passed) |
+| `evidence-missing` | recording evidence after merge needs every evidence field | rerun `quipu done N --json --evidence-file FILE` with every section filled in (`quipu done --evidence-template` prints them; add `--ci-url URL` if checks have not passed) |
 | `checks-pending` | with `merge: agent`, a required check on the PR has not finished | take other work, look once with `quipu status --json`, and when they have finished rerun the same `quipu done N --json ...` |
 | `checks-no-runner` | with `merge: agent`, a required check is queued and no online runner has its labels, so it cannot start | do not poll; take other work with `quipu start --next --json` and tell the owner what the message names. The owner starts that runner, registers one with those labels, changes the job's `runs-on`, or takes the check out of `required_checks`. Then rerun the same `quipu done N --json ...` |
 | `checks-failing` | with `merge: agent`, a required check on the PR failed or never ran | fix the cause, push to the work branch, then rerun the same `quipu done N --json ...` |
