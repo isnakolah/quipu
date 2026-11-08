@@ -485,6 +485,14 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 	}
 	// Only a new claim can be turned down: work already held always resumes.
 	if state.Status == "Ready" {
+		// Refuse what policy would refuse on the PR, before any work is done.
+		if problems := workProblems(number, state); len(problems) > 0 {
+			var leaves []int
+			if state.Children > 0 {
+				leaves = readyLeavesUnder(c, state.IssueID)
+			}
+			return flowResult{}, startRefusal(number, state, problems, leaves)
+		}
 		hold, reason := openClaimGate(c, here, o.Worktree, time.Now()).enter(number, state.Area)
 		if reason != "" {
 			return busyResult(number, reason), nil
@@ -592,6 +600,44 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		result.Next = fmt.Sprintf("Work in %s (cd there or launch the agent there). %s", w.Top, result.Next)
 	}
 	return result, nil
+}
+
+// startRefusal is the error `quipu start` gives for work no PR may implement.
+// An Issue with sub-issues names its Ready leaves, so the agent can take one.
+func startRefusal(number int, state liveWork, problems []string, leaves []int) error {
+	message := strings.Join(problems, "; ")
+	if state.Children == 0 {
+		return flowErr("not-implementable", "%s", message)
+	}
+	err := flowErr("not-leaf", "%s", message)
+	if len(leaves) > 0 {
+		names := make([]string, len(leaves))
+		for i, leaf := range leaves {
+			names[i] = fmt.Sprintf("#%d", leaf)
+		}
+		err.Next = fmt.Sprintf("start one of its Ready leaf Issues instead: %s (quipu start %d --json)", strings.Join(names, ", "), leaves[0])
+	}
+	return err
+}
+
+// readyLeavesUnder lists the Ready, unleased leaf Issues whose parent is the
+// Issue with node ID parentID. A failed look lists none.
+func readyLeavesUnder(c model.Config, parentID string) []int {
+	candidates, err := loadWorkCandidates(c)
+	if err != nil {
+		return nil
+	}
+	parents := map[int]string{}
+	for _, candidate := range candidates {
+		parents[candidate.Number] = candidate.ParentID
+	}
+	var leaves []int
+	for _, work := range selectReadyWork(candidates, time.Now()) {
+		if parentID != "" && parents[work.Number] == parentID {
+			leaves = append(leaves, work.Number)
+		}
+	}
+	return leaves
 }
 
 // flowResult is the outcome of `start` or `done`. Next tells a person or an

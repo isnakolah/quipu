@@ -149,27 +149,7 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 		add("cannot load #%d: %v", issues[0], err)
 		return violations
 	}
-	if state.IssueState != "OPEN" {
-		add("#%d is closed. Fix: work only on open Issues", issues[0])
-	}
-	if !implementableKinds[state.Kind] {
-		add("#%d is a %s; only Stories, Tasks, Defects, and Contracts are implemented by PRs", issues[0], orUnknown(state.Kind))
-	}
-	if state.Children > 0 {
-		add("#%d has sub-issues; implement a leaf Issue instead", issues[0])
-	}
-	if state.ParentID == "" {
-		add("#%d has no native parent. Fix: the owner links it under its Epic or Story", issues[0])
-	}
-	if err := model.ValidateWorkContract(state.Body); err != nil {
-		add("#%d work contract invalid: %v", issues[0], err)
-	}
-	for _, blocker := range state.Blockers {
-		if blocker.State != "CLOSED" {
-			add("#%d is blocked by an open Issue", issues[0])
-			break
-		}
-	}
+	violations = append(violations, workProblems(issues[0], state)...)
 	switch state.Status {
 	case "In progress", "In review":
 	default:
@@ -186,6 +166,36 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 		}
 	}
 	return violations
+}
+
+// workProblems lists why Issue number cannot be implemented by a PR at all,
+// whoever holds it. `policy` reports them on the PR; `quipu start` refuses the
+// claim with the same words, before any work is done.
+func workProblems(number int, state liveWork) []string {
+	var problems []string
+	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	if state.IssueState != "OPEN" {
+		add("#%d is closed. Fix: work only on open Issues", number)
+	}
+	if !implementableKinds[state.Kind] {
+		add("#%d is a %s; only Stories, Tasks, Defects, and Contracts are implemented by PRs", number, orUnknown(state.Kind))
+	}
+	if state.Children > 0 {
+		add("#%d has sub-issues; implement a leaf Issue instead", number)
+	}
+	if state.ParentID == "" {
+		add("#%d has no native parent. Fix: the owner links it under its Epic or Story", number)
+	}
+	if err := model.ValidateWorkContract(state.Body); err != nil {
+		add("#%d work contract invalid: %v", number, err)
+	}
+	for _, blocker := range state.Blockers {
+		if blocker.State != "CLOSED" {
+			add("#%d is blocked by an open Issue", number)
+			break
+		}
+	}
+	return problems
 }
 
 // exemptBot reports whether a bot listed in policy_exempt_authors opened
