@@ -7,6 +7,7 @@ package main
 // lease, and the never-allowed actions are denied outright.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,8 @@ import (
 type shellArg struct {
 	s  string
 	ok bool
+	// prefix is the literal start of a computed word.
+	prefix string
 }
 
 func (g *guard) shell(command, dir string) error {
@@ -59,15 +62,18 @@ func (g *guard) stmt(stmt *syntax.Stmt, dir *string) error {
 		}
 		switch redirect.Op {
 		case syntax.RdrOut, syntax.AppOut, syntax.RdrInOut, syntax.ClbOut, syntax.RdrAll, syntax.AppAll:
-			target, ok := wordLit(redirect.Word)
+			target, ok, prefix := g.lit(redirect.Word)
 			if !ok {
+				if g.denyList(*dir) && g.outsideGoverned(prefix) {
+					continue
+				}
 				return g.unparsable(*dir, "redirect to a computed path")
 			}
 			if target == "/dev/null" || target == "/dev/stdout" || target == "/dev/stderr" {
 				continue
 			}
 			if err := g.writePath(g.resolve(*dir, target)); err != nil {
-				return err
+				return named(err, stmt)
 			}
 		}
 	}
@@ -75,6 +81,19 @@ func (g *guard) stmt(stmt *syntax.Stmt, dir *string) error {
 		return nil
 	}
 	return g.command(stmt.Cmd, dir)
+}
+
+// named adds the statement to a denial that does not yet say what it refused.
+func named(err error, stmt *syntax.Stmt) error {
+	var d denial
+	if !errors.As(err, &d) || d.Command != "" {
+		return err
+	}
+	var b strings.Builder
+	if syntax.NewPrinter(syntax.SingleLine(true)).Print(&b, stmt) == nil {
+		d.Command = strings.TrimSpace(b.String())
+	}
+	return d
 }
 
 func (g *guard) command(cmd syntax.Command, dir *string) error {
@@ -89,6 +108,7 @@ func (g *guard) command(cmd syntax.Command, dir *string) error {
 			}
 		}
 		if len(x.Args) == 0 {
+			g.assign(x.Assigns)
 			return nil
 		}
 		args := make([]shellArg, len(x.Args))
@@ -96,11 +116,12 @@ func (g *guard) command(cmd syntax.Command, dir *string) error {
 			if err := g.nested(word, *dir); err != nil {
 				return err
 			}
-			args[i].s, args[i].ok = wordLit(word)
+			args[i].s, args[i].ok, args[i].prefix = g.lit(word)
 		}
 		return g.call(args, dir)
 	case *syntax.BinaryCmd:
 		if x.Op == syntax.Pipe || x.Op == syntax.PipeAll {
+			defer g.scope()()
 			if err := g.stmt(x.X, &local); err != nil {
 				return err
 			}
@@ -112,6 +133,7 @@ func (g *guard) command(cmd syntax.Command, dir *string) error {
 		}
 		return g.stmt(x.Y, dir)
 	case *syntax.Subshell:
+		defer g.scope()()
 		return g.stmts(x.Stmts, &local)
 	case *syntax.Block:
 		return g.stmts(x.Stmts, dir)
@@ -148,7 +170,13 @@ func (g *guard) command(cmd syntax.Command, dir *string) error {
 		return nil
 	case *syntax.CoprocClause:
 		return g.stmt(x.Stmt, &local)
-	case *syntax.DeclClause, *syntax.ArithmCmd, *syntax.TestClause, *syntax.LetClause:
+	case *syntax.DeclClause:
+		if err := g.nestedNode(x, *dir); err != nil {
+			return err
+		}
+		g.assign(x.Args)
+		return nil
+	case *syntax.ArithmCmd, *syntax.TestClause, *syntax.LetClause:
 		return g.nestedNode(x, *dir)
 	default:
 		return g.unparsable(*dir, "unsupported shell construct")
@@ -172,11 +200,15 @@ func (g *guard) nestedNode(node syntax.Node, dir string) error {
 		switch x := n.(type) {
 		case *syntax.CmdSubst:
 			local := dir
+			restore := g.scope()
 			err = g.stmts(x.Stmts, &local)
+			restore()
 			return false
 		case *syntax.ProcSubst:
 			local := dir
+			restore := g.scope()
 			err = g.stmts(x.Stmts, &local)
+			restore()
 			return false
 		}
 		return true
@@ -186,7 +218,23 @@ func (g *guard) nestedNode(node syntax.Node, dir string) error {
 
 // wordLit returns a word's value when it is a plain literal, joining quoted parts.
 func wordLit(word *syntax.Word) (string, bool) {
+	s, ok, _ := (&guard{}).lit(word)
+	return s, ok
+}
+
+// lit returns a word's value when it is a plain literal or uses only
+// variables assigned a literal earlier in the same command. Otherwise it
+// returns the literal start of the word as prefix.
+func (g *guard) lit(word *syntax.Word) (string, bool, string) {
 	var b strings.Builder
+	param := func(p *syntax.ParamExp) bool {
+		if p.Param == nil || p.Excl || p.Length || p.Width || p.Index != nil || p.Slice != nil || p.Repl != nil || p.Exp != nil || p.Names != 0 {
+			return false
+		}
+		value, ok := g.vars[p.Param.Value]
+		b.WriteString(value)
+		return ok
+	}
 	for _, part := range word.Parts {
 		switch p := part.(type) {
 		case *syntax.Lit:
@@ -195,17 +243,58 @@ func wordLit(word *syntax.Word) (string, bool) {
 			b.WriteString(p.Value)
 		case *syntax.DblQuoted:
 			for _, inner := range p.Parts {
-				lit, ok := inner.(*syntax.Lit)
-				if !ok {
-					return "", false
+				switch q := inner.(type) {
+				case *syntax.Lit:
+					b.WriteString(q.Value)
+				case *syntax.ParamExp:
+					if !param(q) {
+						return "", false, b.String()
+					}
+				default:
+					return "", false, b.String()
 				}
-				b.WriteString(lit.Value)
+			}
+		case *syntax.ParamExp:
+			if !param(p) {
+				return "", false, b.String()
 			}
 		default:
-			return "", false
+			return "", false, b.String()
 		}
 	}
-	return b.String(), true
+	return b.String(), true, ""
+}
+
+// assign records shell variables set to a literal, so later words that use
+// them can be judged; any other assignment forgets the variable.
+func (g *guard) assign(assigns []*syntax.Assign) {
+	if g.vars == nil {
+		g.vars = map[string]string{}
+	}
+	for _, a := range assigns {
+		if a.Name == nil || a.Naked {
+			continue
+		}
+		if a.Value == nil || a.Append || a.Index != nil || a.Array != nil {
+			delete(g.vars, a.Name.Value)
+			continue
+		}
+		if value, ok, _ := g.lit(a.Value); ok {
+			g.vars[a.Name.Value] = value
+		} else {
+			delete(g.vars, a.Name.Value)
+		}
+	}
+}
+
+// scope saves the variables; the returned func restores them, for a subshell
+// whose assignments never reach the rest of the line.
+func (g *guard) scope() func() {
+	saved := make(map[string]string, len(g.vars))
+	for k, v := range g.vars {
+		saved[k] = v
+	}
+	return func() { g.vars = saved }
 }
 
 // ---- command classification ----
@@ -231,7 +320,28 @@ var fileArgCommands = setOf("rm", "rmdir", "mv", "cp", "touch", "mkdir", "chmod"
 	"truncate", "install", "unlink", "rsync", "patch")
 
 func (g *guard) call(args []shellArg, dir *string) error {
+	err := g.judge(args, dir)
+	var d denial
+	if errors.As(err, &d) && d.Command == "" {
+		d.Command = commandLine(args)
+		return d
+	}
+	return err
+}
+
+// judge decides one simple command.
+func (g *guard) judge(args []shellArg, dir *string) error {
+	if err := g.declaredDeny(args, *dir); err != nil {
+		return err
+	}
+	open := g.denyList(*dir)
+	if open && helpForm(args) {
+		return nil
+	}
 	if !args[0].ok {
+		if open {
+			return g.unknownCommand(args)
+		}
 		return g.unparsable(*dir, "command name is not a literal")
 	}
 	name, rest := filepath.Base(args[0].s), args[1:]
@@ -284,6 +394,9 @@ func (g *guard) call(args []shellArg, dir *string) error {
 				return g.shell(rest[i+1].s, *dir)
 			}
 		}
+		if open {
+			return g.unknownCommand(rest)
+		}
 		return g.writeIn(*dir)
 	case "eval":
 		parts := make([]string, len(rest))
@@ -316,6 +429,14 @@ func (g *guard) call(args []shellArg, dir *string) error {
 		}
 		return nil
 	case "find":
+		if commands, ok := findExec(rest); open && ok {
+			for _, command := range commands {
+				if err := g.call(command, dir); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		for _, arg := range rest {
 			switch arg.s {
 			case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls":
@@ -336,6 +457,9 @@ func (g *guard) call(args []shellArg, dir *string) error {
 	}
 	if fileArgCommands[name] {
 		return g.writeArgs(rest, *dir)
+	}
+	if open {
+		return g.unknownCommand(rest)
 	}
 	return g.genericWrite(rest, *dir)
 }
@@ -411,6 +535,10 @@ func (g *guard) writeArgs(args []shellArg, dir string) error {
 	paths := 0
 	for _, arg := range args {
 		if !arg.ok {
+			if g.denyList(dir) && g.outsideGoverned(arg.prefix) {
+				paths++
+				continue
+			}
 			return g.writeIn(dir)
 		}
 		if strings.HasPrefix(arg.s, "-") || arg.s == "" {
@@ -491,6 +619,8 @@ subcommand:
 		return nil
 	case openGitRead(sub, rest) && g.readsOpen(dir):
 		return nil
+	case sub == "branch" && g.denyList(dir) && gitBranchQuery(rest):
+		return nil
 	case sub == "branch":
 		return deny("branch-change", "git branch "+joinArgs(rest))
 	case gitRefWrites[sub]:
@@ -555,6 +685,30 @@ func gitListing(args []shellArg, allowed ...string) bool {
 	return true
 }
 
+// gitBranchQuery reports, for deny-list mode, whether git branch arguments
+// only list: a commit after --contains and friends, and patterns in list mode.
+func gitBranchQuery(args []shellArg) bool {
+	takesValue := setOf("--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "--sort")
+	flags := setOf("-a", "-r", "-v", "-vv", "--list", "-l", "--show-current", "--all", "--remotes", "--verbose",
+		"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "--sort", "--color", "--no-color", "--column", "--no-column")
+	listMode := hasAnyFlag(args, "--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at")
+	for i := 0; i < len(args); i++ {
+		if !args[i].ok {
+			return false
+		}
+		name, _, hasValue := strings.Cut(args[i].s, "=")
+		switch {
+		case takesValue[name] && !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1].s, "-"):
+			i++
+		case flags[name]:
+		case listMode && !strings.HasPrefix(name, "-"):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func hasAnyFlag(args []shellArg, flags ...string) bool {
 	for _, arg := range args {
 		name, _, _ := strings.Cut(arg.s, "=")
@@ -577,6 +731,9 @@ func joinArgs(args []shellArg) string {
 
 func (g *guard) gitWorktree(rest []shellArg, dir string) error {
 	if len(rest) == 0 || rest[0].s == "list" || rest[0].s == "prune" {
+		return nil
+	}
+	if (rest[0].s == "unlock" || rest[0].s == "lock") && g.denyList(dir) {
 		return nil
 	}
 	switch rest[0].s {
@@ -927,8 +1084,8 @@ func agentsTriage(dir string) bool {
 
 // readsOpen reports whether dir's repository sets guard_reads: open.
 func (g *guard) readsOpen(dir string) bool {
-	c, err := enforcedConfigIn(dir)
-	return err == nil && c.GuardReadsOpen()
+	c, ok := g.configFor(dir)
+	return ok && (c.GuardReadsOpen() || c.GuardDenyList())
 }
 
 var goReadOnly = setOf("test", "vet", "build", "list", "version", "doc", "help", "bug")

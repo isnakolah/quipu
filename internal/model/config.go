@@ -80,6 +80,12 @@ type Config struct {
 	Limits Limits `yaml:"limits,omitempty" json:"limits,omitempty"`
 	// GuardReads "open" widens the commands the guard treats as read-only.
 	GuardReads string    `yaml:"guard_reads,omitempty" json:"guard_reads,omitempty"`
+	// Guard "deny-list" lets through every command the guard does not know to
+	// be dangerous; unset or "allow-list" treats unknown commands as changes.
+	Guard string `yaml:"guard,omitempty" json:"guard,omitempty"`
+	// GuardDeny lists commands the guard always refuses (deploy, publish,
+	// spend), by their leading words, such as "fly deploy" or "npm publish".
+	GuardDeny []string `yaml:"guard_deny,omitempty" json:"guard_deny,omitempty"`
 	Workflows  Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
 }
 
@@ -561,6 +567,9 @@ func (c Config) ValidateLimits() error {
 // CleansUp reports whether Quipu frees a worktree's disk when it is finished.
 func (c Config) CleansUp() bool { return c.Cleanup != "" }
 
+// GuardDenyList reports whether the guard refuses only what is dangerous.
+func (c Config) GuardDenyList() bool { return c.Guard == "deny-list" }
+
 // GuardReadsOpen reports whether the guard allows its wider read-only list.
 func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 
@@ -568,7 +577,7 @@ func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 // config that cannot be trusted to have come from the default branch.
 func (c Config) WithoutRelaxations() Config {
 	c.ReadyBy, c.Merge, c.PolicyExemptAuthors = "", "", nil
-	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads = "", "", "", "", ""
+	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads, c.Guard = "", "", "", "", "", ""
 	c.MergeWithoutCI, c.LocalCheck, c.MergeBypassRulesets = false, "", false
 	c.Cleanup = ""
 	c.MergeQueue = MergeQueue{}
@@ -678,6 +687,14 @@ func (c Config) Validate() error {
 	}
 	if err := c.ValidateMergeQueue(); err != nil {
 		return err
+	}
+	if c.Guard != "" && c.Guard != "allow-list" && c.Guard != "deny-list" {
+		return fmt.Errorf("guard must be allow-list or deny-list")
+	}
+	for _, command := range c.GuardDeny {
+		if strings.TrimSpace(command) == "" || strings.ContainsAny(command, "\n\r") {
+			return fmt.Errorf("guard_deny entries must be one non-empty line each")
+		}
 	}
 	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {
 		return fmt.Errorf("guard_reads must be closed or open")
