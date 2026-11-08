@@ -253,6 +253,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `check-failed` | `quipu check` ran the repository's check and it failed or could not run | fix the cause and rerun `quipu check --json`; a failure is never reused, so `quipu done` runs the check again |
 | `no-check` | the default branch sets no `local_check` or `merge_queue.check`, so `quipu check` has nothing to run | run the tests you need yourself; CI checks the PR |
 | `not-implementable` | the Issue is closed, of a kind PRs do not implement, without a parent, without a valid work contract, or blocked | take other work with `quipu start --next --json`; the message says what is wrong, and the owner fixes the Issue |
+| `batch-off` | `quipu done` named several Issues, but this repository does not set `batches: epic` | finish one Issue at a time: `quipu done N --json` |
 
 ## What GitHub undoes
 

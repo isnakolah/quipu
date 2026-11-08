@@ -475,7 +475,7 @@ func (g *guard) verifyLive(c model.Config, w worktree, lease leaseContext) error
 		return inactive(fmt.Sprintf("#%d is %s", lease.Issue, state.Status))
 	}
 	lease.Expires, lease.VerifiedAt = state.Expiry, g.now.Format(time.RFC3339)
-	_ = w.writeLease(lease)
+	_ = w.addLease(lease)
 	return nil
 }
 

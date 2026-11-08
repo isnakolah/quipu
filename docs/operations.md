@@ -133,3 +133,10 @@ The workflows are rendered from the config's `workflows` section: runner labels 
 Evidence is a Writer request, never a free-form comment. It records the PR, final SHA, CI run, commands, environments, acceptance result, artifacts, documentation impact, risks, and proof boundary, and is kept in the receipt JSON. When `wiki_mode` is `journal`, the Writer appends a generated entry to the Wiki; if that fails, the work stays at Evidence pending and reconciliation retries.
 
 `quipu validate --json` reports every rule violation in the live Issues and Project. The Writer adds it to each run's summary.
+
+## Rolling Epic branches (`batches: epic`)
+
+- The local lease file (`<git-dir>/quipu-lease`) holds one lease as a JSON object, as before, or a list when several leaf Issues share an Epic's worktree. `writeLease` keeps one lease; `addLease` (used only for `epic-NNN/` branches) joins leases with the same branch and holder. Older Quipu reads a one-lease file unchanged.
+- `policy`, the guard's `gh pr create` check and the Writer's `pr.link`/`evidence.submit` check accept several `Refs #N` only from an `epic-NNN/slug` branch with `batches: epic` on the default branch; each referenced Issue must be a leaf of Epic NNN leased on that branch.
+- `quipu done A B ...` links every Issue whose commits landed to the PR first, merges through the first one's normal `done`, then records each other Issue's evidence on the merged PR. Releasing a lease runs `cleanup` and opens the tidy-up window only when the worktree's last lease goes.
+

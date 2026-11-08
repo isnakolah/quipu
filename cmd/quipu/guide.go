@@ -52,6 +52,7 @@ var flagRules = []flagRule{
 	{func(c model.Config) bool { return c.AutoReady }, "- **`auto_ready`:** work whose last blocker closed becomes Ready by itself at the Writer's next sweep, unless it is labelled `quipu:needs-owner`. You don't need to ask for it.\n"},
 	{func(c model.Config) bool { return len(c.ScopedChecks) > 0 }, "- **`scoped_checks`:** the merge check runs only what the paths you changed call for, so a docs-only change may run none. A path no entry names runs the full check. The evidence says what ran and what didn't; you don't choose.\n"},
 	{model.Config.Dispatches, "- **`dispatch`:** `quipu daemon` may have started you, with your lease already claimed. Your work is in `QUIPU_ISSUE`, on `QUIPU_BRANCH`, in `QUIPU_WORKTREE`, and `QUIPU_PROMPT` says what to do.\n"},
+	{model.Config.BatchesByEpic, "- **`batches: epic`:** small leaf Issues of one Epic share its rolling branch `epic-NNN/slug` and one worktree. `quipu start N` on a leaf claims it onto that branch (creating it the first time), so several of your leases may sit in one worktree. Commit each change with `Refs #N` for its leaf. Open one PR whose body has a `Refs #N` line for each leaf it finishes (all leaves of the same Epic, all leased to you), then run `quipu done A B ... --json` (or `quipu done --batch --json` for every lease in the worktree) with the evidence: the PR merges once, each Issue with a commit in it records evidence and closes, and an Issue no commit references stays In progress on the branch. Afterwards the branch moves to the new default-branch head, so keep working on it. An Issue without an Epic parent still gets its own `NNN/slug` branch.\n"},
 	{model.Config.GuardDenyList, "- **`guard: deny-list`:** the guard refuses only what is dangerous: force pushes and pushes to the default branch, merging, approving or closing outside Quipu, another agent's worktree or branch, Quipu's own files, commands this repository lists under `guard_deny`, and changes to a governed worktree's files without a lease (commits, edits, redirects and `rm`/`mv` into it). Reads, interpreters, loops, `--help`, disk checks and writes outside governed worktrees pass. A denial names the part of the line it refused (`denied: ...`); the rest of the line was fine.\n"},
 	{model.Config.GuardReadsOpen, "- **`guard_reads: open`:** the guard also treats more read-only commands as reads, such as `git tag --sort`. Interpreters stay denied, and so does everything else in the handbook.\n"},
 }
@@ -88,6 +89,8 @@ var flagErrorOn = map[string]func(model.Config) bool{
 	"local-check-failed": model.Config.MergesWithoutCI,
 	"worktree-unclean":   model.Config.MergesWithoutCI,
 	"policy-rules":       func(c model.Config) bool { return c.MergesWithoutCI() || c.MergesInQueue() },
+	"batch-mixed":        model.Config.BatchesByEpic,
+	"batch-empty":        model.Config.BatchesByEpic,
 }
 
 // handbookCheck compares the committed handbook with what the config in force
