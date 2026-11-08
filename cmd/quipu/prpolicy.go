@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -104,7 +105,13 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 		}
 		return violations
 	}
-	issues, err := policycheck.ReferencedIssues(pull.Body)
+	epic, onEpic := policycheck.BranchEpic(pull.Head)
+	batch := onEpic && c.BatchesByEpic()
+	referenced := policycheck.ReferencedIssues
+	if batch {
+		referenced = policycheck.ReferencedIssueSet
+	}
+	issues, err := referenced(pull.Body)
 	if err != nil {
 		add("%v. Fix: edit the PR body to say exactly `Refs #N` for the Issue this branch implements", err)
 	}
@@ -121,13 +128,17 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 		add("PR targets %q, not %q. Fix: change the base branch", pull.Base, c.DefaultBranch)
 	}
 	number, ok := policycheck.BranchIssue(pull.Head)
-	if !ok {
+	switch {
+	case ok || batch:
+	case onEpic:
+		add("branch %q is a rolling Epic branch, but this repository does not set batches: epic. Fix: work comes from `quipu start N`, which names the branch", pull.Head)
+	default:
 		add("branch %q is not NNN/short-description. Fix: work comes from `quipu start N`, which names the branch", pull.Head)
 	}
 	if file := unapprovedProtectedChange(pull); file != "" {
 		add("PR changes %s, which governs how agents work. Fix: the owner reviews it and adds the %s label", file, ownerApprovedLabel)
 	}
-	if len(issues) != 1 {
+	if len(issues) == 0 || (!batch && len(issues) != 1) {
 		return violations
 	}
 	if c.CommitFormat == policycheck.IssuePrefix {
@@ -135,7 +146,7 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 			add("%v; the merge commit is built from it. Fix: retitle the PR", err)
 		}
 		for _, message := range pull.Commits {
-			if _, err := policycheck.CheckIssuePrefix(message, issues[0]); err != nil {
+			if err := prefixedForAny(message, issues); err != nil {
 				add("%v. Fix: reword the commit (git rebase -i, then push --force-with-lease)", err)
 				break
 			}
@@ -144,25 +155,79 @@ func prViolations(c model.Config, pull pullFacts, loadWork func(int) (liveWork, 
 	if ok && number != issues[0] {
 		add("branch %q maps to #%d but the body references #%d. Fix: reference the branch's Issue", pull.Head, number, issues[0])
 	}
-	state, err := loadWork(issues[0])
-	if err != nil {
-		add("cannot load #%d: %v", issues[0], err)
-		return violations
+	epics := map[int][]int{}
+	for _, issue := range issues {
+		state, err := loadWork(issue)
+		if err != nil {
+			add("cannot load #%d: %v", issue, err)
+			continue
+		}
+		if batch {
+			epics[state.ParentNumber] = append(epics[state.ParentNumber], issue)
+		}
+		violations = append(violations, leaseViolations(issue, state, pull, now)...)
 	}
-	violations = append(violations, workProblems(issues[0], state)...)
+	if batch {
+		violations = append(violations, epicViolations(epic, epics)...)
+	}
+	return violations
+}
+
+// prefixedForAny accepts a commit prefixed with any of the referenced Issues.
+func prefixedForAny(message string, issues []int) error {
+	var first error
+	for _, issue := range issues {
+		_, err := policycheck.CheckIssuePrefix(message, issue)
+		if err == nil {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// leaseViolations lists why the PR may not implement Issue number: the Issue
+// itself, its status, and its lease on the PR's branch for the PR's author.
+func leaseViolations(number int, state liveWork, pull pullFacts, now time.Time) []string {
+	violations := workProblems(number, state)
+	add := func(format string, args ...any) { violations = append(violations, fmt.Sprintf(format, args...)) }
 	switch state.Status {
 	case "In progress", "In review":
 	default:
-		add("#%d is %q; a PR needs work In progress or In review. Fix: `quipu start %d`", issues[0], state.Status, issues[0])
+		add("#%d is %q; a PR needs work In progress or In review. Fix: `quipu start %d`", number, state.Status, number)
 	}
 	if state.Holder == "" || state.Branch != pull.Head {
-		add("#%d is not leased on branch %s. Fix: `quipu start %d` in the worktree doing the work", issues[0], pull.Head, issues[0])
+		add("#%d is not leased on branch %s. Fix: `quipu start %d` in the worktree doing the work", number, pull.Head, number)
 	} else if !writer.ActorMatchesLogin(state.Holder, pull.Author) {
-		add("#%d is held by %q, but the PR author is %q. Fix: the lease holder opens the PR", issues[0], state.Holder, pull.Author)
+		add("#%d is held by %q, but the PR author is %q. Fix: the lease holder opens the PR", number, state.Holder, pull.Author)
 	}
 	if state.Status == "In progress" {
 		if expires, err := time.Parse(time.RFC3339, state.Expiry); err != nil || !expires.After(now) {
-			add("#%d lease expired. Fix: `quipu start %d` renews it", issues[0], issues[0])
+			add("#%d lease expired. Fix: `quipu start %d` renews it", number, number)
+		}
+	}
+	return violations
+}
+
+// epicViolations checks that a rolling branch's PR carries leaves of its own
+// Epic only. byParent maps each parent Epic to the Issues under it.
+func epicViolations(epic int, byParent map[int][]int) []string {
+	var violations []string
+	if len(byParent) > 1 {
+		var parents []string
+		for parent := range byParent {
+			parents = append(parents, fmt.Sprintf("#%d", parent))
+		}
+		sort.Strings(parents)
+		violations = append(violations, fmt.Sprintf("PR references leaf Issues of Epics %s; a rolling branch carries one Epic's leaves. Fix: open one PR per Epic", strings.Join(parents, " and ")))
+	}
+	for parent, issues := range byParent {
+		if parent != epic {
+			for _, issue := range issues {
+				violations = append(violations, fmt.Sprintf("#%d is not a leaf of Epic #%d, whose rolling branch this is. Fix: take it out of the PR body", issue, epic))
+			}
 		}
 	}
 	return violations

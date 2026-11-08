@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -114,32 +115,112 @@ func (l leaseContext) expired(now time.Time) bool {
 }
 
 func (w worktree) readLease() (leaseContext, error) {
-	raw, err := os.ReadFile(filepath.Join(w.GitDir, leaseFileName))
+	leases, err := w.readLeases()
 	if err != nil {
-		return leaseContext{}, fmt.Errorf("quipu no active lease in worktree %s; run `quipu start N` there first; operation denied", w.Top)
+		return leaseContext{}, err
 	}
-	var lease leaseContext
-	if err := json.Unmarshal(raw, &lease); err != nil || lease.Issue < 1 || lease.Holder == "" || lease.Branch == "" {
-		return leaseContext{}, errors.New("quipu lease file is malformed; rerun `quipu start N`; operation denied")
+	// With batches: epic a worktree holds one lease per leaf Issue, all on its
+	// branch for one holder. The one that lasts longest stands for them.
+	best := leases[0]
+	for _, lease := range leases[1:] {
+		if lease.Expires > best.Expires {
+			best = lease
+		}
 	}
-	return lease, nil
+	return best, nil
 }
 
-func (w worktree) writeLease(lease leaseContext) error {
-	raw, err := json.Marshal(lease)
+// readLeases returns every lease recorded for this worktree. The file holds
+// one lease, or a list when several leaf Issues share the worktree.
+func (w worktree) readLeases() ([]leaseContext, error) {
+	raw, err := os.ReadFile(filepath.Join(w.GitDir, leaseFileName))
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("quipu no active lease in worktree %s; run `quipu start N` there first; operation denied", w.Top)
 	}
-	path := filepath.Join(w.GitDir, leaseFileName)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0600); err != nil {
-		return err
+	var leases []leaseContext
+	if trimmed := strings.TrimSpace(string(raw)); strings.HasPrefix(trimmed, "[") {
+		err = json.Unmarshal(raw, &leases)
+	} else {
+		var lease leaseContext
+		err = json.Unmarshal(raw, &lease)
+		leases = []leaseContext{lease}
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err != nil || len(leases) == 0 {
+		return nil, errors.New("quipu lease file is malformed; rerun `quipu start N`; operation denied")
+	}
+	for _, lease := range leases {
+		if lease.Issue < 1 || lease.Holder == "" || lease.Branch == "" {
+			return nil, errors.New("quipu lease file is malformed; rerun `quipu start N`; operation denied")
+		}
+	}
+	return leases, nil
+}
+
+// leaseFor returns this worktree's lease on Issue number.
+func (w worktree) leaseFor(number int) (leaseContext, bool) {
+	leases, err := w.readLeases()
+	if err != nil {
+		return leaseContext{}, false
+	}
+	for _, lease := range leases {
+		if lease.Issue == number {
+			return lease, true
+		}
+	}
+	return leaseContext{}, false
+}
+
+// writeLease records lease as this worktree's only lease.
+func (w worktree) writeLease(lease leaseContext) error {
+	return w.putLease(lease, false)
+}
+
+// addLease records lease beside the worktree's other leases on the same
+// branch and holder, for leaf Issues sharing a rolling Epic branch. A lease on
+// another branch or holder replaces them.
+func (w worktree) addLease(lease leaseContext) error {
+	return w.putLease(lease, true)
+}
+
+func (w worktree) putLease(lease leaseContext, join bool) error {
+	leases := []leaseContext{lease}
+	if existing, err := w.readLeases(); err == nil && join {
+		for _, other := range existing {
+			if other.Issue != lease.Issue && other.Branch == lease.Branch && other.Holder == lease.Holder {
+				leases = append(leases, other)
+			}
+		}
+	}
+	if err := w.storeLeases(leases); err != nil {
 		return err
 	}
 	_ = os.Remove(filepath.Join(w.GitDir, finishedFileName))
 	return nil
+}
+
+// storeLeases writes the lease file: one lease as an object, as before, so
+// older Quipu versions still read it, and several as a list.
+func (w worktree) storeLeases(leases []leaseContext) error {
+	path := filepath.Join(w.GitDir, leaseFileName)
+	if len(leases) == 0 {
+		return os.Remove(path)
+	}
+	sort.Slice(leases, func(i, j int) bool { return leases[i].Issue < leases[j].Issue })
+	var raw []byte
+	var err error
+	if len(leases) == 1 {
+		raw, err = json.Marshal(leases[0])
+	} else {
+		raw, err = json.Marshal(leases)
+	}
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // finishedRecord says which work left this worktree and until when its holder
@@ -170,11 +251,20 @@ func (w worktree) readFinished(now time.Time) (finishedRecord, bool) {
 // removeLease forgets this worktree's lease on Issue number, and reports whether
 // it had one.
 func (w worktree) removeLease(number int) bool {
-	lease, err := w.readLease()
-	if err != nil || lease.Issue != number {
+	leases, err := w.readLeases()
+	if err != nil {
 		return false
 	}
-	_ = os.Remove(filepath.Join(w.GitDir, leaseFileName))
+	var rest []leaseContext
+	for _, lease := range leases {
+		if lease.Issue != number {
+			rest = append(rest, lease)
+		}
+	}
+	if len(rest) == len(leases) {
+		return false
+	}
+	_ = w.storeLeases(rest)
 	return true
 }
 
@@ -183,8 +273,12 @@ func (w worktree) removeLease(number int) bool {
 // up (see guard_finish.go). A second call finds nothing to do. What cleanup
 // couldn't do is a warning: the work itself is finished.
 func (w worktree) release(number int, cleanup string, grace time.Duration) []string {
-	lease, err := w.readLease()
-	if err != nil || lease.Issue != number || !w.removeLease(number) {
+	lease, ok := w.leaseFor(number)
+	if !ok || !w.removeLease(number) {
+		return nil
+	}
+	// Other leaf Issues still being worked here keep the worktree and its build.
+	if _, err := w.readLeases(); err == nil {
 		return nil
 	}
 	if grace > 0 {
@@ -232,7 +326,7 @@ func (w worktree) mergeLock() (func(), error) {
 // holding returns the worktree of this repository whose lease is for Issue
 // number, preferring w itself, or w when none holds it.
 func (w worktree) holding(number int) worktree {
-	if lease, err := w.readLease(); err == nil && lease.Issue == number {
+	if _, ok := w.leaseFor(number); ok {
 		return w
 	}
 	porcelain, err := w.git("worktree", "list", "--porcelain")
@@ -245,7 +339,7 @@ func (w worktree) holding(number int) worktree {
 			continue
 		}
 		if other, err := openWorktree(path); err == nil {
-			if lease, err := other.readLease(); err == nil && lease.Issue == number {
+			if _, ok := other.leaseFor(number); ok {
 				return other
 			}
 		}

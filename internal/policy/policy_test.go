@@ -48,3 +48,24 @@ func TestBranchIssueAcceptsFourDigitIssues(t *testing.T) {
 		t.Fatal("non-Quipu branch accepted")
 	}
 }
+
+func TestEpicBranchesAndReferenceSets(t *testing.T) {
+	if n, ok := BranchEpic("epic-117/autonomy"); !ok || n != 117 {
+		t.Fatalf("epic branch: %d %v", n, ok)
+	}
+	for _, branch := range []string{"117/autonomy", "epic-17/x", "epic-117/", "epic-117/Big"} {
+		if _, ok := BranchEpic(branch); ok {
+			t.Errorf("%q is not an epic branch", branch)
+		}
+	}
+	issues, err := ReferencedIssueSet("Refs #130\nRefs #133 and Refs #130 again\nRefs #134")
+	if err != nil || len(issues) != 3 || issues[0] != 130 || issues[2] != 134 {
+		t.Fatalf("set: %v %v", issues, err)
+	}
+	if _, err := ReferencedIssueSet("Refs #1\nCloses #2"); err == nil {
+		t.Fatal("closing keywords stay refused")
+	}
+	if _, err := ReferencedIssueSet("no refs"); err == nil {
+		t.Fatal("at least one reference")
+	}
+}

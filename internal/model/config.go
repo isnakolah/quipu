@@ -84,6 +84,10 @@ type Config struct {
 	Limits Limits `yaml:"limits,omitempty" json:"limits,omitempty"`
 	// GuardReads "open" widens the commands the guard treats as read-only.
 	GuardReads string    `yaml:"guard_reads,omitempty" json:"guard_reads,omitempty"`
+	// Batches "epic" lets the leaf Issues of one Epic be worked on one rolling
+	// epic-NNN/slug branch and merged together; unset or "none" keeps one
+	// branch and PR per Issue.
+	Batches string `yaml:"batches,omitempty" json:"batches,omitempty"`
 	Workflows  Workflows `yaml:"workflows,omitempty" json:"workflows,omitempty"`
 }
 
@@ -579,6 +583,9 @@ func (c Config) DoneGrace() time.Duration {
 // CleansUp reports whether Quipu frees a worktree's disk when it is finished.
 func (c Config) CleansUp() bool { return c.Cleanup != "" }
 
+// BatchesByEpic reports whether leaf Issues share their Epic's rolling branch.
+func (c Config) BatchesByEpic() bool { return c.Batches == "epic" }
+
 // GuardReadsOpen reports whether the guard allows its wider read-only list.
 func (c Config) GuardReadsOpen() bool { return c.GuardReads == "open" }
 
@@ -696,6 +703,9 @@ func (c Config) Validate() error {
 	}
 	if err := c.ValidateMergeQueue(); err != nil {
 		return err
+	}
+	if c.Batches != "" && c.Batches != "none" && c.Batches != "epic" {
+		return fmt.Errorf("batches must be none or epic")
 	}
 	if c.GuardReads != "" && c.GuardReads != "closed" && c.GuardReads != "open" {
 		return fmt.Errorf("guard_reads must be closed or open")

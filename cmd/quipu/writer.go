@@ -384,6 +384,18 @@ func checkPRWork(c model.Config, number int, branch string, view prView) error {
 	if view.BaseRefName != c.DefaultBranch {
 		return fmt.Errorf("PR targets %q, not %q", view.BaseRefName, c.DefaultBranch)
 	}
+	if _, onEpic := policycheck.BranchEpic(branch); onEpic && c.BatchesByEpic() {
+		issues, err := policycheck.ReferencedIssueSet(view.Body)
+		if err != nil {
+			return err
+		}
+		for _, issue := range issues {
+			if issue == number {
+				return nil
+			}
+		}
+		return fmt.Errorf("PR body must include Refs #%d", number)
+	}
 	issues, err := policycheck.ReferencedIssues(view.Body)
 	if err != nil {
 		return err

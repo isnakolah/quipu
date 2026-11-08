@@ -143,8 +143,8 @@ func slotWorkAlive(slot machineSlot, touched, now time.Time) bool {
 	if _, err := os.Stat(slot.Worktree); err != nil {
 		return false
 	}
-	lease, err := (worktree{Top: slot.Worktree, GitDir: slot.GitDir}).readLease()
-	if err != nil || lease.Issue != slot.Issue {
+	lease, ok := (worktree{Top: slot.Worktree, GitDir: slot.GitDir}).leaseFor(slot.Issue)
+	if !ok {
 		return false
 	}
 	expires, err := time.Parse(time.RFC3339, lease.Expires)
