@@ -228,7 +228,10 @@ func TestTriageCannotBypassReadyOrClose(t *testing.T) {
 		"Cancelled":         {readyToo, triageOptions{Status: "cancelled"}, labels, "never"},
 		"Archived":          {readyToo, triageOptions{Status: "archived"}, labels, "must be"},
 		"In progress":       {readyToo, triageOptions{Status: "in progress"}, labels, "must be"},
-		"not flagged":       {agents, triageOptions{Priority: "P1"}, []string{"kind:story"}, "needs no triage"},
+		"in the Project":    {agents, triageOptions{Priority: "P1"}, []string{"kind:story"}, ""},
+		"Epic status":       {readyToo, triageOptions{Status: "ready"}, []string{"kind:epic"}, "owner moves Epics"},
+		"Decision status":   {agents, triageOptions{Status: "backlog"}, []string{triageLabel, "kind:decision"}, "owner moves"},
+		"filed Gate status": {agents, triageOptions{Kind: "gate", Status: "blocked"}, []string{triageLabel}, "owner moves"},
 		"bad priority":      {agents, triageOptions{Priority: "P9"}, labels, "priority"},
 		"bad area":          {agents, triageOptions{Area: "other"}, labels, "not configured"},
 		"own parent":        {agents, triageOptions{Parent: 7}, labels, "another Issue"},
@@ -262,15 +265,19 @@ func TestTriageFailsBeforeChangingAnything(t *testing.T) {
 		inProject bool
 		want      string
 	}{
-		"joining, no kind":        {triageOptions{Area: "core"}, liveWork{Labels: flagged}, false, "no kind"},
-		"joining, no area":        {triageOptions{Kind: "story"}, liveWork{Labels: flagged}, false, "no area"},
-		"joining, all known":      {triageOptions{Kind: "story", Area: "core", Parent: 1}, liveWork{Labels: flagged}, false, ""},
-		"joining stays Backlog":   {triageOptions{Kind: "story", Area: "core", Status: "backlog"}, liveWork{Labels: flagged}, false, ""},
-		"Backlog cannot block":    {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "Backlog"}, true, "cannot move"},
-		"Ready can go to Backlog": {triageOptions{Status: "backlog"}, liveWork{Labels: flagged, Status: "Ready"}, true, ""},
-		"Ready can block":         {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "Ready"}, true, ""},
-		"held work stays":         {triageOptions{Status: "backlog"}, liveWork{Labels: flagged, Status: "In progress"}, true, "leaves work in progress alone"},
-		"reviewed work stays":     {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "In review"}, true, "leaves work in progress alone"},
+		"joining needs the label":  {triageOptions{Kind: "story", Area: "core"}, liveWork{}, false, "needs no triage"},
+		"in the Project, no label": {triageOptions{Priority: "P1", Status: "backlog"}, liveWork{Labels: []string{"kind:story"}, Status: "Ready"}, true, ""},
+		"reparenting":              {triageOptions{Parent: 1}, liveWork{Labels: []string{"kind:story"}, Status: "Ready", ParentNumber: 4}, true, "already has parent #4"},
+		"same parent again":        {triageOptions{Parent: 1}, liveWork{Labels: []string{"kind:story"}, Status: "Ready", ParentNumber: 1}, true, ""},
+		"joining, no kind":         {triageOptions{Area: "core"}, liveWork{Labels: flagged}, false, "no kind"},
+		"joining, no area":         {triageOptions{Kind: "story"}, liveWork{Labels: flagged}, false, "no area"},
+		"joining, all known":       {triageOptions{Kind: "story", Area: "core", Parent: 1}, liveWork{Labels: flagged}, false, ""},
+		"joining stays Backlog":    {triageOptions{Kind: "story", Area: "core", Status: "backlog"}, liveWork{Labels: flagged}, false, ""},
+		"Backlog cannot block":     {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "Backlog"}, true, "cannot move"},
+		"Ready can go to Backlog":  {triageOptions{Status: "backlog"}, liveWork{Labels: flagged, Status: "Ready"}, true, ""},
+		"Ready can block":          {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "Ready"}, true, ""},
+		"held work stays":          {triageOptions{Status: "backlog"}, liveWork{Labels: flagged, Status: "In progress"}, true, "leaves work in progress alone"},
+		"reviewed work stays":      {triageOptions{Status: "blocked"}, liveWork{Labels: flagged, Status: "In review"}, true, "leaves work in progress alone"},
 	} {
 		err := checkTriage(c, 7, tc.o, tc.state, tc.inProject, epic)
 		if tc.want == "" {
@@ -739,8 +746,8 @@ func TestGuideStatesTheRulesOfEachFlagOn(t *testing.T) {
 		c    model.Config
 		want []string
 	}{
-		"issues_by":     {model.Config{IssuesBy: "agents"}, []string{"quipu issue create", "New Epics stay proposals"}},
-		"triage_by":     {model.Config{TriageBy: "agents"}, []string{"quipu triage N", "never decide", "never closes"}},
+		"issues_by":     {model.Config{IssuesBy: "agents"}, []string{"quipu issue create", "New Epics stay proposals", "quipu issue assign N LOGIN", "quipu issue edit N --body-file"}},
+		"triage_by":     {model.Config{TriageBy: "agents"}, []string{"quipu triage N", "never decide", "never closes", "already in the Project", "never moves an Epic"}},
 		"update_behind": {model.Config{Merge: "agent", UpdateBehind: "auto"}, []string{"merges the default branch in", "| `merge-conflict` |"}},
 		"merge_wait":    {model.Config{Merge: "agent", MergeWait: "background"}, []string{"returns at once", "returns to Ready"}},
 		"guard_reads":   {model.Config{GuardReads: "open"}, []string{"Interpreters stay denied"}},

@@ -68,6 +68,7 @@ func TestStartNextSkipsOwnerDecidedKinds(t *testing.T) {
 }
 
 func TestGuardReadyFollowsConfig(t *testing.T) {
+	stubIssueKind(t, "Story")
 	f := newGuardFixture(t)
 	if code := guardCode(t, f.a, "Bash", map[string]any{"command": "quipu ready 5"}); code != "quipu-admin" {
 		t.Fatalf("default owner-only: %q", code)

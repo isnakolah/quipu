@@ -156,6 +156,7 @@ func TestQuipuYmlIsProtected(t *testing.T) {
 }
 
 func TestWorktreeCopyCannotTurnAFlagOn(t *testing.T) {
+	stubIssueKind(t, "Story")
 	config := repoConfig(t)
 	for _, name := range []string{rootConfigPath, configPath} {
 		t.Run(name, func(t *testing.T) {
