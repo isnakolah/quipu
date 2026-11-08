@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -71,5 +72,30 @@ func TestGuideNeverModifiesProjectInstructions(t *testing.T) {
 		return map[string]string{"AGENTS.md": agentsPointer, "CLAUDE.md": claudePointer}[p], true
 	}); len(hints) != 0 {
 		t.Fatalf("pointers need no hints: %v", hints)
+	}
+}
+
+// A PR that changes a flag must be able to sync its handbook: the copy CI checks
+// is the committed config's, even while the default branch still has the old one.
+func TestSyncWritesTheFlagsThisChangeCommits(t *testing.T) {
+	top := gitRepo(t)
+	writeRepoFile(t, top, rootConfigPath, repoConfig(t))
+	gitIn(t, top, "add", "-A")
+	gitIn(t, top, "commit", "-qm", "config")
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	gitIn(t, top, "init", "-q", "--bare", "-b", "main", bare)
+	gitIn(t, top, "remote", "add", "origin", bare)
+	gitIn(t, top, "push", "-q", "origin", "main")
+
+	writeRepoFile(t, top, rootConfigPath, append(repoConfig(t), "guard: deny-list\n"...))
+	if c := guideConfig(top); c.GuardDenyList() {
+		t.Fatal("the default branch has not turned the flag on yet")
+	}
+	if _, err := syncGuides(top, true); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := os.ReadFile(filepath.Join(top, guideRule))
+	if err != nil || !strings.Contains(string(rules), "`guard: deny-list`") {
+		t.Fatalf("the synced handbook describes the committed flag: %v", err)
 	}
 }
