@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -497,5 +498,39 @@ func TestQueueStateOfReadsTheReceipts(t *testing.T) {
 	current.CreatedAt = claimed.Add(time.Minute).Format(time.RFC3339)
 	if got := queueStateOf([]github.Comment{current}, lastClaim[1:]); got.State != "queued" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestRunnerWarningPrintsOncePerWorktreeEverySixHours(t *testing.T) {
+	w := worktree{GitDir: t.TempDir()}
+	down := runnerStarter{down: func() []doctorCheck { return []doctorCheck{downCheck} }, command: func() string { return "" }, claim: won, run: func(string) error { return nil }}
+	start := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
+	var stderr strings.Builder
+	// Two `quipu start` calls within six hours: the warning is printed once,
+	// and the runner field carries it both times.
+	for i, now := range []time.Time{start, start.Add(5 * time.Hour)} {
+		note := announceRunner(down, w, now, &stderr)
+		raw, err := json.Marshal(flowResult{Issue: 7, Status: "In progress", Runner: note})
+		if err != nil || !strings.Contains(string(raw), `"runner":"needed runners are down`) {
+			t.Fatalf("call %d: runner field missing: %s", i+1, raw)
+		}
+	}
+	if got := strings.Count(stderr.String(), "needed runners are down"); got != 1 {
+		t.Fatalf("warned %d times within six hours: %q", got, stderr.String())
+	}
+	announceRunner(down, w, start.Add(7*time.Hour), &stderr)
+	if got := strings.Count(stderr.String(), "needed runners are down"); got != 2 {
+		t.Fatalf("after six hours it is due again; warned %d times", got)
+	}
+	// Another worktree has its own marker.
+	announceRunner(down, worktree{GitDir: t.TempDir()}, start.Add(7*time.Hour), &stderr)
+	if got := strings.Count(stderr.String(), "needed runners are down"); got != 3 {
+		t.Fatalf("another worktree hears it too; warned %d times", got)
+	}
+	// Nothing down: nothing printed, no field.
+	quiet := runnerStarter{down: func() []doctorCheck { return nil }}
+	var none strings.Builder
+	if note := announceRunner(quiet, worktree{GitDir: t.TempDir()}, start, &none); note != "" || none.Len() != 0 {
+		t.Fatalf("note %q stderr %q", note, none.String())
 	}
 }

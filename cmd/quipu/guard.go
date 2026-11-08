@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,8 +92,10 @@ type toolArgs struct {
 }
 
 func guardCommand(args []string) error {
-	if len(args) != 0 {
-		return errors.New("usage: quipu guard < hook-input.json")
+	fs := flag.NewFlagSet("guard", flag.ContinueOnError)
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return keepHelp(err, "usage: quipu guard [--json] < hook-input.json")
 	}
 	var input hookInput
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
@@ -103,7 +106,14 @@ func guardCommand(args []string) error {
 	if m, err := openMachine(); err == nil && g.session.GitDir != "" {
 		m.touchWork(g.session.GitDir, g.now)
 	}
-	return g.check(input)
+	if err := g.check(input); err != nil {
+		return err
+	}
+	if *asJSON {
+		// Hooks run without --json: there stdout stays empty, as agents expect.
+		return printValue(map[string]bool{"allowed": true}, true)
+	}
+	return nil
 }
 
 // guard judges one tool call. It caches per-worktree verdicts so a compound

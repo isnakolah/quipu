@@ -127,7 +127,7 @@ func triageCommand(args []string) error {
 	asJSON := jsonFlag(fs)
 	number, err := parseIssueArg(fs, args, false)
 	if err != nil {
-		return errors.New("usage: quipu triage N [--kind K] [--status S] [--priority P] [--area A] [--parent M] [--json]")
+		return keepHelp(err, "usage: quipu triage N [--kind K] [--status S] [--priority P] [--area A] [--parent M] [--json]")
 	}
 	here, err := currentWorktree()
 	if err != nil {

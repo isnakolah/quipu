@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"flag"
 	"fmt"
 	"os"
 
@@ -12,12 +12,21 @@ import (
 // It passes every message unless the repository sets commit_format, and
 // checks the subject names the Issue this worktree holds.
 func verifyCommitCommand(args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: quipu verify-commit FILE  (from a commit-msg hook)")
+	fs := flag.NewFlagSet("verify-commit", flag.ContinueOnError)
+	asJSON := jsonFlag(fs)
+	files, err := parsePositional(fs, args)
+	if err != nil || len(files) != 1 {
+		return keepHelp(err, "usage: quipu verify-commit FILE [--json]  (from a commit-msg hook)")
 	}
-	raw, err := os.ReadFile(args[0])
+	raw, err := os.ReadFile(files[0])
 	if err != nil {
 		return err
+	}
+	pass := func() error {
+		if *asJSON {
+			return printValue(map[string]any{"valid": true, "file": files[0]}, true)
+		}
+		return nil
 	}
 	here, err := currentWorktree()
 	if err != nil {
@@ -25,7 +34,7 @@ func verifyCommitCommand(args []string) error {
 	}
 	c, err := loadConfigAt(here.Top)
 	if err != nil || c.CommitFormat != policycheck.IssuePrefix {
-		return nil
+		return pass()
 	}
 	issue := 0
 	if lease, err := here.readLease(); err == nil {
@@ -38,5 +47,5 @@ func verifyCommitCommand(args []string) error {
 		}
 		return flowErr("commit-format", "%v. This repository writes commits as:\n\n%s", err, example)
 	}
-	return nil
+	return pass()
 }
