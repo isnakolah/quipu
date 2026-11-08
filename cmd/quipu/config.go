@@ -181,6 +181,8 @@ var optionDefaults = map[string]any{
 	"slow_checks":                      "none",
 	"merge_queue":                      "none",
 	"guard_reads":                      "closed",
+	"guard":                            "allow-list",
+	"guard_deny":                       []string{},
 	"workflows.runs_on":                map[string][]string{"default": {"ubuntu-latest"}},
 	"workflows.quipu_version":          "main",
 	"workflows.writer_mode":            "none",

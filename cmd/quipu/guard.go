@@ -48,7 +48,8 @@ var guardRules = []guardRule{
 	{"pr-body", "a PR must be created from the leased branch with a body saying exactly `Refs #N` for the leased Issue and no closing keywords", "run `gh pr create --base <default> --head <leased branch> --title ... --body \"Refs #N ...\"`"},
 	{"quipu-admin", "Quipu recovery and admin commands are owner-only", "use `quipu start`, `quipu done`, or `quipu propose`; ask the owner for recovery"},
 	{"quipu-missing", "quipu is not installed, so no call can be checked", "ask the owner to install quipu (docs/source-install.md in the Quipu repository)"},
-	{"unparsable", "the guard could not tell what this command does", "rewrite it as plain commands without eval, variables as command names, or computed paths"},
+	{"unparsable", "the guard could not tell where this part of the command writes; nothing else on the line was refused", "this is not a policy refusal: give the path or command literally, or assign the variable earlier in the same command (`L=/tmp/check.log; make check > \"$L\"`)"},
+	{"guard-deny", "the repository refuses this command for agents (deploy, publish, spend)", "ask the owner, who runs it or opens a Gate; take other work meanwhile"},
 }
 
 func ruleFor(code string) guardRule {
@@ -64,6 +65,8 @@ func ruleFor(code string) guardRule {
 type denial struct {
 	guardRule
 	Detail string
+	// Command is the simple command that was refused, out of the whole line.
+	Command string
 }
 
 func (d denial) Error() string {
@@ -71,10 +74,13 @@ func (d denial) Error() string {
 	if d.Detail != "" {
 		text += " (" + d.Detail + ")"
 	}
+	if d.Command != "" {
+		text += "; denied: `" + d.Command + "`"
+	}
 	return text + ". Do instead: " + d.Instead + ". Rules: `quipu guide`."
 }
 
-func deny(code, detail string) error { return denial{ruleFor(code), detail} }
+func deny(code, detail string) error { return denial{guardRule: ruleFor(code), Detail: detail} }
 
 // hookInput is the PreToolUse payload from Claude Code or Codex.
 type hookInput struct {
@@ -116,6 +122,10 @@ type guard struct {
 	// an agent may then change no other worktree.
 	sessionLeased bool
 	verified      map[string]leaseContext
+	// configs caches each worktree's enforced config for this tool call.
+	configs map[string]configEntry
+	// vars holds shell variables the command assigned a literal so far.
+	vars map[string]string
 	// live reads an Issue's state from GitHub.
 	live func(c model.Config, number int) (liveWork, error)
 }
@@ -127,7 +137,7 @@ func newGuard(cwd string, now time.Time) *guard {
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
 	}
-	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}, live: loadLiveWork}
+	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}, configs: map[string]configEntry{}, live: loadLiveWork}
 	if w, err := openWorktree(cwd); err == nil {
 		g.session = w
 		if hasConfig(w.Top) {
