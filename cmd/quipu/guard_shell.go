@@ -1088,7 +1088,7 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 // ---- quipu, go, curl ----
 
 var quipuAgentCommands = setOf("status", "start", "done", "doctor", "config", "context", "validate", "guide", "version",
-	"help", "-h", "--help", "propose", "park", "guard", "policy", "verify-commit")
+	"help", "-h", "--help", "propose", "park", "guard", "policy", "verify-commit", "check")
 
 func (g *guard) quipu(rest []shellArg, dir string) error {
 	// Help prints usage and runs nothing; the CLI answers exactly these shapes.

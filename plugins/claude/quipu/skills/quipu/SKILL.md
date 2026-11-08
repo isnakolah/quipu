@@ -50,6 +50,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu start --next --json` | to take work | `issue`, `status`, `branch`, `holder`, `lease_expires`, `next` |
 | `quipu start N --json` | to take, resume, or renew Issue #N | same as above |
 | `quipu start --next --worktree --json` | to dispatch work to a new worktree | adds `worktree`: the directory to work in |
+| `quipu check --json` | before you commit, where the repository sets `local_check` or `merge_queue.check` | runs that check on the worktree as it stands and records `tree`, `command`, `result`, `at`; `reused: true` when this tree already passed it. `quipu done` and the merge queue reuse a pass for the exact tree and command they would test, so commit exactly what you checked |
 | `quipu done N --json` | PR open: move to review | `status: "In review"`, `pr`, `next` |
 | `quipu done N --json --evidence-file FILE` | PR merged: record evidence and close (or the `--criteria ... --boundary ...` flags) | `status: "Done"`, `next` |
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
@@ -249,6 +250,8 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 | `no-record` | no lease record matches, here or for that Issue in any worktree of this clone | nothing to release; carry on, or take work with `quipu start --next --json` |
 | `lease-unverified` | GitHub could not be read and the record has not expired, so the lease may still be live | rerun the same command in a minute; a record clears itself once its lease expires |
 | `not-leaf` | the Issue has sub-issues, so no PR may implement it | start one of its leaf Issues instead; `next` names the Ready ones |
+| `check-failed` | `quipu check` ran the repository's check and it failed or could not run | fix the cause and rerun `quipu check --json`; a failure is never reused, so `quipu done` runs the check again |
+| `no-check` | the default branch sets no `local_check` or `merge_queue.check`, so `quipu check` has nothing to run | run the tests you need yourself; CI checks the PR |
 | `not-implementable` | the Issue is closed, of a kind PRs do not implement, without a parent, without a valid work contract, or blocked | take other work with `quipu start --next --json`; the message says what is wrong, and the owner fixes the Issue |
 | `batch-off` | `quipu done` named several Issues, but this repository does not set `batches: epic` | finish one Issue at a time: `quipu done N --json` |
 

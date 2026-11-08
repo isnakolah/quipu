@@ -34,13 +34,17 @@ const (
 // noCIAdminNote ends the CI field when the merge used the admin bypass.
 const noCIAdminNote = "; merged with the admin bypass"
 
-var noCIValue = regexp.MustCompile(`^None: merged without CI at ([0-9a-f]{40}); local_check (".*" exited 0|skipped, per scoped_checks|result not known to this rerun), as reported by quipu done(; merged with the admin bypass)?$`)
+var noCIValue = regexp.MustCompile(`^None: merged without CI at ([0-9a-f]{40}); local_check (".*" exited 0( on tree [0-9a-f]{40}, reused from an earlier run)?|skipped, per scoped_checks|result not known to this rerun), as reported by quipu done(; merged with the admin bypass)?$`)
 
 // noCIEvidence is the CI field of a merge without CI. The exit code is the
-// client's report: the Writer cannot verify a run on another machine.
-func noCIEvidence(head, command string, exit int) string {
+// client's report: the Writer cannot verify a run on another machine. reused
+// names the tree when a passing run recorded for it stood in for running again.
+func noCIEvidence(head, command string, exit int, reused string) string {
 	if command == "" {
 		return noCIPrefix + head + "; local_check skipped, per scoped_checks, as reported by quipu done"
+	}
+	if reused != "" {
+		return fmt.Sprintf("%s%s; local_check %q exited %d on tree %s, reused from an earlier run, as reported by quipu done", noCIPrefix, head, command, exit, reused)
 	}
 	return fmt.Sprintf("%s%s; local_check %q exited %d, as reported by quipu done", noCIPrefix, head, command, exit)
 }
@@ -164,7 +168,13 @@ type noCIOps struct {
 	violations func() ([]string, error)
 	check      func(command string) (int, error)
 	// changed lists the paths this PR touches, for scoped_checks.
-	changed       func() ([]string, error)
+	changed func() ([]string, error)
+	// tree is the tree checked out, so a run recorded for it can stand in for
+	// another; passed finds such a run, and remember keeps one. Any of them nil
+	// runs the check every time.
+	tree          func() (string, error)
+	passed        func(tree, command string) bool
+	remember      func(tree, command string, exit int)
 	record        func(head, value string)
 	forget        func(head string)
 	merge         func(view mergeView, admin bool) error
@@ -278,8 +288,10 @@ func mergeWithoutCIOnce(c model.Config, bypass bool, e writer.Evidence, ops noCI
 		return "", flowErr("policy-rules", "PR %s breaks the policy rules, which merge_without_ci never waives: %s", view.URL, strings.Join(violations, "; "))
 	}
 	command := noCICommand(c, ops)
-	exit := 0
-	if command != "" {
+	exit, tree, reused := 0, checkedTree(ops), ""
+	if command != "" && tree != "" && ops.passed != nil && ops.passed(tree, command) {
+		reused = tree
+	} else if command != "" {
 		release, err := ops.hold()
 		if err != nil {
 			return "", err
@@ -296,6 +308,10 @@ func mergeWithoutCIOnce(c model.Config, bypass bool, e writer.Evidence, ops noCI
 	// It may have taken a while, and it ran this repository's code.
 	if err := checkCleanAt(ops, view.HeadRefOid); err != nil {
 		return "", err
+	}
+	if command != "" && reused == "" && tree != "" && ops.remember != nil {
+		// A rerun on the same tree, after a refusal or a lost race, need not run it again.
+		ops.remember(tree, command, exit)
 	}
 	head := view.HeadRefOid
 	// From the last look to the merge, no other agent on this clone can merge.
@@ -320,7 +336,7 @@ func mergeWithoutCIOnce(c model.Config, bypass bool, e writer.Evidence, ops noCI
 	if err != nil {
 		return "", err
 	}
-	value := noCIEvidence(head, command, exit)
+	value := noCIEvidence(head, command, exit, reused)
 	ops.record(head, value)
 	err = ops.merge(view, false)
 	if err != nil && bypass && len(waived) > 0 {
@@ -418,6 +434,19 @@ func loadAdminBlockers(c model.Config, view mergeView) ([]string, error) {
 	return judgeAdminBlockers(view.Checks, pull.ReviewDecision, unresolved), nil
 }
 
+// checkedTree is the tree of what is checked out, or "" when it can't be read,
+// which only costs a run.
+func checkedTree(ops noCIOps) string {
+	if ops.tree == nil {
+		return ""
+	}
+	tree, err := ops.tree()
+	if err != nil {
+		return ""
+	}
+	return tree
+}
+
 // checkCleanAt refuses a tree the check would not really be checking.
 func checkCleanAt(ops noCIOps, head string) error {
 	dirty, err := ops.dirty()
@@ -445,22 +474,9 @@ func liveNoCIOps(c model.Config, w worktree, number int, branch, url string, tes
 		update: func() (string, error) { return mergeDefaultIn(w, branch, c.DefaultBranch) },
 		pause:  func() { time.Sleep(3 * time.Second) },
 		lock:   w.mergeLock,
-		hold: func() (func(), error) {
-			m, err := openMachine()
-			if err != nil {
-				if c.LimitsBuilds() {
-					return nil, flowErr("machine-busy", "local_check did not run: could not read this machine's slots: %v", err)
-				}
-				return func() {}, nil
-			}
-			hold, err := m.holdCheck(c, w, number, time.Now())
-			if err != nil {
-				return nil, err
-			}
-			return hold.drop, nil
-		},
-		head:  func() (string, error) { return w.git("rev-parse", "HEAD") },
-		dirty: func() (string, error) { return w.git("status", "--porcelain") },
+		hold:   func() (func(), error) { return checkSlot(c, w, number) },
+		head:   func() (string, error) { return w.git("rev-parse", "HEAD") },
+		dirty:  func() (string, error) { return w.git("status", "--porcelain") },
 		violations: func() ([]string, error) {
 			pull, err := loadPullFacts(c, url)
 			if err != nil {
@@ -473,6 +489,12 @@ func liveNoCIOps(c model.Config, w worktree, number int, branch, url string, tes
 			output, err := w.git("diff", "--name-only", "origin/"+c.DefaultBranch+"...HEAD")
 			return changedPaths(output), err
 		},
+		tree: func() (string, error) { return w.git("rev-parse", "HEAD^{tree}") },
+		passed: func(tree, command string) bool {
+			_, ok := passedCheck(w, tree, command)
+			return ok
+		},
+		remember:      func(tree, command string, exit int) { _ = saveCheckRecord(w, tree, command, exit, time.Now()) },
 		record:        func(head, value string) { recordLocalCheck(w, head, value) },
 		forget:        func(head string) { _ = os.Remove(localCheckRecord(w, head)) },
 		adminBlockers: func(view mergeView) ([]string, error) { return loadAdminBlockers(c, view) },

@@ -70,6 +70,8 @@ func dispatch(args []string) error {
 		return parkCommand(args[1:])
 	case "done":
 		return doneCommand(args[1:])
+	case "check":
+		return checkCommand(args[1:])
 	case "triage":
 		return triageCommand(args[1:])
 	case "runner":
@@ -461,6 +463,7 @@ Everyday:
   start --next  claim the highest-priority Ready work (for agents)
   start --next --worktree  claim it into a new git worktree (dispatch a parallel agent)
   done N     link the PR, then after merge record evidence and close #N
+  check      run the merge check here and record it, so quipu done reuses a pass for the same tree
   lease release [N]  give back your own lease, or clear a record left over from an expired one
 
 Owner:
