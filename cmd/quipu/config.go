@@ -173,6 +173,7 @@ var optionDefaults = map[string]any{
 	"local_check":                      "none",
 	"merge_bypass_rulesets":            false,
 	"cleanup":                          "none",
+	"done_grace_minutes":               model.DefaultDoneGraceMinutes,
 	"limits":                           "none",
 	"auto_ready":                       false,
 	"dispatch":                         "none",

@@ -28,6 +28,11 @@ type shellArg struct {
 }
 
 func (g *guard) shell(command, dir string) error {
+	// The configured cleanup may be a compound line; in a finished worktree it
+	// passes whole.
+	if _, ok := g.finishing(dir); ok && cleanupLine(command, dir) {
+		return nil
+	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil {
 		return g.unparsable(dir, err.Error())
@@ -322,11 +327,16 @@ var fileArgCommands = setOf("rm", "rmdir", "mv", "cp", "touch", "mkdir", "chmod"
 func (g *guard) call(args []shellArg, dir *string) error {
 	err := g.judge(args, dir)
 	var d denial
-	if errors.As(err, &d) && d.Command == "" {
-		d.Command = commandLine(args)
-		return d
+	if !errors.As(err, &d) {
+		return err
 	}
-	return err
+	if d.Code == "no-lease" && g.tidyUp(args, *dir) {
+		return nil
+	}
+	if d.Command == "" {
+		d.Command = commandLine(args)
+	}
+	return d
 }
 
 // judge decides one simple command.
@@ -620,6 +630,8 @@ subcommand:
 	case openGitRead(sub, rest) && g.readsOpen(dir):
 		return nil
 	case sub == "branch" && g.denyList(dir) && gitBranchQuery(rest):
+		return nil
+	case sub == "branch" && safeBranchDelete(rest, dir):
 		return nil
 	case sub == "branch":
 		return deny("branch-change", "git branch "+joinArgs(rest))

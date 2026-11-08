@@ -64,6 +64,10 @@ type Config struct {
 	// it there after the last step that needs the build, so a repository's
 	// agents never have to order it around local_check.
 	Cleanup string `yaml:"cleanup,omitempty" json:"cleanup,omitempty"`
+	// DoneGraceMinutes is how long, after `quipu done` frees a worktree, its
+	// holder may still tidy it up: the cleanup, `git clean`, removing untracked
+	// build output. Commits and pushes stay denied. Unset means 60; 0 turns it off.
+	DoneGraceMinutes *int `yaml:"done_grace_minutes,omitempty" json:"done_grace_minutes,omitempty"`
 	// AutoReady moves work to Ready when its last blocker closes, unless it is
 	// labelled quipu:needs-owner. Decisions and Gates never move.
 	AutoReady bool `yaml:"auto_ready,omitempty" json:"auto_ready,omitempty"`
@@ -386,6 +390,9 @@ func globPattern(glob string) (*regexp.Regexp, error) {
 
 // ValidateAutonomy checks dispatch, scoped_checks and slow_checks.
 func (c Config) ValidateAutonomy() error {
+	if g := c.DoneGraceMinutes; g != nil && (*g < 0 || *g > 24*60) {
+		return fmt.Errorf("done_grace_minutes must be between 0 and 1440")
+	}
 	d := c.Dispatch
 	if d.AgentCommand == "" && (d.MaxAgents != 0 || d.PollSeconds != 0) {
 		return fmt.Errorf("dispatch needs agent_command")
@@ -564,6 +571,17 @@ func (c Config) ValidateLimits() error {
 	return nil
 }
 
+// DefaultDoneGraceMinutes is the tidy-up window after done when none is set.
+const DefaultDoneGraceMinutes = 60
+
+// DoneGrace is how long a finished worktree may still be tidied up.
+func (c Config) DoneGrace() time.Duration {
+	if c.DoneGraceMinutes == nil {
+		return DefaultDoneGraceMinutes * time.Minute
+	}
+	return time.Duration(*c.DoneGraceMinutes) * time.Minute
+}
+
 // CleansUp reports whether Quipu frees a worktree's disk when it is finished.
 func (c Config) CleansUp() bool { return c.Cleanup != "" }
 
@@ -579,7 +597,7 @@ func (c Config) WithoutRelaxations() Config {
 	c.ReadyBy, c.Merge, c.PolicyExemptAuthors = "", "", nil
 	c.IssuesBy, c.TriageBy, c.UpdateBehind, c.MergeWait, c.GuardReads, c.Guard = "", "", "", "", "", ""
 	c.MergeWithoutCI, c.LocalCheck, c.MergeBypassRulesets = false, "", false
-	c.Cleanup = ""
+	c.Cleanup, c.DoneGraceMinutes = "", nil
 	c.MergeQueue = MergeQueue{}
 	c.AutoReady, c.Dispatch, c.ScopedChecks, c.SlowChecks = false, Dispatch{}, nil, nil
 	c.Workflows.RunnerStart = ""
