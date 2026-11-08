@@ -83,13 +83,17 @@ Start one agent per returned `worktree`, with that directory as its working dire
 
 ```text
 You work in <worktree> on Issue #<N> of this Quipu repository. Your lease is
-already claimed for this worktree. First run `quipu start <N> --json` there
-to resume it. Implement only #<N>'s acceptance criteria, run the tests, push
-branch <branch>, open a PR with `gh pr create --base main --head <branch>`
-and a body that says exactly `Refs #<N>`, then run `quipu done <N> --json`
-and report the PR URL. Read `quipu guide` for the rules. Never merge, never
-switch branches, never edit outside <worktree>.
+already claimed for this worktree. Run every shell command as
+`cd <worktree> && ...` and give edit tools absolute paths under <worktree>.
+First run `cd <worktree> && quipu start <N> --json` to resume it. Implement
+only #<N>'s acceptance criteria, run the tests, push branch <branch>, open a
+PR with `gh pr create --base main --head <branch>` and a body that says
+exactly `Refs #<N>`, then run `quipu done <N> --json` and report the PR URL.
+Read `quipu guide` for the rules. Never merge, never switch branches, never
+edit outside <worktree>.
 ```
+
+**Subagents started in the main checkout.** Many tools start a subagent in the folder its parent runs in, usually the main checkout, which holds no lease. That subagent can still implement the leased Issue: the guard judges each change by the worktree it lands in, not by the session's folder. An edit into a worktree is allowed when that worktree's live lease is held by the caller's own GitHub login; a shell command that starts with `cd <worktree> &&` is judged there too. An edit into a worktree leased to a different login is denied `other-worktree`, and so is any edit into another worktree from a session whose own worktree holds a lease. The guard learns your login from `gh` (cached for an hour), so keep `gh` signed in.
 
 - `quipu done N` works from any checkout and finds the worktree holding #N.
 - After Done, remove a worktree with `quipu worktree remove <path> --json` once nothing runs in it. The agent that held it or a dispatcher may do this; it also deletes the merged local branch. Work that is not Done keeps anything found only in that worktree.
@@ -183,7 +187,7 @@ Do what it says; never try another way around it. Retrying the same thing in a d
 |---|---|---|
 | `no-lease` | changes need an active lease in this worktree | run `quipu start --next --json` (or `quipu start N --json`), then retry |
 | `wrong-branch` | this worktree is not on its leased branch | run `quipu start N --json` with the leased Issue; it switches to the branch. A record left over from other work clears itself once its lease is over, or now with `quipu lease release N --json` |
-| `other-worktree` | agents change only the worktree that holds their own lease | work inside your own worktree; dispatch other work with `quipu start --next --worktree --json` |
+| `other-worktree` | agents change only their own leased worktree, or, holding no lease themselves, a worktree leased to their own login | work inside your own worktree; dispatch other work with `quipu start --next --worktree --json` |
 | `lease-inactive` | the live lease is expired, held by someone else, or no longer active | run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder. The leftover record is cleared, so nothing else is blocked |
 | `git-internals` | files under .git hold git and Quipu state (lease, identity) | use git and quipu commands; never edit .git directly |
 | `quipu-config` | Quipu's config, workflows, and agent hooks are owner-only | ask the owner in a comment on your PR |

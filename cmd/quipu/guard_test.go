@@ -75,6 +75,10 @@ func newGuardFixture(t *testing.T) guardFixture {
 	return f
 }
 
+// fixtureCaller is the GitHub login every guard test calls as: the login of
+// the lease in the fixture's worktree a.
+func fixtureCaller(time.Time) (string, error) { return "octo", nil }
+
 // guardCode runs one tool call through the guard and returns the denial
 // code, or "" when allowed.
 func guardCode(t *testing.T, cwd, tool string, input map[string]any) string {
@@ -85,6 +89,7 @@ func guardCode(t *testing.T, cwd, tool string, input map[string]any) string {
 	}
 	g := newGuard(cwd, time.Now().UTC())
 	// Tests never reach GitHub. No answer means what it means in production.
+	g.caller = fixtureCaller
 	g.live = func(model.Config, int) (liveWork, error) { return liveWork{}, errors.New("no network in tests") }
 	err = g.check(hookInput{ToolName: tool, Cwd: cwd, ToolInput: raw})
 	if err == nil {
@@ -282,6 +287,58 @@ func TestGuardEditAndOtherTools(t *testing.T) {
 	gitIn(t, f.a, "switch", "-q", "-c", "001/other")
 	if got := guardCode(t, f.a, "Edit", map[string]any{"file_path": filepath.Join(f.a, "x.go")}); got != "wrong-branch" {
 		t.Fatalf("branch mismatch: got %q", got)
+	}
+}
+
+// A subagent started in the main checkout holds no lease there. The guard
+// judges its edits by the worktree they land in: one leased to its own login
+// is allowed, one leased to another login is someone else's work.
+func TestSubagentFromMainCheckoutEditsByTheTargetsLease(t *testing.T) {
+	f := newGuardFixture(t)
+	b, err := openWorktree(f.b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := b.writeLease(leaseContext{Issue: 2, Holder: "claude/hubot/bbbb2222", Branch: "002/b",
+		Expires: now.Add(time.Hour).Format(time.RFC3339), VerifiedAt: now.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		tool  string
+		input map[string]any
+		want  string
+	}{
+		{"Edit", map[string]any{"file_path": filepath.Join(f.a, "x.go")}, ""},
+		{"Write", map[string]any{"file_path": filepath.Join(f.a, "pkg", "new.go")}, ""},
+		{"Bash", map[string]any{"command": "cd " + f.a + " && touch y && git add -A"}, ""},
+		{"Edit", map[string]any{"file_path": filepath.Join(f.b, "x.go")}, "other-worktree"},
+		{"Bash", map[string]any{"command": "cd " + f.b + " && touch y"}, "other-worktree"},
+		{"Bash", map[string]any{"command": "echo x > " + filepath.Join(f.b, "f")}, "other-worktree"},
+	}
+	for _, tc := range cases {
+		if got := guardCode(t, f.top, tc.tool, tc.input); got != tc.want {
+			t.Errorf("from main checkout, %s %v: got %q, want %q", tc.tool, tc.input, got, tc.want)
+		}
+	}
+
+	// Not knowing who calls proves nothing, so the edit is denied.
+	g := newGuard(f.top, now)
+	g.caller = func(time.Time) (string, error) { return "", errors.New("gh is not signed in") }
+	raw, _ := json.Marshal(map[string]any{"file_path": filepath.Join(f.a, "x.go")})
+	var d denial
+	if err := g.check(hookInput{ToolName: "Edit", Cwd: f.top, ToolInput: raw}); !errors.As(err, &d) || d.Code != "other-worktree" {
+		t.Fatalf("unknown caller: %v, want other-worktree", err)
+	}
+
+	// The worktree's own session never needs to say who it is.
+	g = newGuard(f.a, now)
+	g.caller = func(time.Time) (string, error) {
+		t.Fatal("asked who calls from the worktree's own session")
+		return "", nil
+	}
+	if err := g.check(hookInput{ToolName: "Edit", Cwd: f.a, ToolInput: raw}); err != nil {
+		t.Fatalf("own worktree: %v", err)
 	}
 }
 

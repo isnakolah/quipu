@@ -19,6 +19,7 @@ func guardCodeLive(t *testing.T, cwd, tool string, input map[string]any, live fu
 		t.Fatal(err)
 	}
 	g := newGuard(cwd, time.Now().UTC())
+	g.caller = fixtureCaller
 	g.live = live
 	var d denial
 	if err := g.check(hookInput{ToolName: tool, Cwd: cwd, ToolInput: raw}); errors.As(err, &d) {
