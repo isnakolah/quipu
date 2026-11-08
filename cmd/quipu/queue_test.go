@@ -531,8 +531,10 @@ func TestLostJournalAfterAMergeStaysHonest(t *testing.T) {
 	if !strings.Contains(f.recorded[1].CIURL, "not known") || !queueValue.MatchString(f.recorded[1].CIURL) {
 		t.Fatalf("what it can't know it says: %q", f.recorded[1].CIURL)
 	}
-	if !strings.Contains(f.recorded[2].CIURL, "exited 0") || runs() != 2 {
-		t.Fatalf("the other is tested again on the new tip: %q, runs %d", f.recorded[2].CIURL, runs())
+	// On the new tip the other makes the very tree the lost batch passed, so the
+	// recorded pass stands in, and the evidence says so.
+	if !strings.Contains(f.recorded[2].CIURL, "exited 0") || !strings.Contains(f.recorded[2].CIURL, "1 reused") || runs() != 1 {
+		t.Fatalf("the other is judged on the new tip by the tree it makes: %q, runs %d", f.recorded[2].CIURL, runs())
 	}
 	if fmt.Sprint(f.landed) != "[1 2]" {
 		t.Fatalf("landed %v", f.landed)

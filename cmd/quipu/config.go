@@ -181,6 +181,7 @@ var optionDefaults = map[string]any{
 	"slow_checks":                      "none",
 	"merge_queue":                      "none",
 	"guard_reads":                      "closed",
+	"batches":                          "none",
 	"guard":                            "allow-list",
 	"guard_deny":                       []string{},
 	"workflows.runs_on":                map[string][]string{"default": {"ubuntu-latest"}},

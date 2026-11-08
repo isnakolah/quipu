@@ -22,6 +22,7 @@ import (
 
 	"github.com/isnakolah/quipu/internal/github"
 	"github.com/isnakolah/quipu/internal/model"
+	policycheck "github.com/isnakolah/quipu/internal/policy"
 	"github.com/isnakolah/quipu/internal/writer"
 )
 
@@ -397,7 +398,7 @@ func startCommand(args []string) error {
 	note := ensureRunner(c, here)
 	respond := func(result flowResult) error {
 		result.Runner = note
-		return printFlowResult(result, *asJSON)
+		return doneEmit(result, *asJSON)
 	}
 	if !*next {
 		result, err := startIssue(c, here, number, o)
@@ -504,6 +505,9 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 	case branch != "":
 	case state.Branch != "":
 		branch = state.Branch
+	case c.BatchesByEpic() && state.ParentNumber > 0 && isEpic(c, state.ParentNumber):
+		// A leaf of an Epic joins the Epic's rolling branch and worktree.
+		branch = epicBranchName(state.ParentNumber, state.ParentTitle)
 	default:
 		title, err := issueTitle(c, number)
 		if err != nil {
@@ -513,7 +517,11 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 	}
 	w := here
 	if o.Worktree {
-		path := dispatchPath(here.Top, o.WorktreeRoot, c.Repository, number)
+		place := number
+		if n, ok := policycheck.BranchEpic(branch); ok {
+			place = n
+		}
+		path := dispatchPath(here.Top, o.WorktreeRoot, c.Repository, place)
 		created, createdTree, createdBranch, err := here.addWorktree(path, branch, c.DefaultBranch)
 		if err != nil {
 			return flowResult{}, err
@@ -591,11 +599,18 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		return flowResult{}, err
 	}
 	lease := leaseContext{Issue: number, Holder: state.Holder, Branch: state.Branch, Expires: state.Expiry, VerifiedAt: time.Now().UTC().Format(time.RFC3339)}
-	if err := w.writeLease(lease); err != nil {
+	write := w.writeLease
+	if _, ok := policycheck.BranchEpic(state.Branch); ok {
+		write = w.addLease
+	}
+	if err := write(lease); err != nil {
 		return flowResult{}, err
 	}
 	result = flowResult{Issue: number, Status: state.Status, Branch: state.Branch, Holder: state.Holder, LeaseExpires: state.Expiry, Warnings: recordWorkSlot(c, w, number, state.Area, time.Now())}
 	result.Next = fmt.Sprintf("Implement #%d on %s. Push and open a PR whose body says \"Refs #%d\", then run: quipu done %d. Rerun quipu start %d to renew the lease on long work.", number, state.Branch, number, number, number)
+	if epicNumber, ok := policycheck.BranchEpic(state.Branch); ok {
+		result.Next = fmt.Sprintf("Implement #%d on %s, the rolling branch of Epic #%d, with commits whose message says \"Refs #%d\". Other leaf Issues of #%d may share this branch. Open one PR with a \"Refs #N\" line for each leaf it finishes, then run: quipu done A B ... with those Issue numbers.", number, state.Branch, epicNumber, number, epicNumber)
+	}
 	if state.Status == "In review" {
 		result.Next = fmt.Sprintf("Address review on %s, then run: quipu done %d", state.Branch, number)
 	}
@@ -713,9 +728,43 @@ func branchName(number int, title string) string {
 	return fmt.Sprintf("%03d/%s", number, slug)
 }
 
+// epicBranchName names Epic epic's rolling branch, epic-NNN/slug.
+func epicBranchName(epic int, title string) string {
+	return "epic-" + branchName(epic, strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(title, "EPIC"), " —")))
+}
+
+// isEpic reports whether Issue number is an Epic.
+func isEpic(c model.Config, number int) bool {
+	state, err := loadLiveWork(c, number)
+	return err == nil && state.Kind == "Epic"
+}
+
 // ---- quipu done ----
 
+// doneEmit prints one `quipu done` result; a batch collects them instead.
+var doneEmit = printFlowResult
+
+// linkForReview moves claimed or started work onto its PR: In review.
+func linkForReview(c model.Config, number int, actor string, state liveWork, pr string, wait time.Duration) error {
+	// A holder whose lease lapsed while the Writer or CI was down keeps its
+	// claim on the open PR, and needs a live lease to move it to review.
+	if state.Holder == actor && !hasActiveLease(state.Holder, state.Expiry, time.Now()) {
+		if err := sendAndWait(c, number, actor, writer.Request{Action: "renew"}, wait); err != nil {
+			return err
+		}
+	}
+	if state.Status == "Claimed" {
+		if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, wait); err != nil {
+			return err
+		}
+	}
+	return sendAndWait(c, number, actor, writer.Request{Action: "pr.link", PR: pr}, wait)
+}
+
 func doneCommand(args []string) error {
+	if numbers, rest, batch := doneIssues(args); len(numbers) > 1 || batch {
+		return doneBatch(numbers, rest, batch)
+	}
 	fs := flag.NewFlagSet("done", flag.ContinueOnError)
 	actorFlag := fs.String("actor", "", "request actor; defaults to the lease holder in .git/quipu-lease")
 	asJSON := jsonFlag(fs)
@@ -773,7 +822,7 @@ func doneCommand(args []string) error {
 		warnings = w.release(number, cleanup, c.DoneGrace())
 	}
 	if state.Status == "Done" {
-		return printFlowResult(doneResult(w, number, "", warnings), *asJSON)
+		return doneEmit(doneResult(w, number, "", warnings), *asJSON)
 	}
 	// Before any request: the Writer that answers it may be on that runner.
 	note := ensureRunner(c, here)
@@ -804,19 +853,7 @@ func doneCommand(args []string) error {
 		if pull.State != "OPEN" {
 			return flowErr("pr-closed", "PR %s is %s", pull.URL, pull.State)
 		}
-		// A holder whose lease lapsed while the Writer or CI was down keeps its
-		// claim on the open PR, and needs a live lease to move it to review.
-		if state.Holder == actor && !hasActiveLease(state.Holder, state.Expiry, time.Now()) {
-			if err := sendAndWait(c, number, actor, writer.Request{Action: "renew"}, *wait); err != nil {
-				return err
-			}
-		}
-		if state.Status == "Claimed" {
-			if err := sendAndWait(c, number, actor, writer.Request{Action: "start"}, *wait); err != nil {
-				return err
-			}
-		}
-		if err := sendAndWait(c, number, actor, writer.Request{Action: "pr.link", PR: pull.URL}, *wait); err != nil {
+		if err := linkForReview(c, number, actor, state, pull.URL, *wait); err != nil {
 			return err
 		}
 		if state, err = loadLiveWork(c, number); err != nil {
@@ -1347,7 +1384,7 @@ func resolveActor(w worktree, explicit string, number int) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	if lease, err := w.readLease(); err == nil && lease.Issue == number {
+	if lease, ok := w.leaseFor(number); ok {
 		return lease.Holder, nil
 	}
 	if actor := strings.TrimSpace(os.Getenv("QUIPU_ACTOR")); actor != "" {

@@ -1062,6 +1062,19 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 		}
 		return deny("pr-body", "pass --body or --body-file")
 	}
+	if _, onEpic := policycheck.BranchEpic(lease.Branch); onEpic && c.BatchesByEpic() {
+		// A rolling Epic branch's PR names any of the leaves leased here.
+		issues, err := policycheck.ReferencedIssueSet(body)
+		if err != nil {
+			return deny("pr-body", err.Error())
+		}
+		for _, issue := range issues {
+			if _, ok := w.leaseFor(issue); !ok {
+				return deny("pr-body", "body references #"+strconv.Itoa(issue)+", which is not leased in this worktree")
+			}
+		}
+		return nil
+	}
 	issues, err := policycheck.ReferencedIssues(body)
 	if err != nil {
 		return deny("pr-body", err.Error())
@@ -1075,7 +1088,7 @@ func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 // ---- quipu, go, curl ----
 
 var quipuAgentCommands = setOf("status", "start", "done", "doctor", "config", "context", "validate", "guide", "version",
-	"help", "-h", "--help", "propose", "park", "guard", "policy", "verify-commit")
+	"help", "-h", "--help", "propose", "park", "guard", "policy", "verify-commit", "check")
 
 func (g *guard) quipu(rest []shellArg, dir string) error {
 	// Help prints usage and runs nothing; the CLI answers exactly these shapes.
