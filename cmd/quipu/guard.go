@@ -135,6 +135,8 @@ type guard struct {
 	verified      map[string]leaseContext
 	// configs caches each worktree's enforced config for this tool call.
 	configs map[string]configEntry
+	// windows caches each directory's bootstrap window for this tool call.
+	windows map[string]windowState
 	// vars holds shell variables the command assigned a literal so far.
 	vars map[string]string
 	// live reads an Issue's state from GitHub.
@@ -154,7 +156,7 @@ func newGuard(cwd string, now time.Time) *guard {
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
 	}
-	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}, configs: map[string]configEntry{}, live: loadLiveWork, caller: callerActor}
+	g := &guard{cwd: cwd, now: now, verified: map[string]leaseContext{}, configs: map[string]configEntry{}, windows: map[string]windowState{}, live: loadLiveWork, caller: callerActor}
 	if w, err := openWorktree(cwd); err == nil {
 		g.session = w
 		if hasConfig(w.Top) {
@@ -325,9 +327,16 @@ func (g *guard) writePath(path string) error {
 	path = realPath(path)
 	dir := existingDir(path)
 	if w, err := openWorktree(dir); err == nil {
-		if rel, err := filepath.Rel(w.Top, path); err == nil && protectedFile(filepath.ToSlash(rel)) {
-			if c, _ := g.configFor(dir); !flaggedWorkflow(c, filepath.ToSlash(rel)) {
-				return deny("quipu-config", filepath.ToSlash(rel))
+		if rel, err := filepath.Rel(w.Top, path); err == nil {
+			rel = filepath.ToSlash(rel)
+			// The agent that adopted writes Quipu's files until they land.
+			if adoptionFile(rel) && g.landing(dir) {
+				return nil
+			}
+			if protectedFile(rel) {
+				if c, _ := g.configFor(dir); !flaggedWorkflow(c, rel) {
+					return deny("quipu-config", rel)
+				}
 			}
 		}
 	}

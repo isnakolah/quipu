@@ -345,7 +345,7 @@ func (g *guard) judge(args []shellArg, dir *string) error {
 		return err
 	}
 	open := g.denyList(*dir)
-	if open && helpForm(args) {
+	if helpForm(args) && (open || g.adopting(*dir)) {
 		return nil
 	}
 	if !args[0].ok {
@@ -512,7 +512,8 @@ func hasPrefixFlag(args []shellArg, prefix string) bool {
 // mentionsQuipuState reports whether a literal argument names git internals
 // or Quipu's local state, which no command may write.
 func mentionsQuipuState(arg string) bool {
-	return insideGitDir(arg) || strings.Contains(arg, "quipu-lease") || strings.Contains(arg, "quipu-agent-id")
+	return insideGitDir(arg) || strings.Contains(arg, "quipu-lease") || strings.Contains(arg, "quipu-agent-id") ||
+		strings.Contains(arg, bootstrapFileName)
 }
 
 // mentionsProtectedPath reports whether arg names one of Quipu's own
@@ -646,6 +647,8 @@ subcommand:
 		return deny("branch-change", "git checkout "+joinArgs(rest))
 	case gitUnwinding(sub, rest):
 		return g.gitUnwind(dir)
+	case sub == "add" || sub == "commit":
+		return g.landingWrite(g.writeIn(dir), dir)
 	case sub == "worktree":
 		return g.gitWorktree(rest, dir)
 	case sub == "push":
@@ -821,6 +824,9 @@ func (g *guard) gitWorktree(rest []shellArg, dir string) error {
 // gitPush allows pushing only the leased branch to origin.
 func (g *guard) gitPush(rest []shellArg, dir string) error {
 	if err := g.writeIn(dir); err != nil {
+		if g.landing(dir) {
+			return g.adoptionPush(rest, dir)
+		}
 		return err
 	}
 	lease, _, managed := g.leaseIn(dir)
@@ -989,6 +995,9 @@ func (g *guard) ghAPI(rest []shellArg) error {
 // a compliant body, so the policy check never has to reject it.
 func (g *guard) ghPRBody(action string, rest []shellArg, dir string) error {
 	if err := g.writeIn(dir); err != nil {
+		if action == "create" && g.landing(dir) {
+			return g.adoptionPR(rest, dir)
+		}
 		return err
 	}
 	lease, w, managed := g.leaseIn(dir)
@@ -1092,7 +1101,7 @@ var quipuAgentCommands = setOf("status", "start", "done", "doctor", "config", "c
 
 func (g *guard) quipu(rest []shellArg, dir string) error {
 	// Help prints usage and runs nothing; the CLI answers exactly these shapes.
-	if quipuHelp(rest) {
+	if quipuHelp(rest) || g.adoptionQuipu(rest, dir) {
 		return nil
 	}
 	if len(rest) > 0 && rest[0].s == "guide" && hasFlag(rest, "--sync") {
@@ -1171,7 +1180,7 @@ func agentsTriage(dir string) bool {
 // readsOpen reports whether dir's repository sets guard_reads: open.
 func (g *guard) readsOpen(dir string) bool {
 	c, ok := g.configFor(dir)
-	return ok && (c.GuardReadsOpen() || c.GuardDenyList())
+	return (ok && (c.GuardReadsOpen() || c.GuardDenyList())) || g.adopting(dir)
 }
 
 var goReadOnly = setOf("test", "vet", "build", "list", "version", "doc", "help", "bug")

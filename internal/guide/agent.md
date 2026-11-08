@@ -118,7 +118,7 @@ The check re-runs by itself when the work under it changes, for example when you
 
 `quipu done N --json` moves the work to **In review**. The owner reviews and merges; never merge it yourself.
 
-**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with your evidence file (or every evidence flag), and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. `gh pr merge` stays blocked.
+**When the config says `merge: agent`,** `quipu done` merges for you instead, and only through Quipu: run it with your evidence file (or every evidence flag), and once the required checks and `policy` pass it merges the PR with a merge commit, records the evidence, and closes the Issue in one step. A PR behind the default branch never merges, because nothing tested the two together, even where GitHub would allow it: it stops with `merge-blocked`. While checks run it stops with `checks-pending`; rerun the same command later. If a required check is queued and no online runner has its labels, it stops with `checks-no-runner` instead: don't poll, take other work, and tell the owner what it names. If it merged but the Writer hasn't answered yet, it returns `"status": "Merged, receipt pending"`: you are finished, the Writer closes the Issue, so take other work. `gh pr merge` stays blocked.
 
 **When the config says `commit_format: issue-prefix`,** every commit is `#NNN type(scope): summary` (NNN your Issue, as in your branch) with a `Refs: #N` footer line, and the PR title is `type(scope): summary`. `quipu verify-commit FILE` checks a message; the `policy` check checks every commit in the PR.
 
@@ -181,6 +181,15 @@ quipu propose --parent N --title "Short title" --body-file proposal.md --json
 `N` is the Epic or Story it belongs under. Explain the why, the scope, and the acceptance criteria. Then carry on with your own work. The owner turns proposals into Issues and makes them Ready.
 
 When the change is to one of Quipu's enforcement files, which you cannot edit, attach the exact patch: write a unified diff with repository paths (`a/PATH`, `b/PATH`), for example with `diff -u` on copies outside the repository, and add `--patch FILE`. The digest lists it for the owner as `quipu patch apply ID`. Never try to make the change another way.
+
+## Adopting a repository
+
+If you ran `quipu adopt --apply` yourself, it opened a bootstrap window for your worktree (two hours unless the owner chose otherwise; `quipu doctor` shows it). While it is open, in that worktree only, the guard lets you finish setup without a lease:
+
+- reads of every kind, `--help`, the dry runs of `quipu adopt`, `quipu protect`, `quipu hooks`, and `quipu runner setup`, and `quipu import` with or without `--apply`;
+- until the config is on the default branch: editing Quipu's own files (`quipu.yml`, workflows, Issue forms, hooks, the handbook), `quipu guide --sync`, `quipu hooks --apply`, `git add` and `git commit`, pushing to a branch of its own (`git push -u origin HEAD:quipu-adoption`), and `gh pr create --base main --head quipu-adoption --title ... --body ...`.
+
+Never push to the default branch, force-push, or merge: the owner merges the setup PR. Ask the owner to run the `owner_step` that adopt printed (the Writer's token). Once the PR lands, `git fetch origin`, and editing, committing and pushing follow the normal rules. When the window closes, every rule here applies again.
 
 ## What the guard blocks
 

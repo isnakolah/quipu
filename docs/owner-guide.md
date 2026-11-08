@@ -59,6 +59,19 @@ Files that already exist and differ from Quipu's (your own `ci.yml`, say) are ke
 
 Adopt never rewrites the options of a Project field on a Project that has items, because GitHub clears every item's value when options change. It tells you which options to add by hand instead.
 
+### The bootstrap window
+
+An agent can run the adoption for you. The moment `quipu adopt --apply` writes `quipu.yml`, the guard governs that clone, before the workflows, the token or the rulesets exist, so without a window the agent that adopted is locked out. Adopt therefore opens a bootstrap window for the worktree it ran in: two hours by default, `--bootstrap-minutes N` to change it (up to 1440), `0` for none. It is recorded in the clone's common git directory, where agents cannot write, and `quipu doctor` shows it while it is open.
+
+While it is open, in that worktree only, and only for a session working there, the guard allows:
+
+- reads of every kind and `--help`; the dry runs of `quipu adopt`, `quipu protect`, `quipu hooks` and `quipu runner setup`; `quipu import`, with or without `--apply`;
+- until the config is on the default branch, as this clone last fetched it: editing Quipu's own files (the config, workflows, Issue forms, hooks, the handbook and its `AGENTS.md`/`CLAUDE.md` pointers), `quipu guide --sync`, `quipu hooks --apply`, `git add`, `git commit`, pushing to a branch other than the default one, and `gh pr create` from that branch into the default one.
+
+It never allows a push to the default branch, a force push, a merge, labels, `quipu adopt --apply` or `quipu protect --apply`, or changes to any other file without a lease. Other worktrees of the clone get the normal rules, and so does everyone once the window closes. Adopt opens no window when the config is already on the default branch, so rerunning it in an adopted repository changes nothing here.
+
+Adopt prints `owner_step`, the one thing only you can do, as a single command: `gh secret set QUIPU_WRITER_TOKEN --repo OWNER/REPO`. The rest is the agent's: it commits the files, pushes them to their own branch, and opens the PR. You merge it, set the token, and apply protection with `quipu protect --apply`, which needs an admin token and stays yours. Then the agent runs `quipu doctor` and `quipu import --manifest FILE --apply`.
+
 ## Runners and workflows
 
 The generated workflows follow the `workflows` section of the config. Change it through a reviewed PR, then regenerate the files with `quipu adopt --apply --replace` and commit them.
@@ -95,6 +108,10 @@ It polls the repository's comments every 3 seconds with an ETag, so the usual an
 What you give up: `issues` and `pull_request` events no longer start it, because the Writer's own work raises them. A hand-closed Issue reopens at the next sweep rather than straight away, within 15 minutes by default. With your own `workflows.schedule`, that schedule sets the wait.
 
 **A second runner.** Those times hold only while a runner is free. If your only runner is building, builds win and claims wait. `quipu runner setup` explains adding a runner only the Writer can use: register it with `--no-default-labels --labels quipu-writer`, then set `workflows.runs_on.writer: [quipu-writer]`. A runner with its default labels would also take your builds.
+
+**Off your machine.** A Writer on a self-hosted runner stops the whole board while that machine sleeps, and one that shares the runner with your builds makes every claim wait behind a build. `quipu doctor` warns about both (`writer runner`). The fix is `workflows.runs_on.writer: [ubuntu-latest]` with `workflows.writer_mode: serial`; the Writer needs no toolchain, only `go install` of the pinned Quipu. On a private repository hosted minutes count against your plan, which is why Quipu recommends this and never sets it for you.
+
+**A slow Writer never fails a merge.** When `quipu done` has merged the PR and the Writer has not answered within `--wait`, it reports `"status": "Merged, receipt pending"` and exits 0 instead of `no-receipt`: the request stays queued, and the agent moves on. When the Writer accepts the evidence and the agent's own Done request never arrives, the Writer closes the Issue itself ten minutes later.
 
 **To migrate**, through a PR you review:
 

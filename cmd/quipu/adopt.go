@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/isnakolah/quipu/internal/bootstrap"
 	"github.com/isnakolah/quipu/internal/model"
@@ -30,9 +31,13 @@ func adoptCommand(args []string) error {
 	projectNumber := fs.Int("project-number", 0, "existing GitHub Project number")
 	setup := addSetupFlags(fs)
 	replace := fs.Bool("replace", false, "replace existing workflow and Issue form files that differ from Quipu's")
+	bootstrapMinutes := fs.Int("bootstrap-minutes", defaultBootstrapMinutes, "minutes this worktree may finish setup before the config lands (0 for none)")
 	apply := applyFlag(fs)
 	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := validBootstrapMinutes(*bootstrapMinutes); err != nil {
 		return err
 	}
 	here, err := currentWorktree()
@@ -98,8 +103,32 @@ func adoptCommand(args []string) error {
 	if len(kept) > 0 {
 		report["kept_note"] = "these files already existed and differ from Quipu's; review them, or rerun with --replace"
 	}
-	report["next"] = "commit and push the written files, set the QUIPU_WRITER_TOKEN secret, run `quipu protect --apply`, then `quipu doctor`"
+	landed := here.configLanded()
+	if *bootstrapMinutes > 0 && !landed {
+		window, err := here.recordBootstrap(time.Now(), *bootstrapMinutes)
+		if err != nil {
+			return fmt.Errorf("record the bootstrap window: %w", err)
+		}
+		report["bootstrap_window"] = window
+	}
+	report["owner_step"] = ownerStep(c)
+	report["next"] = adoptNext(c, landed)
 	return printValue(report, *asJSON)
+}
+
+// ownerStep is the one thing setup needs from the owner, as one command: the
+// Writer's token, which no agent may create or see.
+func ownerStep(c model.Config) string {
+	return "gh secret set QUIPU_WRITER_TOKEN --repo " + c.Owner + "/" + c.Repository
+}
+
+// adoptNext says how the adopting agent finishes setup.
+func adoptNext(c model.Config, landed bool) string {
+	if landed {
+		return "if the Writer has no token yet, the owner runs owner_step; then run `quipu doctor`, and bring existing work in with `quipu import --manifest FILE --apply`"
+	}
+	return "commit the written files, push them to a branch of their own (`git push -u origin HEAD:quipu-adoption`) and open a PR into " + c.DefaultBranch +
+		"; the owner merges it, runs owner_step, and applies protection with `quipu protect --apply`. Once it lands, run `git fetch origin` and `quipu doctor`, then bring existing work in with `quipu import --manifest FILE --apply`"
 }
 
 // existingConfig loads the config when the repository was adopted already.

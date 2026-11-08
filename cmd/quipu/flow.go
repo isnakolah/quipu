@@ -959,6 +959,10 @@ func doneCommand(args []string) error {
 			return flowErr("evidence-missing", "this merge skipped CI, so --boundary must be local, not %q", e.Boundary)
 		}
 		if err := sendAndWait(c, number, actor, writer.Request{Action: "evidence.submit", PR: pull.URL, Evidence: &e}, *wait); err != nil {
+			if pending, ok := receiptPending(number, pull.URL, err); ok {
+				pending.Warnings = warnings
+				return respond(pending)
+			}
 			if skippedCI {
 				return noCIAwaitingReceipt(pull.URL, err)
 			}
@@ -972,6 +976,10 @@ func doneCommand(args []string) error {
 		return flowErr("not-active", "#%d is %q; done applies to work In progress, In review, or Evidence pending", number, state.Status)
 	}
 	if err := sendAndWait(c, number, actor, writer.Request{Action: "status", Status: "Done"}, *wait); err != nil {
+		if pending, ok := receiptPending(number, pull.URL, err); ok {
+			pending.Warnings = warnings
+			return respond(pending)
+		}
 		return err
 	}
 	return respond(doneResult(w, number, pull.URL, append(warnings, w.release(number, cleanup, c.DoneGrace())...)))
