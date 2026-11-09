@@ -118,6 +118,38 @@ func TestMergeGate(t *testing.T) {
 	}
 }
 
+// PR #159: policy failed before the owner's label and passed on the run the
+// label started. GitHub showed the PR as passing; quipu done still counted
+// the old failure. A check is judged by its newest run.
+func TestNewestRunOfACheckCounts(t *testing.T) {
+	required := []string{"test", "policy"}
+	at := func(name, conclusion, completed string) prCheck {
+		return prCheck{Name: name, Status: "COMPLETED", Conclusion: conclusion,
+			StartedAt: completed, CompletedAt: completed}
+	}
+	test := at("test", "SUCCESS", "2026-11-08T22:51:00Z")
+	for name, tc := range map[string]struct {
+		checks []prCheck
+		want   checkVerdict
+	}{
+		"failed, then passed": {[]prCheck{test, at("policy", "SUCCESS", "2026-11-09T11:20:20Z"), at("policy", "FAILURE", "2026-11-08T22:50:30Z")}, checkPassed},
+		"passed, then failed": {[]prCheck{test, at("policy", "SUCCESS", "2026-11-08T22:50:30Z"), at("policy", "FAILURE", "2026-11-09T11:20:20Z")}, checkFailing},
+		"passed, then running": {[]prCheck{test, at("policy", "SUCCESS", "2026-11-08T22:50:30Z"),
+			{Name: "policy", Status: "IN_PROGRESS", StartedAt: "2026-11-09T11:20:01Z"}}, checkPending},
+		"failed, then queued": {[]prCheck{test, at("policy", "FAILURE", "2026-11-08T22:50:30Z"), {Name: "policy", Status: "QUEUED"}}, checkPending},
+		"status contexts": {[]prCheck{test, {Context: "policy", State: "FAILURE", StartedAt: "2026-11-08T22:50:30Z"},
+			{Context: "policy", State: "SUCCESS", StartedAt: "2026-11-09T11:20:20Z"}}, checkPassed},
+	} {
+		if got := judgeChecks(tc.checks, required)["policy"]; got != tc.want {
+			t.Errorf("%s: policy judged %v, want %v", name, got, tc.want)
+		}
+	}
+	gate := []prCheck{test, at("policy", "FAILURE", "2026-11-08T22:50:30Z"), at("policy", "SUCCESS", "2026-11-09T11:20:20Z")}
+	if err := mergeGate(gate, required); err != nil {
+		t.Fatalf("a failure a newer run replaced still blocks the merge: %v", err)
+	}
+}
+
 func TestPolicyChecksCommitFormat(t *testing.T) {
 	c := watchConfig()
 	c.CommitFormat = "issue-prefix"
