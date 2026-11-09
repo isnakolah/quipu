@@ -185,11 +185,22 @@ func guideConfig(top string) model.Config {
 	return c
 }
 
+// committedGuideConfig is the config the committed handbook must describe: the
+// checkout's own, which is what TestGuidesInSync and CI read, and what is in
+// force once the change merges. A PR that changes a flag syncs its handbook to
+// match. Without a readable copy it falls back to the enforced config.
+func committedGuideConfig(top string) model.Config {
+	if c, err := loadConfigAt(top); err == nil {
+		return c
+	}
+	return guideConfig(top)
+}
+
 // syncGuides writes the generated copies under top and returns those changed.
 func syncGuides(top string, write bool) ([]string, error) {
 	read := readUnder(top)
 	var changed []string
-	for path, body := range guideFilesFor(guideConfig(top), top, read) {
+	for path, body := range guideFilesFor(committedGuideConfig(top), top, read) {
 		if current, _ := read(path); current == body {
 			continue
 		}
