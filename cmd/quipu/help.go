@@ -33,7 +33,7 @@ var subcommands = map[string][]string{
 
 // leafCommands is every top-level command without subcommands.
 var leafCommands = []string{"adopt", "check", "config", "context", "daemon", "digest", "doctor", "done", "guard", "guide", "hooks",
-	"import", "init", "move", "park", "propose", "protect", "ready", "start", "status", "triage", "validate",
+	"import", "init", "move", "park", "propose", "protect", "ready", "rerun", "start", "status", "triage", "validate",
 	"verify-commit", "version"}
 
 // commandPaths is every command a caller can run, subcommands included.
