@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,8 +115,8 @@ func TestVerifyLiveClearsAFinishedRecord(t *testing.T) {
 	a := writeRecord(t, f.a, record)
 	edit := map[string]any{"file_path": filepath.Join(f.a, "a.txt")}
 
-	if code := guardCodeLive(t, f.a, "Edit", edit, noNetwork); code != "lease-inactive" || !hasRecord(a) {
-		t.Fatalf("no answer: %q, record kept %v; want lease-inactive and the record kept", code, hasRecord(a))
+	if code := guardCodeLive(t, f.a, "Edit", edit, noNetwork); code != "lease-unverified" || !hasRecord(a) {
+		t.Fatalf("no answer: %q, record kept %v; want lease-unverified and the record kept", code, hasRecord(a))
 	}
 	merged := func(model.Config, int) (liveWork, error) {
 		return liveWork{Status: "Done", Holder: record.Holder, Branch: record.Branch, Expiry: record.Expires}, nil
@@ -132,6 +133,47 @@ func TestVerifyLiveClearsAFinishedRecord(t *testing.T) {
 	writeRecord(t, f.a, record)
 	if code := guardCodeLive(t, f.a, "Edit", edit, noNetwork); code != "lease-inactive" || hasRecord(a) {
 		t.Fatalf("expired on its branch: %q, record kept %v", code, hasRecord(a))
+	}
+}
+
+// The Epic #117 replay: GitHub rate-limited the account mid-work, and the
+// guard answered lease-inactive with advice to claim the work again, though the
+// lease was intact on GitHub and on disk.
+func TestRateLimitedLeaseCheckKeepsTheLease(t *testing.T) {
+	f := newGuardFixture(t)
+	now := time.Now().UTC()
+	record := leaseContext{Issue: 1, Holder: "claude/octo/aaaa1111", Branch: "001/a",
+		Expires: now.Add(time.Hour).Format(time.RFC3339), VerifiedAt: now.Add(-time.Hour).Format(time.RFC3339)}
+	a := writeRecord(t, f.a, record)
+	// What gh prints when the GraphQL budget is spent: the query, then GitHub's answer.
+	rateLimited := func(model.Config, int) (liveWork, error) {
+		return liveWork{}, errors.New(`gh api graphql -f query=query { repository(owner:"octo",name:"repo") { issue(number:1) { id } } }: ` +
+			`{"errors":[{"type":"RATE_LIMIT","code":"graphql_rate_limit","message":"API rate limit already exceeded for user ID 1."}]}` +
+			`gh: API rate limit already exceeded for user ID 1.`)
+	}
+	g := newGuard(f.a, now)
+	g.caller = fixtureCaller
+	g.live = rateLimited
+	raw, _ := json.Marshal(map[string]any{"file_path": filepath.Join(f.a, "a.txt")})
+	var d denial
+	if err := g.check(hookInput{ToolName: "Edit", Cwd: f.a, ToolInput: raw}); !errors.As(err, &d) {
+		t.Fatalf("rate-limited check: %v, want a denial", err)
+	}
+	if d.Code != "lease-unverified" {
+		t.Fatalf("rate-limited check: %q, want lease-unverified", d.Code)
+	}
+	text := d.Error()
+	for _, wrong := range []string{"lease-inactive", "quipu start", "cleared", "re-take", "query="} {
+		if strings.Contains(text, wrong) {
+			t.Errorf("denial says %q: %s", wrong, text)
+		}
+	}
+	if !strings.Contains(text, "could not reach GitHub") || !strings.Contains(text, "rate-limiting") {
+		t.Errorf("denial does not say GitHub could not be reached: %s", text)
+	}
+	kept, err := a.readLease()
+	if err != nil || kept != record {
+		t.Fatalf("record after a rate limit: %+v, %v; want it unchanged: %+v", kept, err, record)
 	}
 }
 

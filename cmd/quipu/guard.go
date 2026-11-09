@@ -36,6 +36,7 @@ var guardRules = []guardRule{
 	{"wrong-branch", "this worktree is not on its leased branch", "run `quipu start N --json` with the leased Issue; it switches to the branch. A record left over from other work clears itself once its lease is over, or now with `quipu lease release N --json`"},
 	{"other-worktree", "agents change only their own leased worktree, or, holding no lease themselves, a worktree leased to their own login", "work inside your own worktree; dispatch other work with `quipu start --next --worktree --json`"},
 	{"lease-inactive", "the live lease is expired, held by someone else, or no longer active", "run `quipu start N --json` to renew or re-take it; `quipu status --json` shows the holder. The leftover record is cleared, so nothing else is blocked"},
+	{"lease-unverified", "GitHub did not answer the lease check (a rate limit or no network), so the guard could not confirm the lease; the lease and its record are untouched", "nothing to claim or renew: retry the same call once GitHub answers (`gh api rate_limit` shows when a rate limit resets); reading, searching and tests need no check meanwhile"},
 	{"git-internals", "files under .git hold git and Quipu state (lease, identity)", "use git and quipu commands; never edit .git directly"},
 	{"quipu-config", "Quipu's config, workflows, and agent hooks are owner-only", "ask the owner in a comment on your PR"},
 	{"branch-change", "the work branch is chosen by quipu start", "run `quipu start N --json`; restore files with `git restore <file>` or `git checkout -- <file>`"},
@@ -464,8 +465,9 @@ func callerActor(now time.Time) (string, error) {
 func (g *guard) verifyLive(c model.Config, w worktree, lease leaseContext) error {
 	state, err := g.live(c, lease.Issue)
 	if err != nil {
-		// No answer proves nothing either way, so the record stays.
-		return deny("lease-inactive", "could not verify #"+fmt.Sprint(lease.Issue)+": "+err.Error())
+		// No answer proves nothing either way: the record stays, and the
+		// agent is not told to claim work it may still hold.
+		return deny("lease-unverified", fmt.Sprintf("could not reach GitHub to check #%d: %s", lease.Issue, unreachable(err)))
 	}
 	// Each answer below is GitHub saying the lease is over, so the record
 	// no longer means anything and is cleared.
@@ -488,6 +490,21 @@ func (g *guard) verifyLive(c model.Config, w worktree, lease leaseContext) error
 	lease.Expires, lease.VerifiedAt = state.Expiry, g.now.Format(time.RFC3339)
 	_ = w.addLease(lease)
 	return nil
+}
+
+// unreachable says briefly why GitHub gave no answer. gh's error repeats the
+// whole query, so only its tail, where GitHub's reason is, is kept.
+func unreachable(err error) string {
+	text := err.Error()
+	lower := strings.ToLower(text)
+	if strings.Contains(text, "RATE_LIMIT") || strings.Contains(lower, "rate limit") {
+		return "GitHub is rate-limiting this account"
+	}
+	tail := []rune(strings.TrimSpace(text))
+	if len(tail) > 200 {
+		return "..." + string(tail[len(tail)-200:])
+	}
+	return string(tail)
 }
 
 // leaseDead reports whether GitHub says lease is over: held by someone else,
