@@ -51,6 +51,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu propose --parent N --title ... --body-file FILE --patch DIFF --json` | the work is a change to an enforcement file you may not edit | the proposal with the exact patch, which the owner applies in one command |
 | `quipu digest --json` | to see the owner's day | `headline`, `merged` (Issue, PR, boundary), `owner_queue`, `patches`, `workflow_changes`; changes nothing |
+| `quipu rerun N --json` | a check on your PR failed but the cause is gone: flaky, or it ran before a fix such as the owner's label | `rerun` (the runs started again), `warnings`, `next`; only failed jobs rerun, at most 3 attempts per run |
 | `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
 | `quipu ready N --json`, `quipu move N ready --json`, `quipu move N backlog --json` | only where the config says `ready_by: agents`, and never for an Epic, Decision, or Gate | `status: "Ready"` or `"Backlog"` |
 | `quipu pr close PR --json` | a PR, by number or URL, that nothing needs any more: every Issue it references is Done or Cancelled, or has a different merged PR | `status: "Closed"`, `pr`; the Writer posts the reason on the PR. It refuses while an Issue the PR references is still in progress |
