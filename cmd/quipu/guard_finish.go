@@ -19,30 +19,32 @@ var wellKnownCleaners = setOf("cargo clean", "go clean", "make clean", "make dis
 
 // finishing returns dir's worktree while its tidy-up window is open and no
 // lease has replaced it.
-func (g *guard) finishing(dir string) (worktree, bool) {
+func (g *guard) finishing(dir string) (worktree, finishedRecord, bool) {
 	w, err := openWorktree(existingDir(dir))
 	if err != nil {
-		return worktree{}, false
+		return worktree{}, finishedRecord{}, false
 	}
 	if _, err := w.readLease(); err == nil {
-		return worktree{}, false
+		return worktree{}, finishedRecord{}, false
 	}
-	_, ok := w.readFinished(g.now)
-	return w, ok
+	f, ok := w.readFinished(g.now)
+	return w, f, ok
+}
+
+// sameCommand compares two command lines word by word.
+func sameCommand(a, b string) bool {
+	return b != "" && strings.Join(strings.Fields(a), " ") == strings.Join(strings.Fields(b), " ")
 }
 
 // cleanupLine reports whether line is the repository's configured cleanup.
 func cleanupLine(line, dir string) bool {
 	c, err := enforcedConfigIn(dir)
-	if err != nil || c.Cleanup == "" {
-		return false
-	}
-	return strings.Join(strings.Fields(line), " ") == strings.Join(strings.Fields(c.Cleanup), " ")
+	return err == nil && sameCommand(line, c.Cleanup)
 }
 
 // tidyUp reports whether one simple command only tidies a finished worktree.
 func (g *guard) tidyUp(args []shellArg, dir string) bool {
-	w, ok := g.finishing(dir)
+	w, finished, ok := g.finishing(dir)
 	if !ok {
 		return false
 	}
@@ -55,7 +57,7 @@ func (g *guard) tidyUp(args []shellArg, dir string) bool {
 	}
 	words[0] = filepath.Base(words[0])
 	line := strings.Join(words, " ")
-	if wellKnownCleaners[line] || cleanupLine(line, dir) {
+	if wellKnownCleaners[line] || sameCommand(line, finished.Cleanup) || cleanupLine(line, dir) {
 		return true
 	}
 	switch words[0] {
