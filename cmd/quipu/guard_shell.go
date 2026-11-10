@@ -30,7 +30,7 @@ type shellArg struct {
 func (g *guard) shell(command, dir string) error {
 	// The configured cleanup may be a compound line; in a finished worktree it
 	// passes whole.
-	if _, ok := g.finishing(dir); ok && cleanupLine(command, dir) {
+	if _, finished, ok := g.finishing(dir); ok && (sameCommand(command, finished.Cleanup) || cleanupLine(command, dir)) {
 		return nil
 	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")

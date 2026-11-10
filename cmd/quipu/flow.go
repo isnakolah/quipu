@@ -702,6 +702,8 @@ type flowResult struct {
 	Runner string `json:"runner,omitempty"`
 	// Reason says why a Busy result claimed nothing, when the machine is short.
 	Reason string `json:"reason,omitempty"`
+	// Cleanup is the repository's cleanup command, when done ran it.
+	Cleanup string `json:"cleanup,omitempty"`
 	// Warnings are things that went wrong without stopping the command.
 	Warnings []string `json:"warnings,omitempty"`
 	Next     string   `json:"next"`
@@ -847,11 +849,12 @@ func doneCommand(args []string) error {
 	// A rerun can find the work finished, by its own earlier request or by the
 	// Writer, and the worktree is still free to go.
 	var warnings []string
+	ranCleanup := false
 	if terminalIssueStatus(state.Status) {
-		warnings = w.release(number, cleanup, c.DoneGrace())
+		ranCleanup, warnings = w.releaseReport(number, cleanup, c.DoneGrace())
 	}
 	if state.Status == "Done" {
-		return doneEmit(doneResult(w, number, "", warnings), *asJSON)
+		return doneEmit(withCleanup(doneResult(w, number, "", warnings), cleanup, ranCleanup), *asJSON)
 	}
 	// Before any request: the Writer that answers it may be on that runner.
 	note := ensureRunner(c, here)
@@ -995,7 +998,30 @@ func doneCommand(args []string) error {
 		}
 		return err
 	}
-	return respond(doneResult(w, number, pull.URL, append(warnings, w.release(number, cleanup, c.DoneGrace())...)))
+	// The merge may have brought the cleanup with it: read it as merged.
+	cleanup = mergedCleanup(here, cleanup)
+	ran, more := w.releaseReport(number, cleanup, c.DoneGrace())
+	return respond(withCleanup(doneResult(w, number, pull.URL, append(warnings, more...)), cleanup, ran))
+}
+
+// mergedCleanup is the cleanup on the default branch after a merge, fetched
+// again so a cleanup the merged PR added counts, and so the guard's copy of
+// the branch is current for the tidy-up window. Without an answer it keeps
+// the cleanup read before the merge.
+func mergedCleanup(w worktree, before string) string {
+	c, source, err := loadEnforcedConfig(w, true)
+	if err != nil {
+		return before
+	}
+	return enforcedCleanup(c, source)
+}
+
+// withCleanup names the cleanup done ran, so the agent need not run it again.
+func withCleanup(result flowResult, cleanup string, ran bool) flowResult {
+	if ran {
+		result.Cleanup = cleanup
+	}
+	return result
 }
 
 // doneResult is what finished work reports, however it got there.

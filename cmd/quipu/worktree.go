@@ -276,6 +276,10 @@ type finishedRecord struct {
 	Issue  int    `json:"issue"`
 	Branch string `json:"branch"`
 	Until  string `json:"until"`
+	// Cleanup is the command quipu done resolved from the default branch as
+	// merged, which the holder may run here until the window closes even when
+	// the clone's copy of that branch is older.
+	Cleanup string `json:"cleanup,omitempty"`
 }
 
 // readFinished returns the worktree's finished record while its window is open.
@@ -320,24 +324,30 @@ func (w worktree) removeLease(number int) bool {
 // up (see guard_finish.go). A second call finds nothing to do. What cleanup
 // couldn't do is a warning: the work itself is finished.
 func (w worktree) release(number int, cleanup string, grace time.Duration) []string {
+	_, warnings := w.releaseReport(number, cleanup, grace)
+	return warnings
+}
+
+// releaseReport is release, also saying whether the cleanup ran here.
+func (w worktree) releaseReport(number int, cleanup string, grace time.Duration) (ran bool, warnings []string) {
 	lease, ok := w.leaseFor(number)
 	if !ok || !w.removeLease(number) {
-		return nil
+		return false, nil
 	}
 	// Other leaf Issues still being worked here keep the worktree and its build.
 	if _, err := w.readLeases(); err == nil {
-		return nil
+		return false, nil
 	}
 	if grace > 0 {
 		if raw, err := json.Marshal(finishedRecord{Issue: number, Branch: lease.Branch,
-			Until: time.Now().Add(grace).UTC().Format(time.RFC3339)}); err == nil {
+			Until: time.Now().Add(grace).UTC().Format(time.RFC3339), Cleanup: cleanup}); err == nil {
 			_ = os.WriteFile(filepath.Join(w.GitDir, finishedFileName), raw, 0600)
 		}
 	}
 	if cleanup == "" || !w.linked() {
-		return nil
+		return false, nil
 	}
-	return runCleanup(w.Top, cleanup)
+	return true, runCleanup(w.Top, cleanup)
 }
 
 // commonPath names a file shared by every worktree of the clone.
