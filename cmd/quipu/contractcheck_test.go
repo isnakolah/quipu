@@ -54,6 +54,9 @@ func TestStartRefusesABrokenContractAsNotReady(t *testing.T) {
 	}
 }
 
+// fixtureOpenIssues are the open Issues issueCreateFixture's duplicate check sees.
+var fixtureOpenIssues []model.OpenIssue
+
 // issueCreateFixture runs `quipu issue create` in a directory with this
 // repository's config, with GitHub replaced.
 func issueCreateFixture(t *testing.T, config []byte, body string) (output string, filed []issueFiling, err error) {
@@ -70,8 +73,9 @@ func issueCreateFixture(t *testing.T, config []byte, body string) (output string
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	previous := fileIssue
-	t.Cleanup(func() { fileIssue = previous })
+	previous, previousOpen := fileIssue, openIssuesForDuplicates
+	t.Cleanup(func() { fileIssue, openIssuesForDuplicates = previous, previousOpen })
+	openIssuesForDuplicates = func(model.Config) ([]model.OpenIssue, error) { return fixtureOpenIssues, nil }
 	fileIssue = func(_ model.Config, f issueFiling) (int, string, error) {
 		filed = append(filed, f)
 		return 42, "https://github.com/octo/repo/issues/42", nil

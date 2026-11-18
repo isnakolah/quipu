@@ -68,6 +68,10 @@ type Config struct {
 	// holder may still tidy it up: the cleanup, `git clean`, removing untracked
 	// build output. Commits and pushes stay denied. Unset means 60; 0 turns it off.
 	DoneGraceMinutes *int `yaml:"done_grace_minutes,omitempty" json:"done_grace_minutes,omitempty"`
+	// StaleReadyDays is how long Ready work may go untouched before the owner
+	// queue and the digest flag it. Unset means 30; 0 turns it off. Nothing is
+	// ever closed for being stale.
+	StaleReadyDays *int `yaml:"stale_ready_days,omitempty" json:"stale_ready_days,omitempty"`
 	// AutoReady moves work to Ready when its last blocker closes, unless it is
 	// labelled quipu:needs-owner. Decisions and Gates never move.
 	AutoReady bool `yaml:"auto_ready,omitempty" json:"auto_ready,omitempty"`
@@ -401,6 +405,9 @@ func globPattern(glob string) (*regexp.Regexp, error) {
 
 // ValidateAutonomy checks dispatch, scoped_checks and slow_checks.
 func (c Config) ValidateAutonomy() error {
+	if d := c.StaleReadyDays; d != nil && (*d < 0 || *d > 365) {
+		return fmt.Errorf("stale_ready_days must be between 0 and 365")
+	}
 	if g := c.DoneGraceMinutes; g != nil && (*g < 0 || *g > 24*60) {
 		return fmt.Errorf("done_grace_minutes must be between 0 and 1440")
 	}
@@ -580,6 +587,18 @@ func (c Config) ValidateLimits() error {
 		}
 	}
 	return nil
+}
+
+// DefaultStaleReadyDays is how long Ready work may sit untouched when none is set.
+const DefaultStaleReadyDays = 30
+
+// StaleReadyAfter is how long Ready work may go untouched before it is flagged;
+// zero means never.
+func (c Config) StaleReadyAfter() time.Duration {
+	if c.StaleReadyDays == nil {
+		return DefaultStaleReadyDays * 24 * time.Hour
+	}
+	return time.Duration(*c.StaleReadyDays) * 24 * time.Hour
 }
 
 // DefaultDoneGraceMinutes is the tidy-up window after done when none is set.

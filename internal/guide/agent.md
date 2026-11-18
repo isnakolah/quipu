@@ -67,7 +67,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu runner setup` | the owner asks how to set a runner up | the steps, printed for the owner |
 | `quipu doctor --json` | something seems misconfigured | a list of checks with fixes |
 | `quipu config --json` | to see what applies in this repository | each effective setting and where it came from |
-| `quipu context`, `quipu validate`, `quipu version` | inspecting | read-only reports |
+| `quipu context`, `quipu validate`, `quipu version` | inspecting | read-only reports; `validate --json` adds `contract_warnings`, each open Issue whose contract draws warnings, so you can improve it with `quipu issue edit` |
 
 Reading is always allowed: `git status/log/diff/show`, `gh issue|pr|run view/list`, `gh api` GET requests, `ls`, `cat`, `grep`, `rg`, `go test`, and the like.
 
@@ -189,6 +189,21 @@ quipu propose --parent N --title "Short title" --body-file proposal.md --json
 To propose a Decision or an Epic, write the body as its own contract, not as a work contract: `quipu issue create --kind decision --template` (or `--kind epic`) prints the empty contract and creates nothing. A Decision (`decision:v1`) asks one Question ending in `?`, gives its Context and Decision drivers, lists at least two Considered options each with its consequences, recommends one in Recommended option (the owner decides), and names the Required approver and the Issues it Blocks. An Epic (`epic:v1`) states its Outcome, Non-goals, Standing constraints, Exit criteria as `- [ ]` checkboxes, Expected children, and Owner approval.
 
 When the change is to one of Quipu's enforcement files, which you cannot edit, attach the exact patch: write a unified diff with repository paths (`a/PATH`, `b/PATH`), for example with `diff -u` on copies outside the repository, and add `--patch FILE`. The digest lists it for the owner as `quipu patch apply ID`. Never try to make the change another way.
+
+## Writing an Issue
+
+Whether you file it, propose it, or edit it, write each Issue so that a stranger could finish it from the body alone:
+
+- **Outcome** says what is true once the work is done, not what you will do.
+- **Excludes** names what you will not do, so the scope cannot creep.
+- **Each criterion** is one pass/fail check that anyone could run. Name the test or command when you can. Replace words that cannot be measured ("properly", "should work", "fast", "etc") with a number or something you can observe.
+- **Every Includes item** has a criterion that proves it.
+- **Keep it small:** at most 7 criteria and one PR a reviewer can read. If it is bigger, split it and propose the parts.
+- **A Defect** gives numbered steps to reproduce, expected, actual, environment, and how often it happens. Keep facts apart from guesses.
+- **A Decision** asks one question and gives at least two options, each with its consequences. Keep your recommendation separate (`quipu issue create --kind decision --template` prints the shape).
+- **Describe the problem, not the fix,** unless the fix is the agreed scope.
+- **Search before filing.** `quipu issue create` and `quipu propose` warn when an open Issue looks the same. Link dependencies as blockers, not in prose.
+- **The body is the current truth.** When scope changes, edit the body with `quipu issue edit`; comments are history. As you work, tick criteria with `quipu tick` so the body shows how far you got.
 
 ## Work contracts
 

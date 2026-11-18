@@ -174,6 +174,7 @@ var optionDefaults = map[string]any{
 	"merge_bypass_rulesets":            false,
 	"cleanup":                          "none",
 	"done_grace_minutes":               model.DefaultDoneGraceMinutes,
+	"stale_ready_days":                 model.DefaultStaleReadyDays,
 	"limits":                           "none",
 	"auto_ready":                       false,
 	"dispatch":                         "none",
