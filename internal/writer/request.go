@@ -51,6 +51,10 @@ type Request struct {
 	Assignee string `json:"assignee,omitempty"`
 	// Body is the Issue body an edit chore puts in place.
 	Body string `json:"body,omitempty"`
+	// Criterion is the acceptance criterion, counting from 1, a tick or untick sets.
+	Criterion int `json:"criterion,omitempty"`
+	// Note is what the agent says about a tick: what it did, what comes next.
+	Note string `json:"note,omitempty"`
 }
 
 // Import records where an imported Issue stood before Quipu. The Writer

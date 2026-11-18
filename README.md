@@ -29,6 +29,7 @@ Once a repository uses Quipu, work moves only through it:
 - **`main` is protected.** `quipu protect` requires the checks, blocks direct and force pushes, and allows only `NNN/slug` branches.
 
 - **Races are safe.** The Writer serializes every change. When two agents claim the same item, one wins, and `--next` moves the other on to the next item.
+- **Progress shows on the Issue.** Agents tick each acceptance criterion with `quipu tick N --criterion K` as they meet it, and Done ticks the rest, so work that stops part way shows where it got to. Quipu's comments lead with a plain-English line; their record sits hidden in the marker.
 - **Long work keeps its lease.** Leases last two hours; rerunning `quipu start N` renews one that has less than 30 minutes left.
 - **The owner decides.** Agents never create Epics or approve their own work. The owner makes work Ready, approves goals, and reviews.
 

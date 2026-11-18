@@ -22,6 +22,7 @@ quipu start --next --json           # claim the top Ready Issue; switches to its
 # implement the Issue's acceptance criteria; run the tests
 git add -A && git commit -m "feat: ..."
 git push -u origin NNN/short-description
+quipu tick N --criterion K --note "what you did; what comes next" --json   # each criterion, as it is met
 gh pr create --base main --head NNN/short-description --title "feat: ..." --body "Refs #N
 
 What changed and why."
@@ -30,6 +31,8 @@ quipu done N --json                 # moves the work to In review; the owner rev
 quipu done --evidence-template > ../evidence-N.md   # fill it in, outside the worktree
 quipu done N --json --evidence-file ../evidence-N.md
 ```
+
+**Tick each acceptance criterion as you meet it.** Once the change for a criterion is committed and pushed, run `quipu tick N --criterion K --json` (K counts from 1 down the Acceptance criteria list), with `--note` saying what you did and what comes next. The Writer ticks that box on the Issue and nothing else, so if your work stops part way, the next agent or the owner sees from the Issue which criteria are met. `--undo` unticks one you got wrong. Done ticks whatever is still open.
 
 Then go back to `quipu status --json`. If `start --next` returns `"status": "Idle"`, there is no Ready work: say so and stop. If it returns `"status": "Busy"`, other agents won every race: run it again.
 
@@ -51,6 +54,7 @@ Use the repository's default branch for `--base` (`main` here unless `quipu stat
 | `quipu propose --parent N --title ... --body-file FILE --json` | you found work that needs doing | a proposal comment for the owner |
 | `quipu propose --parent N --title ... --body-file FILE --patch DIFF --json` | the work is a change to an enforcement file you may not edit | the proposal with the exact patch, which the owner applies in one command |
 | `quipu digest --json` | to see the owner's day | `headline`, `merged` (Issue, PR, boundary), `owner_queue`, `patches`, `workflow_changes`; changes nothing |
+| `quipu tick N --criterion K --json` | a criterion's change is committed and pushed; add `--note TEXT`, or `--undo` to untick | `status: "Ticked"`, `next` with how many criteria are met; only the lease holder ticks, while the work is in progress or in review |
 | `quipu rerun N --json` | a check on your PR failed but the cause is gone: flaky, or it ran before a fix such as the owner's label | `rerun` (the runs started again), `warnings`, `next`; only failed jobs rerun, at most 3 attempts per run |
 | `quipu park N --on D --json` | you can't go on until the owner makes Decision #D | `status: "Blocked"`, `next` |
 | `quipu ready N --json`, `quipu move N ready --json`, `quipu move N backlog --json` | only where the config says `ready_by: agents`, and never for an Epic, Decision, or Gate | `status: "Ready"` or `"Backlog"` |
