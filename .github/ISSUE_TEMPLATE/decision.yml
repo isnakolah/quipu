@@ -1,21 +1,48 @@
 name: Decision
-description: Decision requiring named approver.
+description: A question the owner decides, with its options (decision:v1, after MADR).
 title: "DECISION — "
 labels: ["kind:decision"]
 body:
-  - type: textarea
+  - type: markdown
+    attributes:
+      value: "The owner decides by closing this Issue. Recommend an option below; the decision itself is the owner's."
+  - type: input
     id: question
-    attributes: {label: Decision question}
+    attributes: {label: Question, description: "The one thing to decide, ending in a question mark."}
+    validations: {required: true}
+  - type: textarea
+    id: context
+    attributes: {label: Context, description: "What makes the decision necessary now, and what is already known."}
+    validations: {required: true}
+  - type: textarea
+    id: drivers
+    attributes: {label: Decision drivers, description: "The forces and constraints any answer must weigh.", value: "- "}
     validations: {required: true}
   - type: textarea
     id: options
-    attributes: {label: Options}
+    attributes:
+      label: Considered options
+      description: "At least two options, each under its own #### heading with a Consequences list."
+      value: |
+        #### <!-- First option -->
+
+        Consequences:
+        - <!-- Good, because ... / Bad, because ... -->
+
+        #### <!-- Second option -->
+
+        Consequences:
+        - <!-- Good, because ... / Bad, because ... -->
     validations: {required: true}
   - type: textarea
-    id: consequences
-    attributes: {label: Consequences}
+    id: recommendation
+    attributes: {label: Recommended option, description: "The option you recommend and why. A recommendation only: the owner decides."}
     validations: {required: true}
   - type: input
     id: approver
-    attributes: {label: Required approver}
+    attributes: {label: Required approver, placeholder: "@owner"}
+    validations: {required: true}
+  - type: textarea
+    id: blocks
+    attributes: {label: Blocks, description: "The Issues waiting on this decision, or None: reason.", value: "- #"}
     validations: {required: true}

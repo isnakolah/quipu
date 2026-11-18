@@ -57,7 +57,6 @@ var vaguePatterns = func() []*regexp.Regexp {
 }()
 
 var (
-	htmlComment  = regexp.MustCompile(`(?s)<!--.*?-->`)
 	codeSpan     = regexp.MustCompile("`[^`\n]*`")
 	quoted       = regexp.MustCompile(`"[^"\n]*"|“[^”\n]*”`)
 	bulletPrefix = regexp.MustCompile(`^(?:[-*+](?:\s*\[[ xX]?\])?|\d+[.)])(?:\s+|$)`)
@@ -84,9 +83,9 @@ type section struct {
 	lines   []string
 }
 
-// contractSections splits a body into its "## " sections, keyed by the
+// workSections splits a work:v1 body into its "## " sections, keyed by the
 // heading's lower-case text. HTML comments, the marker included, are dropped.
-func contractSections(body string) map[string]section {
+func workSections(body string) map[string]section {
 	body = htmlComment.ReplaceAllString(strings.ReplaceAll(body, "\r\n", "\n"), "")
 	sections := map[string]section{}
 	key := ""
@@ -123,9 +122,9 @@ func itemText(line string) string {
 	}
 }
 
-// placeholder reports whether a line says nothing: a bare bullet or checkbox,
+// placeholderLine reports whether a line says nothing: a bare bullet or checkbox,
 // TBD, TODO, "...", "x", or the template's own text.
-func placeholder(line string) bool {
+func placeholderLine(line string) bool {
 	text := itemText(line)
 	lower := strings.ToLower(text)
 	if placeholderText[lower] || placeholderText[strings.TrimRight(lower, ".!")] {
@@ -139,7 +138,7 @@ func placeholder(line string) bool {
 func realLines(lines []string) []string {
 	var out []string
 	for _, line := range lines {
-		if !placeholder(line) {
+		if !placeholderLine(line) {
 			out = append(out, strings.TrimSpace(line))
 		}
 	}
@@ -162,7 +161,7 @@ func scopeParts(lines []string) (includes, excludes []string, ok bool) {
 			part, seenEx = &excludes, true
 			line = strings.TrimSpace(label[len("excludes:"):])
 		}
-		if part != nil && !placeholder(line) {
+		if part != nil && !placeholderLine(line) {
 			*part = append(*part, strings.TrimSpace(line))
 		}
 	}
@@ -173,7 +172,7 @@ func scopeParts(lines []string) (includes, excludes []string, ok bool) {
 func realCriteria(body string) []string {
 	var out []string
 	for _, c := range Criteria(body) {
-		if !placeholder(c.Text) {
+		if !placeholderLine(c.Text) {
 			out = append(out, c.Text)
 		}
 	}
@@ -190,7 +189,7 @@ func ValidateWorkContract(body string) error {
 	if !strings.Contains(body, WorkMarker) {
 		return fmt.Errorf("missing %s", WorkMarker)
 	}
-	sections := contractSections(body)
+	sections := workSections(body)
 	for _, heading := range RequiredWorkSections {
 		if _, ok := sections[strings.ToLower(strings.TrimPrefix(heading, "## "))]; !ok {
 			return fmt.Errorf("missing required section %q", heading)
@@ -240,7 +239,7 @@ func ValidateWorkContract(body string) error {
 func checkEvidence(lines []string) error {
 	for _, line := range lines {
 		if value, ok := cutPrefixFold(itemText(line), "Verification boundary:"); ok {
-			if placeholder(value) {
+			if placeholderLine(value) {
 				return fmt.Errorf("verification boundary has no value: pick one of local, CI, target host, provider, staging, production, release")
 			}
 			return nil
@@ -272,7 +271,7 @@ func ValidateWorkContractFor(kind, body string) error {
 // ValidateDefectContract needs numbered Steps to reproduce, Expected, Actual
 // and Environment sections, and Expected and Actual that differ.
 func ValidateDefectContract(body string) error {
-	sections := contractSections(body)
+	sections := workSections(body)
 	find := func(heading string) (section, bool) {
 		name := strings.ToLower(strings.TrimPrefix(heading, "## "))
 		if s, ok := sections[name]; ok {
@@ -292,7 +291,7 @@ func ValidateDefectContract(body string) error {
 	}
 	numbered := 0
 	for _, line := range steps.lines {
-		if numberedItem.MatchString(line) && !placeholder(line) {
+		if numberedItem.MatchString(line) && !placeholderLine(line) {
 			numbered++
 		}
 	}
@@ -352,7 +351,7 @@ func WorkContractWarnings(title, body string) []string {
 	if n := utf8.RuneCountInString(strings.TrimSpace(title)); n > MaxTitleLen {
 		add("title is %d characters; keep it to %d or fewer", n, MaxTitleLen)
 	}
-	sections := contractSections(body)
+	sections := workSections(body)
 	criteria := realCriteria(body)
 	if len(criteria) > MaxCriteria {
 		add("%d acceptance criteria; more than %d usually means the Issue should be split", len(criteria), MaxCriteria)

@@ -186,6 +186,8 @@ quipu propose --parent N --title "Short title" --body-file proposal.md --json
 
 `N` is the Epic or Story it belongs under. Explain the why, the scope, and the acceptance criteria, best as a work contract (below), so the owner can file it as it stands. Then carry on with your own work. The owner turns proposals into Issues and makes them Ready.
 
+To propose a Decision or an Epic, write the body as its own contract, not as a work contract: `quipu issue create --kind decision --template` (or `--kind epic`) prints the empty contract and creates nothing. A Decision (`decision:v1`) asks one Question ending in `?`, gives its Context and Decision drivers, lists at least two Considered options each with its consequences, recommends one in Recommended option (the owner decides), and names the Required approver and the Issues it Blocks. An Epic (`epic:v1`) states its Outcome, Non-goals, Standing constraints, Exit criteria as `- [ ]` checkboxes, Expected children, and Owner approval.
+
 When the change is to one of Quipu's enforcement files, which you cannot edit, attach the exact patch: write a unified diff with repository paths (`a/PATH`, `b/PATH`), for example with `diff -u` on copies outside the repository, and add `--patch FILE`. The digest lists it for the owner as `quipu patch apply ID`. Never try to make the change another way.
 
 ## Work contracts
