@@ -196,6 +196,12 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 	if err := updateLiveWork(c, state.ItemID, next); err != nil {
 		return rejectedReceipt(request, err)
 	}
+	ticked := ""
+	if next.Status == "Done" {
+		ticked = tickRemaining(state.Body, func(body string) error {
+			return github.NewClient().SetIssueBody(context.Background(), c.Owner, c.Repository, number, body)
+		})
+	}
 	if next.Status == "Done" || next.Status == "Cancelled" {
 		reason := "completed"
 		if next.Status == "Cancelled" {
@@ -214,7 +220,7 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, rece
 		receipt.Evidence = request.Evidence
 	}
 	if next.Status == "Done" {
-		receipt.Detail = "completion evidence verified; lifecycle state changed to Done and Issue closed"
+		receipt.Detail = "completion evidence verified; lifecycle state changed to Done and Issue closed" + ticked
 	}
 	if request.Action == "merge.queue" {
 		receipt.Detail = "merge queued; the Writer merges when the checks pass"
@@ -249,6 +255,20 @@ func workStateOf(state liveWork) writer.WorkState {
 // alreadyAppliedReceipt accepts a request whose work already matches, before the
 // fingerprint check that would call it stale. It carries no state snapshot, so
 // the last receipt that changed anything stays the record of what should be.
+// tickRemaining ticks every acceptance criterion still open when work reaches
+// Done, since its evidence covers them all. It never stops Done: a failure is
+// reported in the receipt instead.
+func tickRemaining(body string, setBody func(string) error) string {
+	done, total := model.CriteriaDone(body)
+	if done == total {
+		return ""
+	}
+	if err := setBody(model.TickAll(body)); err != nil {
+		return fmt.Sprintf("; the %d open acceptance criteria could not be ticked: %v", total-done, err)
+	}
+	return fmt.Sprintf("; ticked the %d acceptance criteria still open", total-done)
+}
+
 func alreadyAppliedReceipt(state liveWork, request writer.Request, receipts []writer.Receipt, now time.Time) (writer.Receipt, bool) {
 	if !writer.AlreadyApplied(workStateOf(state), request, receipts, now) {
 		return writer.Receipt{}, false

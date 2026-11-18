@@ -47,10 +47,17 @@ func requestSummary(r Request) string {
 		line = fmt.Sprintf("**Assign**: %s asks to assign %s.", who, code(r.Assignee))
 	case "edit":
 		line = fmt.Sprintf("**Edit**: %s asks to replace this Issue's contract.", who)
+	case "tick":
+		line = fmt.Sprintf("**Tick**: %s marks acceptance criterion %d met.", who, r.Criterion)
+	case "untick":
+		line = fmt.Sprintf("**Untick**: %s marks acceptance criterion %d not met.", who, r.Criterion)
 	case "pr.close":
 		line = fmt.Sprintf("**Close PR**: %s asks to close %s.", who, plain(r.PR))
 	default:
 		line = fmt.Sprintf("**%s**: request from %s.", plain(r.Action), who)
+	}
+	if note := plain(r.Note); note != "" {
+		line += "\n\n" + note
 	}
 	if r.Evidence != nil {
 		line += "\n\n" + evidenceSummary(*r.Evidence)
