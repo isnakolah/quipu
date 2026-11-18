@@ -78,10 +78,12 @@ func choreProblem(c model.Config, number int, state liveWork, r writer.Request) 
 		return fmt.Errorf("#%d is closed; chores change only open Issues", number)
 	}
 	if r.Action == "edit" {
-		if kind := labelKind(state.Labels); !editKinds[strings.ToLower(kind)] {
+		// Agents edit only work kinds, so this is work:v1; each kind meets its own.
+		kind := labelKind(state.Labels)
+		if !editKinds[strings.ToLower(kind)] {
 			return fmt.Errorf("agents edit only Stories, Tasks and Defects, and #%d is %s", number, kindName(kind))
 		}
-		if err := model.ValidateWorkContract(r.Body); err != nil {
+		if err := model.ValidateContract(kind, r.Body); err != nil {
 			return fmt.Errorf("the new body is not a valid work contract: %w", err)
 		}
 	}

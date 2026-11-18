@@ -12,7 +12,8 @@ You are the owner of a Quipu repository. You set goals, decide what is Ready, re
 | Send unstarted work back | `quipu move N backlog` (or `blocked`) | editing Status |
 | Archive finished or cancelled work | `quipu move N archived` | editing Status |
 | Create work | `quipu issue create --kind story --area AREA --parent EPIC --title TITLE --body-file CONTRACT.md --apply` | "New issue" without a parent and contract |
-| Create a goal | `quipu issue create --kind epic --area AREA --approved-by @you --title TITLE --body-file EPIC.md --apply` | |
+| Create a goal | `quipu issue create --kind epic --area AREA --approved-by @you --title TITLE --body-file EPIC.md --apply` (start EPIC.md from `quipu issue create --kind epic --template`) | |
+| Ask for a decision | `quipu issue create --kind decision --area AREA --parent EPIC --title TITLE --body-file DECISION.md --apply` (start DECISION.md from `quipu issue create --kind decision --template`) | a Decision written as a work contract |
 | Cancel work | close the Issue as **not planned** | closing it as completed |
 | Finish an Epic, Decision, or Gate | close it (completed) | |
 | Finish a Story, Task, Defect, or Contract | merge its PR; the agent runs `quipu done N` | closing the Issue |
@@ -138,7 +139,14 @@ It isn't installed as a service. To keep it running, use `launchd` or `systemd`,
 
 ## Day to day
 
-**Planning.** Goals are Epics that you create and approve. Work is a Story, Task, Defect, or Contract under a parent, with a work contract (Outcome, Scope with Includes and Excludes, Acceptance criteria, Required evidence with a Verification boundary, Documentation impact, Source and relationships). Agents suggest work with `quipu propose`, which posts a comment on the parent; turn the ones you want into Issues.
+**Planning.** Goals are Epics that you create and approve. Work is a Story, Task, Defect, or Contract under a parent, with a work contract (Outcome, Scope with Includes and Excludes, Acceptance criteria, Required evidence with a Verification boundary, Documentation impact, Source and relationships). Decisions and Epics have contracts of their own, checked by `quipu issue create`, `quipu issue edit`, and `quipu validate`:
+
+- **Decision (`<!-- decision:v1 -->`, after [MADR](https://adr.github.io/madr/)):** `## Question` (ending in `?`), `## Context`, `## Decision drivers`, `## Considered options` (at least two, each under its own heading with a `Consequences:` list, or MADR's `Good, because` / `Bad, because` bullets), `## Recommended option` (the author's recommendation, kept apart from your decision, which you make by closing the Decision), `## Required approver`, and `## Blocks` (the Issues waiting on it, or `None: reason`).
+- **Epic (`<!-- epic:v1 -->`):** `## Outcome`, `## Non-goals`, `## Standing constraints`, `## Exit criteria` (as `- [ ]` checkboxes), `## Expected children`, and `## Owner approval`.
+
+Every section must say something; HTML comments, empty list items, and an Issue form's `_No response_` count as empty. `quipu issue create --kind decision --template` (or `--kind epic`) prints the empty contract to fill in, and it fails validation until you do. The Decision and Epic Issue forms produce bodies that pass without the marker: a form cannot add one, so a body whose fields are the contract's sections as `### ` headings is accepted as the form's rendering. Decisions and Epics filed before these contracts are left as they are: `quipu validate` still checks a Decision written as a work contract as one, and does not check an Epic that declares no contract. Gates keep the work contract.
+
+Agents suggest work with `quipu propose`, which posts a comment on the parent; turn the ones you want into Issues.
 
 **Making work Ready.** `quipu ready N`. Agents take the highest-priority Ready, unblocked leaf with `quipu start --next`.
 

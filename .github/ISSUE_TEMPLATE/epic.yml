@@ -1,5 +1,5 @@
 name: Epic
-description: Owner-approved long-lived outcome. Never implementation leaf.
+description: Owner-approved long-lived outcome (epic:v1). Never implementation leaf.
 title: "EPIC — "
 labels: ["kind:epic"]
 body:
@@ -20,7 +20,7 @@ body:
     validations: {required: true}
   - type: textarea
     id: exit
-    attributes: {label: Exit criteria}
+    attributes: {label: Exit criteria, description: "One checkbox per observable condition.", value: "- [ ] "}
     validations: {required: true}
   - type: textarea
     id: children
