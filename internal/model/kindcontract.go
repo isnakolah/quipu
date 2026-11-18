@@ -179,7 +179,7 @@ func ValidateEpicContract(body string) error {
 			problems = append(problems, fmt.Sprintf("section %q is empty", name))
 		}
 	}
-	if meaningful(sections["Exit criteria"]) != "" && !checkbox.MatchString(stripComments(sections["Exit criteria"])) {
+	if meaningful(sections["Exit criteria"]) != "" && !exitCheckbox.MatchString(stripComments(sections["Exit criteria"])) {
 		problems = append(problems, `Exit criteria must be checkboxes, one "- [ ] criterion" per line`)
 	}
 	return joinProblems(problems)
@@ -188,7 +188,7 @@ func ValidateEpicContract(body string) error {
 var (
 	headingLine  = regexp.MustCompile(`^(#{2,6})\s+(.*?)\s*#*\s*$`)
 	htmlComment  = regexp.MustCompile(`(?s)<!--.*?-->`)
-	checkbox     = regexp.MustCompile(`(?m)^\s*[-*]\s+\[[ xX]\]\s+\S`)
+	exitCheckbox = regexp.MustCompile(`(?m)^\s*[-*]\s+\[[ xX]\]\s+\S`)
 	placeholder  = regexp.MustCompile(`(?m)^\s*(?:[-*](?:\s+\[[ xX]\])?|[-*]\s+#|_No response_)?\s*$`)
 	consequences = regexp.MustCompile(`(?im)^[\s#*>_-]*consequences\b[*_]*\s*:?[*_]*\s*(.*)$`)
 	madrBullet   = regexp.MustCompile(`(?im)^\s*[-*]\s+(?:good|bad|neutral),\s+because\s+\S`)
