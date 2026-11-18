@@ -451,6 +451,24 @@ type ownerItem struct {
 	Reason string `json:"reason"`
 }
 
+// withStaleReady adds Ready work nobody has touched for after to the owner
+// queue, so the owner can drop it, rewrite it, or leave it. Nothing closes it.
+func withStaleReady(queue []ownerItem, items []statusItem, after time.Duration, now time.Time) []ownerItem {
+	if after <= 0 {
+		return queue
+	}
+	for _, item := range items {
+		if item.Status != "Ready" || item.UpdatedAt.IsZero() || now.Sub(item.UpdatedAt) < after {
+			continue
+		}
+		days := int(now.Sub(item.UpdatedAt).Hours() / 24)
+		queue = append(queue, ownerItem{Number: item.Number, Title: item.Title,
+			Reason: fmt.Sprintf("Ready but untouched for %d days; still wanted? Rewrite it, move it to Backlog, or close it as not planned", days)})
+	}
+	sort.SliceStable(queue, func(i, j int) bool { return queue[i].Number < queue[j].Number })
+	return queue
+}
+
 func issueList(numbers []int) string {
 	names := make([]string, len(numbers))
 	for i, number := range numbers {

@@ -385,7 +385,7 @@ func boardOwnerQueue(c model.Config, now time.Time) ([]ownerItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ownerQueue(items, c.AgentsMerge() || c.MergesInQueue(), now), nil
+	return withStaleReady(ownerQueue(items, c.AgentsMerge() || c.MergesInQueue(), now), items, c.StaleReadyAfter(), now), nil
 }
 
 func digestCommand(args []string) error {

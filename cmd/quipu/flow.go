@@ -43,6 +43,8 @@ type statusItem struct {
 	ChildTotal     int    `json:"child_total,omitempty"`
 	ChildCompleted int    `json:"child_completed,omitempty"`
 	NeedsTriage    bool   `json:"-"`
+	// UpdatedAt is when the Issue last changed, which tells stale Ready work.
+	UpdatedAt time.Time `json:"-"`
 }
 
 type statusReport struct {
@@ -84,7 +86,7 @@ func statusCommand(args []string) error {
 		return err
 	}
 	report := buildStatusReport(c.Owner+"/"+c.Repository, items, time.Now())
-	report.OwnerQueue = ownerQueue(items, c.AgentsMerge() || c.MergesInQueue(), time.Now())
+	report.OwnerQueue = withStaleReady(ownerQueue(items, c.AgentsMerge() || c.MergesInQueue(), time.Now()), items, c.StaleReadyAfter(), time.Now())
 	actor := ""
 	if here, err := currentWorktree(); err == nil {
 		actor, _ = resolveActor(here, "", 0)
@@ -114,7 +116,7 @@ func statusCommand(args []string) error {
 }
 
 func loadStatusItems(c model.Config) ([]statusItem, error) {
-	output, err := issuePages(c, "states:OPEN", `number title parent { number } blockedBy(first:100) { nodes { number state } }
+	output, err := issuePages(c, "states:OPEN", `number title updatedAt parent { number } blockedBy(first:100) { nodes { number state } }
 subIssuesSummary { total completed }
 labels(first:20) { nodes { name } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
@@ -129,9 +131,10 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 			Repository struct {
 				Issues struct {
 					Nodes []struct {
-						Number int    `json:"number"`
-						Title  string `json:"title"`
-						Parent *struct {
+						Number    int       `json:"number"`
+						Title     string    `json:"title"`
+						UpdatedAt time.Time `json:"updatedAt"`
+						Parent    *struct {
 							Number int `json:"number"`
 						} `json:"parent"`
 						BlockedBy struct {
@@ -175,7 +178,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 	}
 	items := make([]statusItem, 0, len(response.Data.Repository.Issues.Nodes))
 	for _, node := range response.Data.Repository.Issues.Nodes {
-		item := statusItem{Number: node.Number, Title: node.Title, ChildTotal: node.SubIssuesSummary.Total, ChildCompleted: node.SubIssuesSummary.Completed}
+		item := statusItem{Number: node.Number, Title: node.Title, ChildTotal: node.SubIssuesSummary.Total, ChildCompleted: node.SubIssuesSummary.Completed, UpdatedAt: node.UpdatedAt}
 		if node.Parent != nil {
 			item.ParentNumber = node.Parent.Number
 		}
@@ -1105,6 +1108,7 @@ func proposeCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	warnings = append(warnings, duplicateWarnings(c, *title, *body)...)
 	here, err := currentWorktree()
 	if err != nil {
 		return err
@@ -1123,6 +1127,30 @@ func proposeCommand(args []string) error {
 		next = fmt.Sprintf("The digest lists the patch for the owner as quipu patch apply %d. Continue your current work, or run quipu start --next --json.", posted.ID)
 	}
 	return printFlowResult(withWarnings(flowResult{Issue: *parent, Status: "Proposed", Next: next}, warnings, *asJSON), *asJSON)
+}
+
+// openIssuesForDuplicates lists the repository's open Issues for the duplicate
+// check; tests stand in for GitHub.
+var openIssuesForDuplicates = func(c model.Config) ([]model.OpenIssue, error) {
+	output, err := ghOutput("issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "open", "--limit", "1000", "--json", "number,title,body")
+	if err != nil {
+		return nil, err
+	}
+	var open []model.OpenIssue
+	if err := json.Unmarshal(output, &open); err != nil {
+		return nil, err
+	}
+	return open, nil
+}
+
+// duplicateWarnings warns about open Issues that look like the same work. A
+// failed lookup is a warning too: it never stops filing.
+func duplicateWarnings(c model.Config, title, body string) []string {
+	open, err := openIssuesForDuplicates(c)
+	if err != nil {
+		return []string{"could not check open Issues for duplicates: " + err.Error()}
+	}
+	return model.DuplicateWarnings(model.SimilarIssues(title, body, open))
 }
 
 // proposalWarnings checks a proposal written as a work contract by the rules

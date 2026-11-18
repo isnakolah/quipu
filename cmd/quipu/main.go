@@ -228,6 +228,7 @@ func issueCommand(args []string) error {
 	if !map[string]bool{"P0": true, "P1": true, "P2": true, "P3": true}[*priority] {
 		return errors.New("priority must be P0, P1, P2, or P3")
 	}
+	warnings = append(warnings, duplicateWarnings(c, *title, string(body))...)
 	number, issueURL, err := fileIssue(c, issueFiling{Title: *title, Kind: *kind, BodyFile: *bodyFile, Parent: *parent, Area: *area, Priority: *priority, ApprovedBy: *approvedBy})
 	if err != nil {
 		return err
@@ -853,7 +854,7 @@ func validateCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := issuePages(c, "states:[OPEN,CLOSED]", `id number body state parent { id }
+	output, err := issuePages(c, "states:[OPEN,CLOSED]", `id number title body state parent { id }
 blockedBy(first:100) { nodes { id } }
 labels(first:100) { nodes { name } }
 comments(first:100) { nodes { body author { login } } }
@@ -871,6 +872,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 					Nodes []struct {
 						ID     string `json:"id"`
 						Number int    `json:"number"`
+						Title  string `json:"title"`
 						Body   string `json:"body"`
 						State  string `json:"state"`
 						Parent *struct {
@@ -919,6 +921,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 		return err
 	}
 	issues := make([]model.Issue, 0, len(response.Data.Repository.Issues.Nodes))
+	contractWarnings := []issueWarnings{}
 	for _, node := range response.Data.Repository.Issues.Nodes {
 		kind, area := "", ""
 		labels := make([]string, 0, len(node.Labels.Nodes))
@@ -962,6 +965,9 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 		for _, blocker := range node.BlockedBy.Nodes {
 			blockers = append(blockers, blocker.ID)
 		}
+		if w := openContractWarnings(node.State, kind, node.Title, node.Body); len(w) > 0 {
+			contractWarnings = append(contractWarnings, issueWarnings{Issue: node.Number, Warnings: w})
+		}
 		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Labels: labels, EpicApproved: epicApprovalEvidence(c.Owner, node.Comments.Nodes), Body: node.Body})
 	}
 	err = model.ValidateGraph(issues)
@@ -971,18 +977,43 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 			openIssues++
 		}
 	}
-	report := map[string]any{"repository": c.Owner + "/" + c.Repository, "open_issues": openIssues, "valid": err == nil}
+	report := map[string]any{"repository": c.Owner + "/" + c.Repository, "open_issues": openIssues, "valid": err == nil, "contract_warnings": contractWarnings}
 	if *asJSON {
 		if err != nil {
 			report["error"] = err.Error()
 		}
 		return printValue(report, true)
 	}
+	printIssueWarnings(contractWarnings)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("valid: %d open Issues\n", openIssues)
 	return nil
+}
+
+// issueWarnings are the contract warnings of one open Issue, so weak bodies
+// on the board can be improved over time.
+type issueWarnings struct {
+	Issue    int      `json:"issue"`
+	Warnings []string `json:"warnings"`
+}
+
+// openContractWarnings are the warnings an open work:v1 Issue's contract
+// draws; closed Issues and other contracts draw none.
+func openContractWarnings(state, kind, title, body string) []string {
+	if state == "CLOSED" || model.ContractName(kind) != "work:v1" || !strings.Contains(body, model.WorkMarker) {
+		return nil
+	}
+	return model.WorkContractWarnings(title, body)
+}
+
+func printIssueWarnings(all []issueWarnings) {
+	for _, iw := range all {
+		for _, w := range iw.Warnings {
+			fmt.Fprintf(os.Stderr, "Warning: #%d: %s\n", iw.Issue, w)
+		}
+	}
 }
 
 func epicApprovalEvidence(owner string, comments []struct {
