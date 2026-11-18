@@ -70,6 +70,8 @@ func dispatch(args []string) error {
 		return parkCommand(args[1:])
 	case "rerun":
 		return rerunCommand(args[1:])
+	case "tick":
+		return tickCommand(args[1:])
 	case "done":
 		return doneCommand(args[1:])
 	case "check":

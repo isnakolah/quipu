@@ -68,7 +68,7 @@ func choreProblem(c model.Config, number int, state liveWork, r writer.Request) 
 	if err := writer.CheckChore(workStateOf(state), r); err != nil {
 		return err
 	}
-	if r.Action == "pr.close" {
+	if r.Action == "pr.close" || r.Action == "tick" || r.Action == "untick" {
 		return nil
 	}
 	if !c.AgentsCreateIssues() {
@@ -115,6 +115,19 @@ func applyChore(c model.Config, number int, state liveWork, r writer.Request, fi
 			return rejectedReceipt(r, err)
 		}
 		detail = "Issue body replaced with a valid work contract"
+	case "tick", "untick":
+		done := r.Action == "tick"
+		body, err := model.TickCriterion(state.Body, r.Criterion, done)
+		if err != nil {
+			return rejectedReceipt(r, err)
+		}
+		criteria := model.Criteria(state.Body)
+		if body != state.Body {
+			if err := ops.edit(number, body); err != nil {
+				return rejectedReceipt(r, err)
+			}
+		}
+		detail = tickDetail(r, criteria[r.Criterion-1].Text, body)
 	case "pr.close":
 		view, err := ops.viewPR(r.PR)
 		if err != nil {
@@ -136,6 +149,20 @@ func applyChore(c model.Config, number int, state liveWork, r writer.Request, fi
 		detail = fmt.Sprintf("closed PR #%d: %s", view.Number, reason)
 	}
 	return writer.Receipt{RequestID: r.ID, Fingerprint: fingerprint, Result: "accepted", Detail: detail, At: time.Now().UTC()}
+}
+
+// tickDetail says which criterion a tick set, how many are met now, and the note.
+func tickDetail(r writer.Request, text, body string) string {
+	verb := "met"
+	if r.Action == "untick" {
+		verb = "not met"
+	}
+	done, total := model.CriteriaDone(body)
+	detail := fmt.Sprintf("criterion %d %s (%d of %d met): %s", r.Criterion, verb, done, total, text)
+	if note := strings.TrimSpace(r.Note); note != "" {
+		detail += "; note: " + note
+	}
+	return detail
 }
 
 func prCloseComment(actor, reason string) string {

@@ -24,6 +24,7 @@ type fakeChores struct {
 	pr     prView
 	merged map[int][]string
 	writes []string
+	body   string
 }
 
 func (f *fakeChores) ops() choreOps {
@@ -40,6 +41,7 @@ func (f *fakeChores) ops() choreOps {
 		},
 		edit: func(number int, body string) error {
 			f.writes = append(f.writes, "edit")
+			f.body = body
 			return nil
 		},
 		viewPR:    func(string) (prView, error) { return f.pr, nil },
