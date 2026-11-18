@@ -79,10 +79,8 @@ func ValidateGraph(issues []Issue) error {
 		if issue.Kind != "Epic" && live && issue.ParentID == "" {
 			problems.add("issue #%d has no parent", issue.Number)
 		}
-		if issue.Kind != "Epic" {
-			if err := ValidateWorkContract(issue.Body); err != nil {
-				problems.add("issue #%d: %v", issue.Number, err)
-			}
+		if err := boardContractProblem(issue.Kind, issue.Body); err != nil {
+			problems.add("issue #%d: %v", issue.Number, err)
 		}
 		if issue.Status == "" {
 			problems.add("issue #%d has no Project Status", issue.Number)

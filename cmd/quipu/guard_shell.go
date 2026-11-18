@@ -1140,6 +1140,8 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 		return nil
 	case sub == "triage" && agentsTriage(dir):
 		return nil
+	case sub == "issue" && len(rest) > 1 && rest[1].s == "create" && templateOnly(rest[2:]):
+		return nil
 	case sub == "issue" && len(rest) > 1 && rest[1].s == "create":
 		c, err := enforcedConfigIn(dir)
 		if err != nil {
@@ -1155,6 +1157,28 @@ func (g *guard) quipu(rest []shellArg, dir string) error {
 	default:
 		return deny("quipu-admin", "quipu "+sub)
 	}
+}
+
+// templateOnly reports whether `quipu issue create` was given only --template
+// and --kind, which print an empty contract and create nothing.
+func templateOnly(args []shellArg) bool {
+	template := false
+	for i := 0; i < len(args); i++ {
+		if !args[i].ok || !strings.HasPrefix(args[i].s, "-") {
+			return false
+		}
+		name, _, inline := strings.Cut(strings.TrimLeft(args[i].s, "-"), "=")
+		switch {
+		case name == "template" && !inline:
+			template = true
+		case name == "kind" && inline:
+		case name == "kind" && i+1 < len(args) && args[i+1].ok:
+			i++
+		default:
+			return false
+		}
+	}
+	return template
 }
 
 // quipuHelp reports whether the literal arguments only ask quipu for help.

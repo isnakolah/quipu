@@ -169,10 +169,22 @@ func issueCommand(args []string) error {
 	area := fs.String("area", "stable", "configured area")
 	priority := fs.String("priority", "P2", "P0|P1|P2|P3")
 	approvedBy := fs.String("approved-by", "", "owner approval identity; required for Epic")
+	template := fs.Bool("template", false, "print the empty contract for --kind decision or epic, and create nothing")
 	apply := applyFlag(fs)
 	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
+	}
+	if *template {
+		if *apply {
+			return errors.New("--template prints a contract and creates nothing; drop --apply")
+		}
+		body, err := model.ContractTemplate(*kind)
+		if err != nil {
+			return err
+		}
+		fmt.Print(body)
+		return nil
 	}
 	if !*apply {
 		return errors.New("issue creation requires --apply")
@@ -188,10 +200,10 @@ func issueCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := model.ValidateContract(*kind, string(body)); err != nil {
+		return fmt.Errorf("%s Issue body does not satisfy the %s contract: %w", *kind, model.ContractName(*kind), err)
+	}
 	if *kind != "epic" {
-		if err := model.ValidateWorkContract(string(body)); err != nil {
-			return fmt.Errorf("work Issue body does not satisfy work:v1 contract: %w", err)
-		}
 		if *parent < 1 {
 			return errors.New("non-Epic Issue creation requires --parent")
 		}
