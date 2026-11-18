@@ -128,7 +128,7 @@ func TestDefectsFromSurvivesConfigRewrite(t *testing.T) {
 func TestDefectBodyIsAContractAndDedupes(t *testing.T) {
 	run := failedRun()
 	body := defectBody(run, mergedPull{URL: "https://github.com/o/r/pull/7"}, 9)
-	if err := model.ValidateWorkContract(body); err != nil {
+	if err := model.ValidateWorkContractFor("defect", body); err != nil {
 		t.Fatalf("the Defect must be valid Ready work: %v\n%s", err, body)
 	}
 	for _, want := range []string{run.URL, "pull/7 for #9", "Verification boundary: CI"} {

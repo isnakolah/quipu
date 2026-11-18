@@ -211,7 +211,7 @@ func TestFormRenderedBodiesNeedNoMarker(t *testing.T) {
 }
 
 func TestBoardKeepsTheCheckOlderIssuesHad(t *testing.T) {
-	work := WorkBody("x", "x", "x", "x", "x", "None: x", "x", "CI")
+	work := validBody
 	cases := []struct {
 		kind, body string
 		valid      bool

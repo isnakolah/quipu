@@ -38,7 +38,8 @@ func ContractName(kind string) string {
 }
 
 // ValidateContract checks body against the contract of its kind: decision:v1
-// for a Decision, epic:v1 for an Epic, and work:v1 for every other kind.
+// for a Decision, epic:v1 for an Epic, and work:v1 for every other kind, with
+// a Defect's reproduction on top.
 func ValidateContract(kind, body string) error {
 	switch strings.ToLower(kind) {
 	case "decision":
@@ -46,7 +47,7 @@ func ValidateContract(kind, body string) error {
 	case "epic":
 		return ValidateEpicContract(body)
 	}
-	return ValidateWorkContract(body)
+	return ValidateWorkContractFor(kind, body)
 }
 
 // boardContractProblem is the contract check for an Issue already on the board.

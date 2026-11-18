@@ -251,7 +251,7 @@ func workProblems(number int, state liveWork) []string {
 	if state.ParentID == "" {
 		add("#%d has no native parent. Fix: the owner links it under its Epic or Story", number)
 	}
-	if err := model.ValidateWorkContract(state.Body); err != nil {
+	if err := model.ValidateWorkContractFor(state.Kind, state.Body); err != nil {
 		add("#%d work contract invalid: %v", number, err)
 	}
 	for _, blocker := range state.Blockers {

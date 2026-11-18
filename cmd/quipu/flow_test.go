@@ -324,7 +324,7 @@ func TestReconcileIssuesPathSince(t *testing.T) {
 }
 
 func TestNextWorkOrdersByPriorityThenNumber(t *testing.T) {
-	contract := "<!-- work:v1 -->\n## Outcome\n## Scope\nIncludes:\nExcludes:\n## Acceptance criteria\n## Required evidence\nVerification boundary: CI\n## Documentation impact\n## Source and relationships\n"
+	contract := testContract
 	item := func(number int, priority string) workCandidate {
 		return workCandidate{readyWork: readyWork{Number: number, Priority: priority, Kind: "Task"}, Body: contract, ParentID: "P", Status: "Ready"}
 	}

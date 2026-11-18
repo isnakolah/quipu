@@ -97,7 +97,7 @@ func autoReadyProblem(state liveWork, inProject bool) string {
 		return "the owner decides this kind"
 	case state.ParentID == "" || state.Children > 0:
 		return "not startable"
-	case model.ValidateWorkContract(state.Body) != nil:
+	case model.ValidateWorkContractFor(labelKind(state.Labels), state.Body) != nil:
 		return "no valid work contract"
 	}
 	for _, label := range state.Labels {

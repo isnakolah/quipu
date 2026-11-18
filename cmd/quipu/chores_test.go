@@ -118,13 +118,14 @@ func TestIssueEditStillValidatesTheContract(t *testing.T) {
 		r     writer.Request
 		want  string
 	}{
-		"not a contract":  {story, writer.Request{Action: "edit", Body: "just words"}, "not a valid work contract"},
-		"an Epic":         {liveWork{IssueState: "OPEN", Labels: []string{"kind:epic"}}, writer.Request{Action: "edit", Body: testContract}, "only Stories, Tasks and Defects"},
-		"a Decision":      {liveWork{IssueState: "OPEN", Labels: []string{"kind:decision"}}, writer.Request{Action: "edit", Body: testContract}, "only Stories, Tasks and Defects"},
-		"closed":          {liveWork{IssueState: "CLOSED", Labels: []string{"kind:story"}}, writer.Request{Action: "edit", Body: testContract}, "closed"},
-		"held by another": {held, writer.Request{Action: "edit", Body: testContract}, "held by"},
-		"assign closed":   {liveWork{IssueState: "CLOSED"}, writer.Request{Action: "assign", Assignee: "octo"}, "closed"},
-		"bad login":       {story, writer.Request{Action: "assign", Assignee: "not a login"}, "GitHub login"},
+		"not a contract":                    {story, writer.Request{Action: "edit", Body: "just words"}, "not a valid work contract"},
+		"a Defect without its reproduction": {liveWork{IssueState: "OPEN", Labels: []string{"kind:defect"}}, writer.Request{Action: "edit", Body: testContract}, "Steps to reproduce"},
+		"an Epic":                           {liveWork{IssueState: "OPEN", Labels: []string{"kind:epic"}}, writer.Request{Action: "edit", Body: testContract}, "only Stories, Tasks and Defects"},
+		"a Decision":                        {liveWork{IssueState: "OPEN", Labels: []string{"kind:decision"}}, writer.Request{Action: "edit", Body: testContract}, "only Stories, Tasks and Defects"},
+		"closed":                            {liveWork{IssueState: "CLOSED", Labels: []string{"kind:story"}}, writer.Request{Action: "edit", Body: testContract}, "closed"},
+		"held by another":                   {held, writer.Request{Action: "edit", Body: testContract}, "held by"},
+		"assign closed":                     {liveWork{IssueState: "CLOSED"}, writer.Request{Action: "assign", Assignee: "octo"}, "closed"},
+		"bad login":                         {story, writer.Request{Action: "assign", Assignee: "not a login"}, "GitHub login"},
 	} {
 		f := &fakeChores{}
 		got := writerAnswers(t, on, tc.state, tc.r, f)

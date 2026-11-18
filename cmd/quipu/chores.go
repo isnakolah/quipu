@@ -323,6 +323,7 @@ func issueEditCommand(args []string) error {
 	if err := model.ValidateWorkContract(body); err != nil {
 		return fmt.Errorf("the new body is not a valid work contract: %w", err)
 	}
+	warnings := model.WorkContractWarnings("", body)
 	if err := writer.CheckChore(writer.WorkState{}, writer.Request{Action: "edit", Body: body}); err != nil {
 		return err
 	}
@@ -340,7 +341,7 @@ func issueEditCommand(args []string) error {
 	if err := sendAndWait(c, number, actor, writer.Request{Action: "edit", Body: body}, *wait); err != nil {
 		return err
 	}
-	return printFlowResult(flowResult{Issue: number, Status: "Edited", Next: fmt.Sprintf("#%d has its new body. Carry on with your own work.", number)}, *asJSON)
+	return printFlowResult(withWarnings(flowResult{Issue: number, Status: "Edited", Next: fmt.Sprintf("#%d has its new body. Carry on with your own work.", number)}, warnings, *asJSON), *asJSON)
 }
 
 func prCloseCommand(args []string) error {

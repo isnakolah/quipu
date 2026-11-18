@@ -166,7 +166,7 @@ func (m importManifest) validate(c model.Config) error {
 		}
 		// Open work must carry a real contract; closed history needs none.
 		if item.Kind != "epic" && !closedImport(item.Status) {
-			if err := model.ValidateWorkContract(item.Body); err != nil {
+			if err := model.ValidateWorkContractFor(item.Kind, item.Body); err != nil {
 				add("%s: open %s needs a work:v1 contract body: %v", at, item.Kind, err)
 			}
 		}
