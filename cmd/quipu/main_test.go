@@ -122,7 +122,7 @@ func TestIssueNumberFromURL(t *testing.T) {
 }
 
 func TestSelectReadyWorkRequiresValidContract(t *testing.T) {
-	valid := model.WorkBody("test", "scope", "none", "pass", "test", "None: test", "source", "local")
+	valid := model.WorkBody("Offline edits sync on reconnect.", "the sync queue", "conflict resolution", "Test: an offline edit reaches the server", "go test ./... output", "None: no docs change", "Owner request, 2026-11-18", "local")
 	candidates := []workCandidate{
 		{readyWork: readyWork{IssueID: "bad", Number: 1, Kind: "Story"}, Status: "Ready", ParentID: "parent", Body: "missing contract"},
 		{readyWork: readyWork{IssueID: "good", Number: 2, Kind: "Story"}, Status: "Ready", ParentID: "parent", Body: valid},
@@ -169,7 +169,7 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 
 func TestSelectReadyWorkExcludesNonLeafBlockedAndLeased(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
-	contract := model.WorkBody("test", "scope", "none", "pass", "test", "None: test", "source", "local")
+	contract := model.WorkBody("Offline edits sync on reconnect.", "the sync queue", "conflict resolution", "Test: an offline edit reaches the server", "go test ./... output", "None: no docs change", "Owner request, 2026-11-18", "local")
 	ready := selectReadyWork([]workCandidate{
 		{readyWork: readyWork{IssueID: "I-1", Number: 1, Kind: "Story"}, ParentID: "P", Status: "Ready", Body: contract},
 		{readyWork: readyWork{IssueID: "I-2", Number: 2, Kind: "Story"}, ParentID: "P", Status: "Ready", Body: contract, HasChildren: true},

@@ -19,7 +19,7 @@ type flowErrorKind struct {
 
 var flowErrors = []flowErrorKind{
 	{"held-by", "the Issue's lease belongs to another worktree or agent", "continue in the worktree that holds it (`quipu status --json` shows holder and branch), or take other work with `quipu start --next --json`"},
-	{"not-ready", "the Issue is not Ready, so it cannot be started", "take Ready work with `quipu start --next --json`; only the owner makes work Ready"},
+	{"not-ready", "the Issue is not Ready, or its work contract fails a hard rule, so it cannot be started", "take Ready work with `quipu start --next --json`; only the owner makes work Ready, and the message names the contract rule the owner must fix"},
 	{"branch-elsewhere", "the work branch is checked out in another worktree", "continue in that worktree, or remove it with `quipu worktree remove <path> --json` if nothing runs there"},
 	{"git-busy", "the worktree is in the middle of a rebase, merge, or cherry-pick, so it cannot switch branch", "do what `next` says: finish it with `git <op> --continue` or back out with `git <op> --abort` (both pass the guard), then rerun the same command"},
 	{"worktree-held", "that worktree still holds a live lease", "finish it with `quipu done N --json` first, or take other work"},

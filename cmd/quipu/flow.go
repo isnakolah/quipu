@@ -499,12 +499,15 @@ func nextWork(candidates []workCandidate, now time.Time) []readyWork {
 // here, or with o.Worktree a new worktree created before the claim so the
 // lease belongs to that worktree's identity. A lost claim removes what it made.
 func startIssue(c model.Config, here worktree, number int, o startOptions) (result flowResult, err error) {
-	state, err := loadLiveWork(c, number)
+	state, err := loadStartWork(c, number)
 	if err != nil {
 		return flowResult{}, err
 	}
 	// Only a new claim can be turned down: work already held always resumes.
 	if state.Status == "Ready" {
+		if err := contractRefusal(number, state); err != nil {
+			return flowResult{}, err
+		}
 		// Refuse what policy would refuse on the PR, before any work is done.
 		if problems := workProblems(number, state); len(problems) > 0 {
 			var leaves []int
@@ -648,6 +651,25 @@ func startIssue(c model.Config, here worktree, number int, o startOptions) (resu
 		result.Next = fmt.Sprintf("Work in %s (cd there or launch the agent there). %s", w.Top, result.Next)
 	}
 	return result, nil
+}
+
+// loadStartWork is start's first look at the Issue; tests stand in for GitHub.
+var loadStartWork = loadLiveWork
+
+// contractRefusal is start's answer to a new claim on a leaf whose work
+// contract breaks a hard rule: not-ready, naming the rule, so an older body is
+// fixed before anyone works on it. Other kinds and Issues with sub-issues get
+// startRefusal's more precise reason instead.
+func contractRefusal(number int, state liveWork) error {
+	if !implementableKinds[state.Kind] || state.Children > 0 {
+		return nil
+	}
+	if err := model.ValidateWorkContractFor(state.Kind, state.Body); err != nil {
+		refusal := flowErr("not-ready", "#%d's work contract fails a hard rule: %v", number, err)
+		refusal.Next = fmt.Sprintf("take other work with `quipu start --next --json`; the owner fixes #%d's body (with issues_by: agents, an agent may: `quipu issue edit %d --body-file FILE`)", number, number)
+		return refusal
+	}
+	return nil
 }
 
 // startRefusal is the error `quipu start` gives for work no PR may implement.
@@ -1063,6 +1085,10 @@ func proposeCommand(args []string) error {
 	if strings.Contains(*body, "quipu-request") || strings.Contains(*body, "quipu-receipt") || strings.Contains(*body, patchMarker) || strings.Contains(*body, patchEnd) {
 		return errors.New("a proposal cannot contain Quipu request, receipt or patch markers")
 	}
+	warnings, err := proposalWarnings(*title, *body)
+	if err != nil {
+		return err
+	}
 	attached := ""
 	if *patchFile != "" {
 		raw, err := os.ReadFile(*patchFile)
@@ -1096,7 +1122,32 @@ func proposeCommand(args []string) error {
 	if attached != "" {
 		next = fmt.Sprintf("The digest lists the patch for the owner as quipu patch apply %d. Continue your current work, or run quipu start --next --json.", posted.ID)
 	}
-	return printFlowResult(flowResult{Issue: *parent, Status: "Proposed", Next: next}, *asJSON)
+	return printFlowResult(withWarnings(flowResult{Issue: *parent, Status: "Proposed", Next: next}, warnings, *asJSON), *asJSON)
+}
+
+// proposalWarnings checks a proposal written as a work contract by the rules
+// an Issue meets: a hard rule refuses it, weak wording warns. A proposal in
+// free prose is posted with a warning, since the owner has to write its
+// contract.
+func proposalWarnings(title, body string) ([]string, error) {
+	if !strings.Contains(body, model.WorkMarker) {
+		return append(model.WorkContractWarnings(title, ""), "the proposal is not a work:v1 contract; write it as one so the owner can file it as it stands (`quipu guide`, Work contracts)"), nil
+	}
+	if err := model.ValidateWorkContract(body); err != nil {
+		return nil, fmt.Errorf("the proposal's work contract fails a hard rule: %w", err)
+	}
+	return model.WorkContractWarnings(title, body), nil
+}
+
+// withWarnings puts contract warnings in a result's warnings for --json, and
+// on stderr otherwise.
+func withWarnings(result flowResult, warnings []string, asJSON bool) flowResult {
+	if asJSON {
+		result.Warnings = append(result.Warnings, warnings...)
+	} else {
+		printWarnings(warnings)
+	}
+	return result
 }
 
 // ownerMoves are the board moves the owner makes through the Writer, so the

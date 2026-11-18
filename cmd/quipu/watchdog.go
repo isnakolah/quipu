@@ -545,7 +545,7 @@ func triageProblems(state liveWork, inProject bool) []string {
 		problems = append(problems, "it has no native parent Issue")
 	}
 	if implementableKinds[kind] {
-		if err := model.ValidateWorkContract(state.Body); err != nil {
+		if err := model.ValidateWorkContractFor(kind, state.Body); err != nil {
 			problems = append(problems, "its work contract is invalid: "+err.Error())
 		}
 	}

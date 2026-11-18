@@ -68,7 +68,11 @@ func (f *daemonFixture) ops() daemonOps {
 }
 
 func daemonCandidate(number int, kind, priority string) workCandidate {
-	return workCandidate{readyWork: readyWork{Number: number, Kind: kind, Priority: priority}, Status: "Ready", ParentID: "E", Body: testContract}
+	body := testContract
+	if kind == "Defect" {
+		body = testDefectContract
+	}
+	return workCandidate{readyWork: readyWork{Number: number, Kind: kind, Priority: priority}, Status: "Ready", ParentID: "E", Body: body}
 }
 
 func TestDaemonRespectsSlotsAndPriority(t *testing.T) {

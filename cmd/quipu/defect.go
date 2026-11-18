@@ -166,6 +166,11 @@ func defectBody(run runFacts, pull mergedPull, issue int) string {
 		fmt.Sprintf("A passing %s run that includes the fix.", run.Name),
 		"None: a fix, unless the failure came from documented behaviour.",
 		source, "CI")
+	body = model.DefectBody(body,
+		[]string{fmt.Sprintf("Open run %s.", run.URL), "Read the log of the job that failed."},
+		fmt.Sprintf("The %s workflow passes on %s.", run.Name, run.HeadBranch),
+		fmt.Sprintf("The %s workflow concluded %q on %s at commit %s.", run.Name, run.Conclusion, run.HeadBranch, run.HeadSHA),
+		fmt.Sprintf("GitHub Actions: workflow %s on %s, run attempt %d.", run.Name, run.HeadBranch, run.Attempt))
 	return body + fmt.Sprintf("\n<!-- quipu-defect:v1 run=%d -->\n", run.ID)
 }
 

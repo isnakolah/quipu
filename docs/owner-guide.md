@@ -140,6 +140,17 @@ It isn't installed as a service. To keep it running, use `launchd` or `systemd`,
 
 **Planning.** Goals are Epics that you create and approve. Work is a Story, Task, Defect, or Contract under a parent, with a work contract (Outcome, Scope with Includes and Excludes, Acceptance criteria, Required evidence with a Verification boundary, Documentation impact, Source and relationships). Agents suggest work with `quipu propose`, which posts a comment on the parent; turn the ones you want into Issues.
 
+**Contract rules.** `quipu issue create`, `quipu issue edit`, and `quipu propose` judge what a work contract says, not only its headings, so every Issue arrives specific enough for a stranger to finish. They refuse, naming the rule, a contract with:
+
+- a required section that is empty once placeholders are removed (`-`, `- [ ]`, `TBD`, `TODO`, `...`, `x`, and the Work template's own text, such as `local | CI | ...`);
+- `Includes:` with no item, or `Excludes:` with no real item (`None` does not count: name at least one thing the work leaves out);
+- no acceptance-criteria checkbox, or a Verification boundary with no value;
+- for a Defect: no numbered `## Steps to reproduce`, no `## Expected`, `## Actual`, or `## Environment`, or Expected and Actual that say the same thing. Defects Quipu files for a failing workflow carry all four.
+
+`quipu start` refuses Ready work that breaks one of these rules with `not-ready` and the rule, so an older body is fixed before anyone works on it; `quipu start --next` passes over it, and the watchdog labels it `quipu:needs-triage`. Work already held keeps going.
+
+Weaker wording gets warnings (`warnings` in `--json`, stderr otherwise) and the Issue is still filed: more than 7 criteria; a criterion over 200 characters, or one joining outcomes with `;` or three or more "and"; vague words (should work, properly, correctly, as needed, if possible, as appropriate, etc, and/or, user-friendly, fast, easy, robust, significant, sufficient, minimal, improve, better) in the Outcome or criteria; an Outcome that opens with "Implement" or "Refactor"; more Includes items than criteria; a title over 70 characters; a Source with no link, `#N`, or date; and dependency prose ("Depends on ...", "Blocked by ...", "after #N"), since only native blocker links order work. The dependency warning reads the prose alone: it doesn't look for a native link.
+
 **Making work Ready.** `quipu ready N`. Agents take the highest-priority Ready, unblocked leaf with `quipu start --next`.
 
 **Review.** Agents open PRs that say `Refs #N` and move the work to In review. Review and merge as usual; the `policy` check tells you whether the PR follows the flow. After the merge, the agent records evidence and the Writer closes the Issue.

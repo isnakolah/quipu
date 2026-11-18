@@ -190,10 +190,12 @@ func issueCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	var warnings []string
 	if *kind != "epic" {
-		if err := model.ValidateWorkContract(string(body)); err != nil {
+		if err := model.ValidateWorkContractFor(*kind, string(body)); err != nil {
 			return fmt.Errorf("work Issue body does not satisfy work:v1 contract: %w", err)
 		}
+		warnings = model.WorkContractWarnings(*title, string(body))
 		if *parent < 1 {
 			return errors.New("non-Epic Issue creation requires --parent")
 		}
@@ -212,35 +214,68 @@ func issueCommand(args []string) error {
 	if !map[string]bool{"P0": true, "P1": true, "P2": true, "P3": true}[*priority] {
 		return errors.New("priority must be P0, P1, P2, or P3")
 	}
-	createArgs := []string{"issue", "create", "--repo", c.Owner + "/" + c.Repository, "--title", *title, "--label", "kind:" + *kind, "--label", "area:" + *area, "--body-file", *bodyFile}
-	output, err := ghOutput(createArgs...)
+	number, issueURL, err := fileIssue(c, issueFiling{Title: *title, Kind: *kind, BodyFile: *bodyFile, Parent: *parent, Area: *area, Priority: *priority, ApprovedBy: *approvedBy})
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		return printValue(map[string]any{"issue": number, "url": issueURL, "kind": *kind, "parent": *parent, "status": "Backlog", "warnings": nonNil(warnings),
+			"next": fmt.Sprintf("#%d is in Backlog; the owner makes it Ready", number)}, true)
+	}
+	fmt.Println(issueURL)
+	printWarnings(warnings)
+	return nil
+}
+
+// printWarnings writes contract warnings to stderr, where they reach a person
+// or an agent without changing the command's result.
+func printWarnings(warnings []string) {
+	for _, warning := range warnings {
+		fmt.Fprintln(os.Stderr, "Warning: "+warning)
+	}
+}
+
+// nonNil keeps an empty list a JSON array rather than null.
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+// issueFiling is an Issue `quipu issue create` files once its body is checked.
+type issueFiling struct {
+	Title, Kind, BodyFile, Area, Priority, ApprovedBy string
+	Parent                                            int
+}
+
+// fileIssue creates the Issue, links its parent, adds it to the Project, and
+// records an Epic's approval. Tests stand in for GitHub by replacing it.
+var fileIssue = func(c model.Config, f issueFiling) (int, string, error) {
+	createArgs := []string{"issue", "create", "--repo", c.Owner + "/" + c.Repository, "--title", f.Title, "--label", "kind:" + f.Kind, "--label", "area:" + f.Area, "--body-file", f.BodyFile}
+	output, err := ghOutput(createArgs...)
+	if err != nil {
+		return 0, "", err
 	}
 	issueURL := strings.TrimSpace(string(output))
 	number, err := issueNumberFromURL(issueURL)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
-	if *kind != "epic" {
-		if err := linkParent(c, *parent, number); err != nil {
-			return fmt.Errorf("created Issue %s but could not link parent: %w", issueURL, err)
+	if f.Kind != "epic" {
+		if err := linkParent(c, f.Parent, number); err != nil {
+			return 0, "", fmt.Errorf("created Issue %s but could not link parent: %w", issueURL, err)
 		}
 	}
-	if err := addIssueToProject(c, issueURL, titleCase(*kind), titleCase(*area), *priority); err != nil {
-		return fmt.Errorf("created Issue %s but could not add configured Project fields: %w", issueURL, err)
+	if err := addIssueToProject(c, issueURL, titleCase(f.Kind), titleCase(f.Area), f.Priority); err != nil {
+		return 0, "", fmt.Errorf("created Issue %s but could not add configured Project fields: %w", issueURL, err)
 	}
-	if *kind == "epic" {
-		if _, err := github.NewClient().CreateComment(context.Background(), c.Owner, c.Repository, number, "Owner approval evidence: "+strings.TrimSpace(*approvedBy)); err != nil {
-			return fmt.Errorf("created Epic %s but could not record approval: %w", issueURL, err)
+	if f.Kind == "epic" {
+		if _, err := github.NewClient().CreateComment(context.Background(), c.Owner, c.Repository, number, "Owner approval evidence: "+strings.TrimSpace(f.ApprovedBy)); err != nil {
+			return 0, "", fmt.Errorf("created Epic %s but could not record approval: %w", issueURL, err)
 		}
 	}
-	if *asJSON {
-		return printValue(map[string]any{"issue": number, "url": issueURL, "kind": *kind, "parent": *parent, "status": "Backlog",
-			"next": fmt.Sprintf("#%d is in Backlog; the owner makes it Ready", number)}, true)
-	}
-	fmt.Println(issueURL)
-	return nil
+	return number, issueURL, nil
 }
 
 func contains(values []string, target string) bool {
@@ -1177,7 +1212,7 @@ func selectReadyWork(candidates []workCandidate, now time.Time) []readyWork {
 		if candidate.Status != "Ready" || candidate.ParentID == "" || candidate.HasChildren || ownerDecidedKinds[strings.ToLower(candidate.Kind)] {
 			continue
 		}
-		if err := model.ValidateWorkContract(candidate.Body); err != nil {
+		if err := model.ValidateWorkContractFor(candidate.Kind, candidate.Body); err != nil {
 			continue
 		}
 		blocked := false

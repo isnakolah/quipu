@@ -80,7 +80,7 @@ func ValidateGraph(issues []Issue) error {
 			problems.add("issue #%d has no parent", issue.Number)
 		}
 		if issue.Kind != "Epic" {
-			if err := ValidateWorkContract(issue.Body); err != nil {
+			if err := ValidateWorkContractFor(issue.Kind, issue.Body); err != nil {
 				problems.add("issue #%d: %v", issue.Number, err)
 			}
 		}

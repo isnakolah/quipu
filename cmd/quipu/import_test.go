@@ -11,7 +11,10 @@ import (
 	"github.com/isnakolah/quipu/internal/writer"
 )
 
-const testContract = "<!-- work:v1 -->\n## Outcome\n## Scope\nIncludes:\nExcludes:\n## Acceptance criteria\n## Required evidence\nVerification boundary: CI\n## Documentation impact\n## Source and relationships\n"
+const testContract = "<!-- work:v1 -->\n## Outcome\nOffline edits sync once the device reconnects.\n## Scope\nIncludes:\n- the sync queue\nExcludes:\n- conflict resolution\n## Acceptance criteria\n- [ ] Test: an edit made offline reaches the server after reconnect\n## Required evidence\n- go test ./... output\n- Verification boundary: CI\n## Documentation impact\nNone: no user-facing docs change\n## Source and relationships\n- Owner request, 2026-11-18\n- Native parent and blocker links are authoritative.\n"
+
+// testDefectContract is testContract with the reproduction a Defect needs.
+var testDefectContract = model.DefectBody(testContract, []string{"Edit offline.", "Reconnect."}, "The edit reaches the server.", "The edit is lost.", "macOS 15.1")
 
 func importConfig() model.Config {
 	return model.Config{Owner: "octo", Repository: "calla", Areas: []string{"app", "infra"}}

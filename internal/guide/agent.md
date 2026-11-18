@@ -184,9 +184,34 @@ You never create Issues, Epics, or Decisions. When you find work that should exi
 quipu propose --parent N --title "Short title" --body-file proposal.md --json
 ```
 
-`N` is the Epic or Story it belongs under. Explain the why, the scope, and the acceptance criteria. Then carry on with your own work. The owner turns proposals into Issues and makes them Ready.
+`N` is the Epic or Story it belongs under. Explain the why, the scope, and the acceptance criteria, best as a work contract (below), so the owner can file it as it stands. Then carry on with your own work. The owner turns proposals into Issues and makes them Ready.
 
 When the change is to one of Quipu's enforcement files, which you cannot edit, attach the exact patch: write a unified diff with repository paths (`a/PATH`, `b/PATH`), for example with `diff -u` on copies outside the repository, and add `--patch FILE`. The digest lists it for the owner as `quipu patch apply ID`. Never try to make the change another way.
+
+## Work contracts
+
+A Story, Task, Defect, or Contract carries a work contract: `<!-- work:v1 -->`, then `## Outcome`, `## Scope` (with `Includes:` and `Excludes:`), `## Acceptance criteria`, `## Required evidence` (with `Verification boundary: ...`), `## Documentation impact`, and `## Source and relationships`. `quipu issue create`, `quipu issue edit`, and `quipu propose` (when the body is a contract) judge what it says.
+
+**Refused** (hard rules), with the rule named in the error:
+
+- a required section that is empty once placeholders are removed: `-`, `- [ ]`, `TBD`, `TODO`, `...`, `x`, and the template's own text (`local | CI | ...`, `None: explain specific reason`, the line about native links);
+- `Includes:` with no item, or `Excludes:` with no real item (`None` does not count);
+- no acceptance-criteria checkbox (`- [ ] ...`);
+- a Verification boundary with no value;
+- a Defect without `## Steps to reproduce` as a numbered list, `## Expected`, `## Actual`, and `## Environment`, or whose Expected and Actual say the same thing.
+
+`quipu start` refuses Ready work whose contract breaks a hard rule with `not-ready`, naming the rule; the owner fixes the body first.
+
+**Warnings** never stop the command. With `--json` they come back as `warnings`, otherwise on stderr. Fix them when you can:
+
+- more than 7 criteria;
+- a criterion over 200 characters, or one that joins outcomes with `;` or a chain of three or more "and";
+- vague words in the Outcome or a criterion: should work, properly, correctly, as needed, if possible, as appropriate, etc, and/or, user-friendly, fast, easy, robust, significant, sufficient, minimal, improve, better (words inside code spans or quotes don't count);
+- an Outcome that opens with "Implement" or "Refactor" instead of the result;
+- more `Includes:` items than criteria;
+- a title over 70 characters;
+- a Source with no link, `#N`, or date;
+- prose such as "Depends on ...", "Blocked by ...", or "after #N": Quipu orders work only by native blocker links, and the warning reads the prose alone, not whether a link exists.
 
 ## Adopting a repository
 

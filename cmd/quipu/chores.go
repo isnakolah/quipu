@@ -78,10 +78,11 @@ func choreProblem(c model.Config, number int, state liveWork, r writer.Request) 
 		return fmt.Errorf("#%d is closed; chores change only open Issues", number)
 	}
 	if r.Action == "edit" {
-		if kind := labelKind(state.Labels); !editKinds[strings.ToLower(kind)] {
+		kind := labelKind(state.Labels)
+		if !editKinds[strings.ToLower(kind)] {
 			return fmt.Errorf("agents edit only Stories, Tasks and Defects, and #%d is %s", number, kindName(kind))
 		}
-		if err := model.ValidateWorkContract(r.Body); err != nil {
+		if err := model.ValidateWorkContractFor(kind, r.Body); err != nil {
 			return fmt.Errorf("the new body is not a valid work contract: %w", err)
 		}
 	}
@@ -321,6 +322,7 @@ func issueEditCommand(args []string) error {
 	if err := model.ValidateWorkContract(body); err != nil {
 		return fmt.Errorf("the new body is not a valid work contract: %w", err)
 	}
+	warnings := model.WorkContractWarnings("", body)
 	if err := writer.CheckChore(writer.WorkState{}, writer.Request{Action: "edit", Body: body}); err != nil {
 		return err
 	}
@@ -338,7 +340,7 @@ func issueEditCommand(args []string) error {
 	if err := sendAndWait(c, number, actor, writer.Request{Action: "edit", Body: body}, *wait); err != nil {
 		return err
 	}
-	return printFlowResult(flowResult{Issue: number, Status: "Edited", Next: fmt.Sprintf("#%d has its new body. Carry on with your own work.", number)}, *asJSON)
+	return printFlowResult(withWarnings(flowResult{Issue: number, Status: "Edited", Next: fmt.Sprintf("#%d has its new body. Carry on with your own work.", number)}, warnings, *asJSON), *asJSON)
 }
 
 func prCloseCommand(args []string) error {
