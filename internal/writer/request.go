@@ -183,23 +183,64 @@ func HashRequest(r Request) (string, error) {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
 }
+
+// RenderRequest writes a request comment. The record rides inside the hidden
+// marker, so GitHub and its notification emails show only the summary after it.
 func RenderRequest(r Request) (string, error) {
 	hash, err := HashRequest(r)
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(r)
+	payload, err := hiddenRecord(r)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("<!-- quipu-request:v1 id=%s sha256=%s -->\n```json\n%s\n```", r.ID, hash, payload), nil
+	return fmt.Sprintf("%s id=%s sha256=%s\n%s\n-->\n%s", RequestPrefix, r.ID, hash, payload, requestSummary(r)), nil
 }
+
+// RenderReceipt writes a receipt comment the same way: hidden record, readable summary.
 func RenderReceipt(r Receipt) (string, error) {
-	raw, err := json.Marshal(r)
+	payload, err := hiddenRecord(r)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("<!-- quipu-receipt:v1 request=%s fingerprint=%s -->\n```json\n%s\n```", r.RequestID, r.Fingerprint, raw), nil
+	return fmt.Sprintf("%s request=%s fingerprint=%s\n%s\n-->\n%s", ReceiptPrefix, r.RequestID, r.Fingerprint, payload, receiptSummary(r)), nil
+}
+
+// hiddenRecord is a value's JSON, safe inside an HTML comment. json.Marshal
+// escapes <, > and &, so no text an agent wrote can close the comment early.
+func hiddenRecord(v any) (string, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(string(raw), "-->") {
+		return "", fmt.Errorf("record would end its hidden marker early")
+	}
+	return string(raw), nil
+}
+
+// commentRecord returns a Quipu comment's marker line and JSON record. It reads
+// the current form, with the record inside the marker, and the earlier form,
+// with the record in a json code block after it.
+func commentRecord(comment string) (header, payload string, err error) {
+	comment = strings.TrimSpace(comment)
+	end := strings.Index(comment, "-->")
+	if end < 0 {
+		return "", "", fmt.Errorf("marker not closed")
+	}
+	marker := comment[:end]
+	if nl := strings.IndexByte(marker, '\n'); nl >= 0 {
+		if inner := strings.TrimSpace(marker[nl+1:]); strings.HasPrefix(inner, "{") {
+			return marker[:nl], inner, nil
+		}
+	}
+	rest := comment[end:]
+	start, last := strings.Index(rest, "```json"), strings.LastIndex(rest, "```")
+	if start < 0 || last <= start {
+		return "", "", fmt.Errorf("JSON missing")
+	}
+	return marker, strings.TrimSpace(rest[start+len("```json") : last]), nil
 }
 
 func ParseRequest(comment string) (Request, error) {
@@ -207,11 +248,10 @@ func ParseRequest(comment string) (Request, error) {
 	if !IsRequest(comment) {
 		return r, fmt.Errorf("not a quipu request")
 	}
-	start, end := strings.Index(comment, "```json"), strings.LastIndex(comment, "```")
-	if start < 0 || end <= start {
-		return r, fmt.Errorf("request JSON missing")
+	header, payload, err := commentRecord(comment)
+	if err != nil {
+		return r, fmt.Errorf("request %w", err)
 	}
-	payload := strings.TrimSpace(comment[start+len("```json") : end])
 	if err := json.Unmarshal([]byte(payload), &r); err != nil {
 		return r, err
 	}
@@ -222,8 +262,7 @@ func ParseRequest(comment string) (Request, error) {
 	if err != nil {
 		return r, err
 	}
-	marker := fmt.Sprintf("id=%s sha256=%s", r.ID, hash)
-	if !strings.Contains(comment, marker) {
+	if !strings.Contains(header, fmt.Sprintf("id=%s sha256=%s", r.ID, hash)) {
 		return r, fmt.Errorf("request hash mismatch")
 	}
 	return r, nil
@@ -236,18 +275,17 @@ func ParseReceipt(comment string) (Receipt, error) {
 	if !strings.HasPrefix(strings.TrimSpace(comment), ReceiptPrefix) && !strings.HasPrefix(strings.TrimSpace(comment), legacyReceiptPrefix) {
 		return receipt, fmt.Errorf("not a quipu receipt")
 	}
-	start, end := strings.Index(comment, "```json"), strings.LastIndex(comment, "```")
-	if start < 0 || end <= start {
-		return receipt, fmt.Errorf("receipt JSON missing")
+	header, payload, err := commentRecord(comment)
+	if err != nil {
+		return receipt, fmt.Errorf("receipt %w", err)
 	}
-	payload := strings.TrimSpace(comment[start+len("```json") : end])
 	if err := json.Unmarshal([]byte(payload), &receipt); err != nil {
 		return receipt, err
 	}
 	if receipt.RequestID == "" {
 		return receipt, fmt.Errorf("receipt request id missing")
 	}
-	if !strings.Contains(comment, "request="+receipt.RequestID) {
+	if !strings.Contains(header+" ", "request="+receipt.RequestID+" ") {
 		return receipt, fmt.Errorf("receipt request id marker mismatch")
 	}
 	return receipt, nil
