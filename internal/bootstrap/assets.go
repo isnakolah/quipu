@@ -427,10 +427,33 @@ type Result struct {
 	Unchanged []string `json:"unchanged"`
 	// Kept are existing files that differ from Quipu's and were left alone.
 	Kept []string `json:"kept"`
+	// Skipped are files Quipu did not write, each with the reason.
+	Skipped map[string]string `json:"skipped,omitempty"`
+}
+
+// CIPath is the placeholder CI workflow, written only for a repository with
+// no CI of its own.
+const CIPath = ".github/workflows/ci.yml"
+
+// OwnWorkflows lists the workflow files under root that are not Quipu's own
+// (quipu-*.yml): the repository's CI, if it has any.
+func OwnWorkflows(root string) []string {
+	var own []string
+	for _, pattern := range []string{"*.yml", "*.yaml"} {
+		paths, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", pattern))
+		for _, path := range paths {
+			if name := filepath.Base(path); !strings.HasPrefix(name, "quipu-") {
+				own = append(own, name)
+			}
+		}
+	}
+	sort.Strings(own)
+	return own
 }
 
 // Install writes the generated files under root. Identical files are left
 // as they are, and a different existing file is kept unless replace is set.
+// The placeholder CI is never written over or beside the repository's own CI.
 func Install(root string, o Options, replace bool) (Result, error) {
 	var result Result
 	all, err := Render(o)
@@ -448,6 +471,12 @@ func Install(root string, o Options, replace bool) (Result, error) {
 		switch {
 		case err == nil && string(current) == all[path]:
 			result.Unchanged = append(result.Unchanged, path)
+			continue
+		case path == CIPath && len(OwnWorkflows(root)) > 0:
+			if result.Skipped == nil {
+				result.Skipped = map[string]string{}
+			}
+			result.Skipped[path] = "the repository has its own CI (" + strings.Join(OwnWorkflows(root), ", ") + "), so Quipu's placeholder test job is left out; set required_checks to its job names"
 			continue
 		case err == nil && !replace:
 			result.Kept = append(result.Kept, path)
