@@ -456,7 +456,7 @@ func runnerCommand(args []string) error {
 func runnerConfigChecks(c model.Config, pathVersion string) []doctorCheck {
 	var checks []doctorCheck
 	pin := c.Workflows.QuipuVersion
-	if pathVersion != "" && pin != "" && pin != "main" && pathVersion != pin {
+	if pathVersion != "" && pin != "" && pin != "main" && !sameQuipuVersion(pathVersion, pin) {
 		checks = append(checks, doctorCheck{"quipu version", "warn", "quipu on this machine's PATH is " + pathVersion + " but workflows.quipu_version is " + pin + "; if this machine runs a runner, the PATH copy wins", "owner: see quipu runner setup"})
 	}
 	if c.MergesInBackground() && c.Workflows.Cron() == "" {
@@ -466,6 +466,33 @@ func runnerConfigChecks(c model.Config, pathVersion string) []doctorCheck {
 		checks = append(checks, check)
 	}
 	return checks
+}
+
+// sameQuipuVersion reports whether the quipu on PATH is the build the pin
+// names. A release matches its tag with or without the "v". `go install
+// ...@<sha>` reports a pseudo-version whose last part is the commit's first 12
+// hex digits (v0.2.1-0.20261118162013-a78ad29808e4), which matches a pin that
+// is that commit's SHA, full or short (7 digits at least).
+func sameQuipuVersion(pathVersion, pin string) bool {
+	build, _, _ := strings.Cut(strings.TrimPrefix(pathVersion, "v"), "+")
+	pin = strings.TrimPrefix(pin, "v")
+	if build == pin {
+		return true
+	}
+	commit := build[strings.LastIndex(build, "-")+1:]
+	if len(commit) != 12 || !isHex(commit) || len(pin) < 7 || !isHex(pin) {
+		return false
+	}
+	return strings.HasPrefix(pin, commit) || strings.HasPrefix(commit, pin)
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // writerPlacementCheck warns when the Writer runs on a self-hosted runner. Every

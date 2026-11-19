@@ -287,6 +287,29 @@ func TestDoctorChecksWhatSetupAsksFor(t *testing.T) {
 	if got := runnerConfigChecks(pinned, ""); len(got) != 0 {
 		t.Fatalf("no quipu on the PATH is its own doctor check: %+v", got)
 	}
+	// `go install ...@<sha>` reports a pseudo-version ending in the commit's
+	// first 12 hex digits: the same commit as a full or short SHA pin.
+	const pseudo = "v0.2.1-0.20261118162013-a78ad29808e4"
+	for _, tc := range []struct {
+		path, pin string
+		warn      bool
+	}{
+		{pseudo, "a78ad29808e4aa2abe22c10599fd4a9ab218f2c7", false},
+		{pseudo, "a78ad29", false},
+		{pseudo, "fa07ecb67e13b60b4cb56da14c81ae14751a82ed", true},
+		{pseudo, "a78ad", true}, // too short to name a commit
+		{"v0.2.1-20261118162013-a78ad29808e4", "a78ad29808e4aa2abe22c10599fd4a9ab218f2c7", false},
+		{"v0.3.0-rc.1.0.20261118162013-a78ad29808e4+dirty", "a78ad29808e4", false},
+		{"v0.3.0", "0.3.0", false},
+		{"v0.3.0", "v0.3.1", true},
+		{"(devel)", "a78ad29808e4aa2abe22c10599fd4a9ab218f2c7", true},
+	} {
+		pin := model.Config{}
+		pin.Workflows.QuipuVersion = tc.pin
+		if got := runnerConfigChecks(pin, tc.path); (len(got) == 1) != tc.warn {
+			t.Errorf("PATH %s, pin %s: want warning %v, got %+v", tc.path, tc.pin, tc.warn, got)
+		}
+	}
 	queue := model.Config{Merge: "agent", MergeWait: "background"}
 	queue.Workflows.Schedule = "off"
 	if got := runnerConfigChecks(queue, ""); len(got) != 1 || !strings.Contains(got[0].Detail, "queued merge") {
