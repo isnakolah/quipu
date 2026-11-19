@@ -91,18 +91,15 @@ func adoptCommand(args []string) error {
 	if err := setup.apply(fs, &c); err != nil {
 		return err
 	}
-	changes, kept, err := provision(top, c, *replace)
+	changes, files, err := provision(top, c, *replace)
 	report["changes"] = changes
-	report["kept"] = kept
+	reportFiles(report, files)
 	if err != nil {
 		report["error"] = err.Error()
 		_ = printValue(report, *asJSON)
 		return errReported
 	}
 	report["changed"] = len(changes) > 0
-	if len(kept) > 0 {
-		report["kept_note"] = "these files already existed and differ from Quipu's; review them, or rerun with --replace"
-	}
 	landed := here.configLanded()
 	if *bootstrapMinutes > 0 && !landed {
 		window, err := here.recordBootstrap(time.Now(), *bootstrapMinutes)
@@ -114,6 +111,18 @@ func adoptCommand(args []string) error {
 	report["owner_step"] = ownerStep(c)
 	report["next"] = adoptNext(c, landed)
 	return printValue(report, *asJSON)
+}
+
+// reportFiles adds to adopt's report the files it kept, and the ones it left
+// out with the reason.
+func reportFiles(report map[string]any, files bootstrap.Result) {
+	report["kept"] = files.Kept
+	if len(files.Kept) > 0 {
+		report["kept_note"] = "these files already existed and differ from Quipu's; review them, or rerun with --replace"
+	}
+	if len(files.Skipped) > 0 {
+		report["skipped"] = files.Skipped
+	}
 }
 
 // ownerStep is the one thing setup needs from the owner, as one command: the
@@ -214,50 +223,50 @@ func (o setupOptions) apply(fs *flag.FlagSet, c *model.Config) error {
 }
 
 // provision makes GitHub and the working tree match c. It returns what it
-// changed and the existing files it kept.
-func provision(top string, c model.Config, replace bool) ([]string, []string, error) {
+// changed and what became of each generated file.
+func provision(top string, c model.Config, replace bool) ([]string, bootstrap.Result, error) {
 	var changes []string
 	note := func(more []string, err error) error {
 		changes = append(changes, more...)
 		return err
 	}
 	if err := note(ensureRepoFeatures(c.Owner, c.Repository, c.WikiMode == "journal")); err != nil {
-		return changes, nil, err
+		return changes, bootstrap.Result{}, err
 	}
 	if err := note(ensureLabels(c.Owner, c.Repository, c.Areas)); err != nil {
-		return changes, nil, err
+		return changes, bootstrap.Result{}, err
 	}
 	info, err := readProject(c.Owner, c.Project.Number)
 	if err != nil {
-		return changes, nil, err
+		return changes, bootstrap.Result{}, err
 	}
 	ids, fieldChanges, err := ensureProjectFields(c.Owner, info, c.Areas)
 	if err := note(fieldChanges, err); err != nil {
-		return changes, nil, err
+		return changes, bootstrap.Result{}, err
 	}
 	c.Project.ID, c.Project.Title, c.Project.Fields = info.ID, info.Title, ids
 	if err := note(ensureProjectViews(c.Owner, info)); err != nil {
-		return changes, nil, err
+		return changes, bootstrap.Result{}, err
 	}
 	if err := note(writeConfig(top, c)); err != nil {
-		return changes, nil, err
+		return changes, bootstrap.Result{}, err
 	}
 	options := workflowOptions(c)
 	if c.MergesInBackground() {
 		rendered, err := bootstrap.Render(options)
 		if err != nil {
-			return changes, nil, err
+			return changes, bootstrap.Result{}, err
 		}
 		options.WakeOn = wakeWorkflows(c, jobsAfterInstall(top, rendered, replace))
 	}
 	files, err := bootstrap.Install(top, options, replace)
 	if err := note(files.Written, err); err != nil {
-		return changes, files.Kept, err
+		return changes, files, err
 	}
 	if err := note(bootstrap.InstallHooks(top, true)); err != nil {
-		return changes, files.Kept, err
+		return changes, files, err
 	}
-	return changes, files.Kept, note(syncGuides(top, true))
+	return changes, files, note(syncGuides(top, true))
 }
 
 // wakeWorkflows names the workflows whose finish lets a queued merge go ahead:
@@ -287,6 +296,9 @@ func jobsAfterInstall(top string, rendered map[string]string, replace bool) []wo
 		}
 	}
 	for name, content := range rendered {
+		if name == bootstrap.CIPath && len(bootstrap.OwnWorkflows(top)) > 0 {
+			continue // Install leaves the placeholder out
+		}
 		if _, exists := files[name]; (replace || !exists) && strings.HasPrefix(name, ".github/workflows/") {
 			files[name] = []byte(content)
 		}

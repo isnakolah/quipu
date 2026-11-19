@@ -339,19 +339,21 @@ func TestJobsAfterInstallReadsWhatInstallLeaves(t *testing.T) {
 	top := t.TempDir()
 	writeRepoFile(t, top, ".github/workflows/ci.yml", []byte("name: Build\njobs:\n  test:\n    runs-on: ubuntu-latest\n"))
 	writeRepoFile(t, top, ".github/workflows/nameless.yml", []byte("jobs:\n  lint:\n    runs-on: ubuntu-latest\n"))
+	writeRepoFile(t, top, ".github/workflows/quipu-gate.yml", []byte("name: Old gate\njobs:\n  gate:\n    runs-on: ubuntu-latest\n"))
 	rendered := map[string]string{
-		".github/workflows/ci.yml":     "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
-		".github/workflows/fresh.yml":  "name: Fresh\njobs:\n  new:\n    runs-on: ubuntu-latest\n",
-		".github/ISSUE_TEMPLATE/x.yml": "jobs:\n  form:\n    runs-on: ubuntu-latest\n",
+		".github/workflows/ci.yml":         "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+		".github/workflows/fresh.yml":      "name: Fresh\njobs:\n  new:\n    runs-on: ubuntu-latest\n",
+		".github/workflows/quipu-gate.yml": "name: New gate\njobs:\n  gate:\n    runs-on: ubuntu-latest\n",
+		".github/ISSUE_TEMPLATE/x.yml":     "jobs:\n  form:\n    runs-on: ubuntu-latest\n",
 	}
-	c := model.Config{RequiredChecks: []string{"test", "lint", "new", "form"}}
+	c := model.Config{RequiredChecks: []string{"test", "lint", "new", "form", "gate"}}
 	kept := wakeWorkflows(c, jobsAfterInstall(top, rendered, false))
-	if strings.Join(kept, ",") != "Quipu policy,Build,.github/workflows/nameless.yml,Fresh" {
+	if strings.Join(kept, ",") != "Quipu policy,Build,.github/workflows/nameless.yml,Fresh,Old gate" {
 		t.Fatalf("without replace an existing file stays: %v", kept)
 	}
 	replaced := wakeWorkflows(c, jobsAfterInstall(top, rendered, true))
-	if strings.Join(replaced, ",") != "Quipu policy,CI,.github/workflows/nameless.yml,Fresh" {
-		t.Fatalf("with replace the generated file wins: %v", replaced)
+	if strings.Join(replaced, ",") != "Quipu policy,Build,.github/workflows/nameless.yml,Fresh,New gate" {
+		t.Fatalf("with replace Quipu's generated file wins, and the repository's own ci.yml stays: %v", replaced)
 	}
 }
 

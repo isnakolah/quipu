@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/isnakolah/quipu/internal/bootstrap"
 	"github.com/isnakolah/quipu/internal/model"
 )
 
@@ -173,5 +175,22 @@ func TestAdoptPrintsTheOneOwnerStep(t *testing.T) {
 	}
 	if after := adoptNext(c, true); strings.Contains(after, "git push") || !strings.Contains(after, "owner_step") {
 		t.Errorf("next once the config landed: %s", after)
+	}
+}
+
+func TestAdoptReportsTheCIItLeftOut(t *testing.T) {
+	report := map[string]any{}
+	reportFiles(report, bootstrap.Result{Skipped: map[string]string{bootstrap.CIPath: "the repository has its own CI (core.yml)"}})
+	out, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"skipped":{".github/workflows/ci.yml":"the repository has its own CI (core.yml)"}`) || strings.Contains(string(out), "kept_note") {
+		t.Fatalf("--json names the skipped file and why, and no --replace advice: %s", out)
+	}
+	quiet := map[string]any{}
+	reportFiles(quiet, bootstrap.Result{})
+	if _, ok := quiet["skipped"]; ok {
+		t.Fatalf("nothing skipped, no skipped key: %v", quiet)
 	}
 }

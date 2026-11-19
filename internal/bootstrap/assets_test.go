@@ -63,21 +63,76 @@ func TestInstallIsIdempotentAndKeepsOwnFiles(t *testing.T) {
 	if err != nil || len(again.Written) != 0 || len(again.Kept) != 0 {
 		t.Fatalf("second install changed files: %+v err=%v", again, err)
 	}
-	own := filepath.Join(root, ".github/workflows/ci.yml")
-	if err := os.WriteFile(own, []byte("name: their CI\n"), 0644); err != nil {
+	const form = ".github/ISSUE_TEMPLATE/work.yml"
+	own := filepath.Join(root, form)
+	if err := os.WriteFile(own, []byte("name: their form\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	kept, err := Install(root, options(), false)
-	if err != nil || !reflect.DeepEqual(kept.Kept, []string{".github/workflows/ci.yml"}) || len(kept.Written) != 0 {
+	if err != nil || !reflect.DeepEqual(kept.Kept, []string{form}) || len(kept.Written) != 0 {
 		t.Fatalf("kept=%+v err=%v", kept, err)
 	}
-	if raw, _ := os.ReadFile(own); string(raw) != "name: their CI\n" {
+	if raw, _ := os.ReadFile(own); string(raw) != "name: their form\n" {
 		t.Fatal("an existing file was overwritten without replace")
 	}
 	replaced, err := Install(root, options(), true)
-	if err != nil || !reflect.DeepEqual(replaced.Written, []string{".github/workflows/ci.yml"}) {
+	if err != nil || !reflect.DeepEqual(replaced.Written, []string{form}) {
 		t.Fatalf("replaced=%+v err=%v", replaced, err)
 	}
+}
+
+// A repository with CI of its own never gets the placeholder ci.yml, beside
+// its workflows or over its own ci.yml, with or without replace.
+func TestInstallLeavesTheRepositorysOwnCIAlone(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		root := t.TempDir()
+		workflows := filepath.Join(root, ".github", "workflows")
+		if err := os.MkdirAll(workflows, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workflows, "core.yml"), []byte("name: Core\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		result, err := Install(root, options(), replace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(root, CIPath)); !os.IsNotExist(err) {
+			t.Fatalf("replace=%v: ci.yml written beside core.yml", replace)
+		}
+		if reason := result.Skipped[CIPath]; !strings.Contains(reason, "core.yml") || !strings.Contains(reason, "required_checks") {
+			t.Fatalf("replace=%v: the skip names the repository's CI and what to do: %+v", replace, result.Skipped)
+		}
+		if !contains(result.Written, ".github/workflows/quipu-writer.yml") {
+			t.Fatalf("replace=%v: Quipu's own workflows are still written: %v", replace, result.Written)
+		}
+
+		theirs := filepath.Join(root, CIPath)
+		if err := os.WriteFile(theirs, []byte("name: their CI\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Install(root, options(), replace); err != nil {
+			t.Fatal(err)
+		}
+		if raw, _ := os.ReadFile(theirs); string(raw) != "name: their CI\n" {
+			t.Fatalf("replace=%v: the repository's own ci.yml was overwritten", replace)
+		}
+	}
+
+	// With no CI at all, the placeholder is still how a new repository gets one.
+	bare, err := Install(t.TempDir(), options(), false)
+	if err != nil || !contains(bare.Written, CIPath) || len(bare.Skipped) != 0 {
+		t.Fatalf("a repository with no workflows gets ci.yml: %+v err=%v", bare, err)
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRenderFollowsWorkflowOptions(t *testing.T) {

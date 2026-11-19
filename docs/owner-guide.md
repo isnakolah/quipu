@@ -56,7 +56,7 @@ quipu adopt --owner OWNER --repo REPO --project-number N --apply \
 
 It provisions what `init` does, changing only what is missing: labels, the Project fields, Status options, and views, the workflows and Issue forms, the config, the handbook, and the hooks. Run it again at any time; a second run reports `"changed": false`. It refuses a repository that already has Issues. Then bring your existing backlog and history in with `quipu import --manifest FILE --apply` ([import](import.md)): it creates the Issues with parents, blockers, and fields, and the Writer closes imported Done work with historical evidence.
 
-Files that already exist and differ from Quipu's (your own `ci.yml`, say) are kept and listed under `kept`. Rerun with `--replace` to overwrite them. When you keep your own CI, set `required_checks` to its job names so protection requires them.
+Files that already exist and differ from Quipu's (an Issue form you changed, say) are kept and listed under `kept`. Rerun with `--replace` to overwrite them. Quipu's placeholder `ci.yml` is written only when `.github/workflows` has no workflow besides Quipu's own `quipu-*.yml`. If you have CI of your own, adopt leaves it alone, even with `--replace`, and lists `ci.yml` under `skipped` with the reason. Set `required_checks` to your CI's job names so protection requires them.
 
 Adopt never rewrites the options of a Project field on a Project that has items, because GitHub clears every item's value when options change. It tells you which options to add by hand instead.
 
